@@ -27,7 +27,8 @@ The script verifies frozen source/native library pins, acquires the checksum-pin
 Adobe DNG SDK in `.build`, builds the owned Rust static library and audits every
 native object's deployment floor before compiling the app. Generated builds,
 fixtures and SDKs remain outside Git. The native app is in
-`.build/xcode/Build/Products/Debug/LensWorks.app`.
+`.build/xcode-app/Build/Products/Debug/LensWorks.app`. Test builds use a separate
+derived-data directory so XCTest frameworks cannot enter the installed app.
 
 For local installed acceptance, `scripts/install-development-app.py` relocates the
 native dependency closure into a new app copy, carries the verified native/Rust

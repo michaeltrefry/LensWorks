@@ -1,4 +1,10 @@
 //! LensWorks-owned, blocking C/JSON boundary over the pinned PhotoCatalog core.
+pub mod full_decode;
+mod managed;
+pub use managed::{
+    lw_catalog_buffer_copy, lw_catalog_buffer_release, lw_catalog_managed_request,
+    lw_catalog_subscribe, lw_catalog_unsubscribe_and_drain,
+};
 use photocatalog::Catalog;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -168,6 +174,12 @@ fn execute(bytes: &[u8]) -> Result<Value> {
     let _guard = REQUEST_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
+    if managed::has_managed_owner() {
+        return Err(failure(
+            "busy",
+            "a managed catalog owner is active; use the managed ABI",
+        ));
+    }
     match request.op {
         Operation::Create => {
             if managed_entry(&path, true)? {
@@ -264,6 +276,7 @@ fn fenced(operation: impl FnOnce() -> Result<Value>) -> Value {
 /// `request` must be NULL or a valid NUL-terminated buffer alive for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lw_catalog_request(request: *const c_char) -> *mut c_char {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     let value = fenced(|| {
         if request.is_null() {
             return Err(failure("invalid_request", "request is NULL"));
@@ -276,15 +289,18 @@ pub unsafe extern "C" fn lw_catalog_request(request: *const c_char) -> *mut c_ch
     CString::new(value.to_string())
         .expect("serialized JSON has no literal NUL")
         .into_raw()
+    })).unwrap_or_else(|_| CString::new("{\"version\":1,\"ok\":false,\"error\":{\"code\":\"panic\",\"message\":\"catalog response panic fenced\"}}").unwrap().into_raw())
 }
 
 /// # Safety
 /// `response` must be NULL or a still-owned pointer returned by this library.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lw_catalog_string_free(response: *mut c_char) {
-    if !response.is_null() {
-        drop(unsafe { CString::from_raw(response) });
-    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !response.is_null() {
+            drop(unsafe { CString::from_raw(response) });
+        }
+    }));
 }
 
 #[cfg(test)]

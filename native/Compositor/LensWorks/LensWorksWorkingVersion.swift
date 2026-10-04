@@ -9,20 +9,21 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
     let originalPath: String
     var projectPath: String
     var name: String
+    var originalNativePath: LWCatalogNativePath? = nil
 
     static func sidecar(for project: URL) -> URL {
         project.appendingPathExtension("lensworks.json")
     }
 
     func validateDestination(_ destination: URL) throws {
-        let source = URL(fileURLWithPath: originalPath).resolvingSymlinksInPath().standardizedFileURL
+        let source = try (originalNativePath?.localFileURL() ?? URL(fileURLWithPath: originalPath)).resolvingSymlinksInPath().standardizedFileURL
         let target = destination.resolvingSymlinksInPath().standardizedFileURL
         let catalog = URL(fileURLWithPath: catalogPath).resolvingSymlinksInPath().standardizedFileURL
-        guard target != catalog, !target.path.hasPrefix(catalog.path + "/"), !catalog.path.hasPrefix(target.path + "/") else {
+        guard target.path != catalog.path, !target.path.hasPrefix(catalog.path + "/"), !catalog.path.hasPrefix(target.path + "/") else {
             throw LensWorksCatalogError.message("Choose a destination outside the catalog folder. Catalog databases and previews must remain separate from photos and working versions.")
         }
         // A package replacing a folder that contains the source would also destroy the original.
-        guard source != target, !source.path.hasPrefix(target.path + "/") else {
+        guard source.path != target.path, !source.path.hasPrefix(target.path + "/") else {
             throw LensWorksCatalogError.message("Choose a different destination. The original photo must remain unchanged.")
         }
         if let sourceID = try? source.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier as? NSObject,
@@ -96,15 +97,19 @@ actor LensWorksVersionStore {
         }
         return target
     }
-    func sourceAvailable(_ path: String) -> Bool { FileManager.default.fileExists(atPath: path) }
+    func sourceAvailable(_ path: String, native: LWCatalogNativePath? = nil) -> Bool {
+        guard let url = try? native?.localFileURL() ?? URL(fileURLWithPath: path) else { return false }
+        return (try? url.checkResourceIsReachable()) == true
+    }
     func versionForDestination(_ version: LensWorksWorkingVersion?, destination: URL) throws -> LensWorksWorkingVersion? {
         guard let version else { return nil }
         try version.validateDestination(destination)
-        let existing = URL(fileURLWithPath: version.projectPath).resolvingSymlinksInPath().standardizedFileURL
-        let target = destination.resolvingSymlinksInPath().standardizedFileURL
+        let existing = URL(fileURLWithPath: version.projectPath).resolvingSymlinksInPath().standardizedFileURL.path
+        let target = destination.resolvingSymlinksInPath().standardizedFileURL.path
+        // FileWrapper can leave the held URL's directory bit stale after first publication.
         guard existing != target else { return version }
         return LensWorksWorkingVersion(id: UUID(), photoID: version.photoID, catalogPath: version.catalogPath,
-            originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent)
+            originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent, originalNativePath: version.originalNativePath)
     }
     func validate(_ version: LensWorksWorkingVersion?, destination: URL) throws { try version?.validateDestination(destination) }
     func list(paths: [String], directory: String?) -> LensWorksVersionListing {

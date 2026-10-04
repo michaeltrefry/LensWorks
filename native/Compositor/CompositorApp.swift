@@ -7,6 +7,7 @@ struct CompositorApp: App {
     var body: some Scene {
         Window("LensWorks", id: "editor") {
             ProjectWorkspaceView(applicationDelegate: applicationDelegate).roundedControls()
+                .onAppear { LensWorksLaunchTrace.record("window.editor.onAppear") }
         }
             .defaultSize(width: 1180, height: 780)
             // Files opened from Finder or dropped on the Dock icon go to the app delegate, which imports them into

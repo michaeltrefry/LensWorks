@@ -22,7 +22,11 @@ struct LensWorksCatalogWorkspace: View {
                 filmstrip
             }
         }
-        .task { await catalog.restore(workspace: workspace) }
+        .task {
+            LensWorksLaunchTrace.record("catalog.workspace.task.begin", details: ["canceled": String(Task.isCancelled)])
+            await catalog.restore(workspace: workspace)
+            LensWorksLaunchTrace.record("catalog.workspace.task.end", details: ["canceled": String(Task.isCancelled)])
+        }
         .onChange(of: workspace.selectedID) { _, _ in
             if let version = workspace.current.controller.workingVersion, version.catalogPath == catalog.catalogPath {
                 catalog.selectedPhotoID = version.photoID
@@ -111,7 +115,7 @@ struct LensWorksCatalogWorkspace: View {
                         }
                     } label: {
                         VStack(spacing: 3) {
-                            LensWorksThumbnail(path: asset.previewPath ?? asset.originalPath)
+                            LensWorksThumbnail(asset: asset, catalog: catalog)
                                 .frame(width: 96, height: 58)
                             Text(asset.filename).font(.caption2).lineLimit(1).frame(width: 100)
                         }.padding(4)
@@ -128,24 +132,13 @@ struct LensWorksCatalogWorkspace: View {
 }
 
 private struct LensWorksThumbnail: View {
-    let path: String
+    let asset: LensWorksCatalogAsset
+    let catalog: LensWorksCatalog
     @State private var data: Data?
     var body: some View {
         Group {
             if let data, let image = NSImage(data: data) { Image(nsImage: image).resizable().scaledToFit() }
             else { Image(systemName: "photo").foregroundStyle(.secondary) }
-        }.task(id: path) {
-            data = await Task.detached(priority: .utility) { Self.thumbnail(path) }.value
-        }
-    }
-    nonisolated static func thumbnail(_ path: String) -> Data? {
-        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: 192, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return data as Data
+        }.task(id: asset.id) { data = await catalog.thumbnail(asset) }
     }
 }

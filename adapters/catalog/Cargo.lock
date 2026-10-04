@@ -510,12 +510,16 @@ dependencies = [
 name = "lensworks-catalog"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "blake3",
+ "clap",
  "image",
+ "libc",
  "photocatalog",
  "serde",
  "serde_json",
  "tempfile",
+ "tiff 0.10.3",
 ]
 
 [[package]]
