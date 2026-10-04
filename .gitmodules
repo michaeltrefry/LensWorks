@@ -1,0 +1,6 @@
+[submodule "vendor/Compositor"]
+	path = vendor/Compositor
+	url = https://github.com/robbietilton/Compositor.git
+[submodule "vendor/PhotoCatalog"]
+	path = vendor/PhotoCatalog
+	url = https://github.com/michaeltrefry/PhotoCatalog.git

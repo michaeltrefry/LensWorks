@@ -1,0 +1,47 @@
+{
+  "status": "PASS_INSTALLED_RASTER_TWO_PROCESS_RESTART",
+  "original_sha256_before": "51496f200d92eb6e85601d5536ad3ec6cffaa94b344988e49162938bfb1db707",
+  "original_sha256_after": "51496f200d92eb6e85601d5536ad3ec6cffaa94b344988e49162938bfb1db707",
+  "first": {
+    "assetCount": 1,
+    "catalogPath": "/Users/michael/Repos/LensWorks/.build/acceptance-s01-quit-fixed/Catalog",
+    "documentID": "8B63D686-04D1-4A08-8E18-07626CB3C1EE",
+    "error": "",
+    "layerIDs": [
+      "D8A45BC0-E348-474D-82B7-D70DE80602A5"
+    ],
+    "layerNames": [
+      "Persisted Layer"
+    ],
+    "layerOpacities": [
+      0.6
+    ],
+    "modified": false,
+    "photoID": "39a125f9-64b6-40b8-8f93-f941b29894ed",
+    "projectPath": "/Users/michael/Repos/LensWorks/.build/acceptance-s01-quit-fixed/Photos/Original \u2013 Edit-891226E3.comp",
+    "sourcePath": "/Users/michael/Repos/LensWorks/.build/acceptance-s01-quit-fixed/Photos/Original.png",
+    "versionID": "02844858-10EE-4F19-9263-BD8B7F45BDFC"
+  },
+  "reopened": {
+    "assetCount": 1,
+    "catalogPath": "/Users/michael/Repos/LensWorks/.build/acceptance-s01-quit-fixed/Catalog",
+    "documentID": "8B63D686-04D1-4A08-8E18-07626CB3C1EE",
+    "error": "",
+    "layerIDs": [
+      "D8A45BC0-E348-474D-82B7-D70DE80602A5"
+    ],
+    "layerNames": [
+      "Persisted Layer"
+    ],
+    "layerOpacities": [
+      0.6
+    ],
+    "modified": false,
+    "photoID": "39a125f9-64b6-40b8-8f93-f941b29894ed",
+    "projectPath": "/Users/michael/Repos/LensWorks/.build/acceptance-s01-quit-fixed/Photos/Original \u2013 Edit-891226E3.comp",
+    "sourcePath": "/Users/michael/Repos/LensWorks/.build/acceptance-s01-quit-fixed/Photos/Original.png",
+    "versionID": "02844858-10EE-4F19-9263-BD8B7F45BDFC"
+  },
+  "application": "/Users/michael/Repos/LensWorks/.build/installed-s01-quit-fixed/LensWorks.app",
+  "protocol": "sc-24656 local raster acceptance only"
+}
