@@ -3,3 +3,4 @@
 *.xcuserstate
 xcuserdata/
 *.profraw
+__pycache__/

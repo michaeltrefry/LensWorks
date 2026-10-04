@@ -227,4 +227,40 @@ struct LensWorksCatalogTests {
         #expect(try Data(contentsOf: source) == sourceBytes)
     }
 
+
+    @Test func firstAndRepeatedSavesKeepWorkingVersionIdentityAndName() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LensWorksFreshSave-\(UUID())")
+        let catalog = root.appendingPathComponent("Catalog")
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = try ImageImportTests().fixture(.png)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let source = root.appendingPathComponent("Source.png")
+        try FileManager.default.copyItem(at: fixture, to: source)
+        let keys = ["LensWorks.workingVersions", "LensWorks.lastWorkingVersion"]
+        let previous = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, previous) { UserDefaults.standard.set(value, forKey: key) } }
+        let session = EditorSession()
+        await session.importImages([source])
+        let layer = try #require(session.activeLayerID)
+        let controller = ProjectController(session: session)
+        let project = root.appendingPathComponent("Source – Edit.comp")
+        let version = LensWorksWorkingVersion(id: UUID(), photoID: UUID().uuidString, catalogPath: catalog.path,
+            originalPath: source.path, projectPath: project.path, name: "Source – Edit")
+        controller.workingVersion = version
+        session.projectURL = project
+        #expect(await controller.save())
+        #expect(controller.workingVersion?.id == version.id)
+        #expect(controller.workingVersion?.name == version.name)
+        session.renameLayer(layer, to: "First ordinary edit")
+        #expect(await controller.save())
+        #expect(controller.workingVersion?.id == version.id)
+        #expect(controller.workingVersion?.name == version.name)
+        session.setLayerOpacity(0.6)
+        #expect(await controller.save())
+        let persisted = try #require(try await LensWorksVersionStore.shared.read(project))
+        #expect(persisted.id == version.id)
+        #expect(persisted.name == version.name)
+    }
+
 }

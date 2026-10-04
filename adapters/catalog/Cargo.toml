@@ -10,14 +10,22 @@ name = "lensworks_catalog"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
+libc = "0.2"
 photocatalog = { path = "../../vendor/PhotoCatalog" }
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-tempfile = "3"
-image = { version = "0.25", default-features = false, features = ["png"] }
+tiff = "=0.10.3"
+
+[[bin]]
+name = "lensworks-decode-worker"
+path = "src/worker.rs"
 
 # Preserve PhotoCatalog's private SQLite identity patch. Cargo only applies
 # patch declarations from the root crate, never from a dependency manifest.
