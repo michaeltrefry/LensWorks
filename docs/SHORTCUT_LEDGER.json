@@ -1,0 +1,835 @@
+{
+  "epic": 24655,
+  "team": "lensworks",
+  "verification": "passed complete live readback, acyclic dependencies and terminal coverage",
+  "verified_at": "2026-10-03",
+  "stories": [
+    {
+      "key": "S01",
+      "id": 24656,
+      "type": "feature",
+      "title": "Open, edit and reopen a catalog photo in the native Swift application",
+      "dependencies": [],
+      "acceptance_count": 3,
+      "state": "To Do"
+    },
+    {
+      "key": "S02",
+      "id": 24657,
+      "type": "chore",
+      "title": "Finalize native LensWorks product requirements",
+      "dependencies": [],
+      "acceptance_count": 3,
+      "state": "Done"
+    },
+    {
+      "key": "S03",
+      "id": 24658,
+      "type": "chore",
+      "title": "Expose retained Rust catalog services through the Swift adapter",
+      "dependencies": [
+        24656
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S04",
+      "id": 24659,
+      "type": "feature",
+      "title": "Manage catalogs, source folders and previews in native views",
+      "dependencies": [
+        24658
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S05",
+      "id": 24660,
+      "type": "feature",
+      "title": "Organize photos and preserve metadata through native catalog controls",
+      "dependencies": [
+        24659
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S06",
+      "id": 24661,
+      "type": "feature",
+      "title": "Browse offline sources and relink files without changing photo identity",
+      "dependencies": [
+        24657,
+        24659
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S07",
+      "id": 24662,
+      "type": "feature",
+      "title": "Import PhotoCatalog and Lightroom libraries into a new LensWorks catalog",
+      "dependencies": [
+        24659,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S08",
+      "id": 24663,
+      "type": "feature",
+      "title": "Develop live RAW sources beneath editable document layers",
+      "dependencies": [
+        24657,
+        24658
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S09",
+      "id": 24664,
+      "type": "chore",
+      "title": "Adapt the Metal and Core Image renderer for precision and bounded tiles",
+      "dependencies": [
+        24663
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S10",
+      "id": 24665,
+      "type": "feature",
+      "title": "Preserve the complete layer graph, masks and layer operations",
+      "dependencies": [
+        24664
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S11",
+      "id": 24666,
+      "type": "feature",
+      "title": "Preserve all adjustment layers, layer effects and finishing filters",
+      "dependencies": [
+        24665,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S12",
+      "id": 24667,
+      "type": "feature",
+      "title": "Preserve transforms, crop and document canvas navigation",
+      "dependencies": [
+        24665,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S13",
+      "id": 24668,
+      "type": "feature",
+      "title": "Preserve selections, refinement and content-aware editing",
+      "dependencies": [
+        24665,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S14",
+      "id": 24669,
+      "type": "feature",
+      "title": "Preserve painting, erasing, blur and brush input behavior",
+      "dependencies": [
+        24665,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S15",
+      "id": 24670,
+      "type": "feature",
+      "title": "Replay editable clone and heal strokes after RAW changes",
+      "dependencies": [
+        24667,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S16",
+      "id": 24671,
+      "type": "feature",
+      "title": "Preserve editable text, vector shapes and gradients",
+      "dependencies": [
+        24665,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S17",
+      "id": 24672,
+      "type": "feature",
+      "title": "Persist independent photo versions, undo history and named checkpoints",
+      "dependencies": [
+        24657,
+        24665
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S18",
+      "id": 24673,
+      "type": "feature",
+      "title": "Compose multiple source photos with explicit source updates",
+      "dependencies": [
+        24667,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S19",
+      "id": 24674,
+      "type": "feature",
+      "title": "Recover autosaved documents and drafts across interrupted publication",
+      "dependencies": [
+        24657,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S20",
+      "id": 24675,
+      "type": "feature",
+      "title": "Open standalone documents and exchange layered PSD/PSB files",
+      "dependencies": [
+        24657,
+        24674
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S21",
+      "id": 24676,
+      "type": "feature",
+      "title": "Export complete layered documents with color and metadata fidelity",
+      "dependencies": [
+        24657,
+        24672
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S22",
+      "id": 24677,
+      "type": "feature",
+      "title": "Back up and restore catalog-linked documents and editor assets",
+      "dependencies": [
+        24673,
+        24674
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S23",
+      "id": 24678,
+      "type": "chore",
+      "title": "Bind the macOS inference runtime to native cancellable jobs",
+      "dependencies": [
+        24656
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S24",
+      "id": 24679,
+      "type": "feature",
+      "title": "Reuse SceneWorks model files and manage explicit additional downloads",
+      "dependencies": [
+        24678
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S25",
+      "id": 24680,
+      "type": "feature",
+      "title": "Dock the task-first AI panel and insert revision-aware results",
+      "dependencies": [
+        24672,
+        24678,
+        24679
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S26",
+      "id": 24681,
+      "type": "feature",
+      "title": "Generate recoverable new images and save them into catalog folders",
+      "dependencies": [
+        24659,
+        24674,
+        24680
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S27",
+      "id": 24682,
+      "type": "feature",
+      "title": "Edit prompts, replace objects and generate masked fill or expansion",
+      "dependencies": [
+        24667,
+        24668,
+        24680
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S28",
+      "id": 24683,
+      "type": "feature",
+      "title": "Select subjects and remove backgrounds with contextual editable masks",
+      "dependencies": [
+        24668,
+        24680
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S29",
+      "id": 24684,
+      "type": "feature",
+      "title": "Denoise, restore and upscale photos through validated AI routes",
+      "dependencies": [
+        24667,
+        24680
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S30",
+      "id": 24685,
+      "type": "feature",
+      "title": "Review AI caption and keyword suggestions before metadata application",
+      "dependencies": [
+        24660,
+        24680
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S31",
+      "id": 24686,
+      "type": "feature",
+      "title": "Search the catalog semantically using rebuildable image and text indexes",
+      "dependencies": [
+        24659,
+        24678,
+        24679
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S32",
+      "id": 24687,
+      "type": "feature",
+      "title": "Run and resume AI jobs on catalog selections",
+      "dependencies": [
+        24657,
+        24681,
+        24682,
+        24683,
+        24684,
+        24685
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S33",
+      "id": 24688,
+      "type": "chore",
+      "title": "Coordinate interactive rendering, exports and AI within resource budgets",
+      "dependencies": [
+        24657,
+        24664,
+        24678,
+        24694
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S34",
+      "id": 24689,
+      "type": "feature",
+      "title": "Complete native keyboard, accessibility and panel behavior",
+      "dependencies": [
+        24657,
+        24659,
+        24680
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S35",
+      "id": 24690,
+      "type": "chore",
+      "title": "Package the native application and implement approved distribution updates",
+      "dependencies": [
+        24656,
+        24657,
+        24678
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S36",
+      "id": 24691,
+      "type": "chore",
+      "title": "Verify the integrated native LensWorks product and reconcile epic completion",
+      "dependencies": [
+        24661,
+        24662,
+        24666,
+        24669,
+        24670,
+        24671,
+        24675,
+        24676,
+        24677,
+        24686,
+        24687,
+        24688,
+        24689,
+        24690
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    },
+    {
+      "key": "S37",
+      "id": 24694,
+      "type": "chore",
+      "title": "Measure native responsiveness and approve final acceptance limits",
+      "dependencies": [
+        24659,
+        24669,
+        24678
+      ],
+      "acceptance_count": 3,
+      "state": "Backlog"
+    }
+  ],
+  "relations": [
+    {
+      "blocks": 24656,
+      "blocked": 24678
+    },
+    {
+      "blocks": 24656,
+      "blocked": 24658
+    },
+    {
+      "blocks": 24656,
+      "blocked": 24690
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24688
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24661
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24687
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24675
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24663
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24674
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24672
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24690
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24689
+    },
+    {
+      "blocks": 24657,
+      "blocked": 24676
+    },
+    {
+      "blocks": 24658,
+      "blocked": 24663
+    },
+    {
+      "blocks": 24658,
+      "blocked": 24659
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24681
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24689
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24661
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24662
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24686
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24660
+    },
+    {
+      "blocks": 24659,
+      "blocked": 24694
+    },
+    {
+      "blocks": 24660,
+      "blocked": 24685
+    },
+    {
+      "blocks": 24661,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24662,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24662
+    },
+    {
+      "blocks": 24663,
+      "blocked": 24664
+    },
+    {
+      "blocks": 24664,
+      "blocked": 24665
+    },
+    {
+      "blocks": 24664,
+      "blocked": 24688
+    },
+    {
+      "blocks": 24665,
+      "blocked": 24668
+    },
+    {
+      "blocks": 24665,
+      "blocked": 24667
+    },
+    {
+      "blocks": 24665,
+      "blocked": 24666
+    },
+    {
+      "blocks": 24665,
+      "blocked": 24672
+    },
+    {
+      "blocks": 24665,
+      "blocked": 24669
+    },
+    {
+      "blocks": 24665,
+      "blocked": 24671
+    },
+    {
+      "blocks": 24666,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24666
+    },
+    {
+      "blocks": 24667,
+      "blocked": 24684
+    },
+    {
+      "blocks": 24667,
+      "blocked": 24682
+    },
+    {
+      "blocks": 24667,
+      "blocked": 24670
+    },
+    {
+      "blocks": 24667,
+      "blocked": 24673
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24667
+    },
+    {
+      "blocks": 24668,
+      "blocked": 24683
+    },
+    {
+      "blocks": 24668,
+      "blocked": 24682
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24668
+    },
+    {
+      "blocks": 24669,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24669,
+      "blocked": 24694
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24669
+    },
+    {
+      "blocks": 24670,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24670
+    },
+    {
+      "blocks": 24671,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24671
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24676
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24674
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24673
+    },
+    {
+      "blocks": 24672,
+      "blocked": 24680
+    },
+    {
+      "blocks": 24673,
+      "blocked": 24677
+    },
+    {
+      "blocks": 24674,
+      "blocked": 24677
+    },
+    {
+      "blocks": 24674,
+      "blocked": 24681
+    },
+    {
+      "blocks": 24674,
+      "blocked": 24675
+    },
+    {
+      "blocks": 24675,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24676,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24677,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24678,
+      "blocked": 24690
+    },
+    {
+      "blocks": 24678,
+      "blocked": 24688
+    },
+    {
+      "blocks": 24678,
+      "blocked": 24680
+    },
+    {
+      "blocks": 24678,
+      "blocked": 24694
+    },
+    {
+      "blocks": 24678,
+      "blocked": 24686
+    },
+    {
+      "blocks": 24678,
+      "blocked": 24679
+    },
+    {
+      "blocks": 24679,
+      "blocked": 24686
+    },
+    {
+      "blocks": 24679,
+      "blocked": 24680
+    },
+    {
+      "blocks": 24680,
+      "blocked": 24681
+    },
+    {
+      "blocks": 24680,
+      "blocked": 24682
+    },
+    {
+      "blocks": 24680,
+      "blocked": 24689
+    },
+    {
+      "blocks": 24680,
+      "blocked": 24683
+    },
+    {
+      "blocks": 24680,
+      "blocked": 24685
+    },
+    {
+      "blocks": 24680,
+      "blocked": 24684
+    },
+    {
+      "blocks": 24681,
+      "blocked": 24687
+    },
+    {
+      "blocks": 24682,
+      "blocked": 24687
+    },
+    {
+      "blocks": 24683,
+      "blocked": 24687
+    },
+    {
+      "blocks": 24684,
+      "blocked": 24687
+    },
+    {
+      "blocks": 24685,
+      "blocked": 24687
+    },
+    {
+      "blocks": 24686,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24687,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24688,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24694,
+      "blocked": 24688
+    },
+    {
+      "blocks": 24689,
+      "blocked": 24691
+    },
+    {
+      "blocks": 24690,
+      "blocked": 24691
+    }
+  ],
+  "interview_decisions_verified": [
+    "Batch image enhancements create independent named versions; single-document AI edits immediately add layers.",
+    "Native documents and layered PSD/PSB import/export with compatibility reports.",
+    "Offline editing requires operation-specific full-resolution inputs; previews/metadata remain available.",
+    "Portable native export includes required sources/layers/masks and optional history.",
+    "Automatically prune oldest unprotected undo; preserve checkpoints/current referenced assets and warn on protected overflow.",
+    "Recovery drafts have no expiry, remain until explicit Save/Discard and appear in Recoverable Drafts.",
+    "Add to Catalog registers existing document in place with identity/history/source links and asks for a virtual folder.",
+    "Color-managed RGB, wide gamut, selectable RGB exports and print soft-proofing; no native CMYK/spot-color prepress.",
+    "16 GB minimum editing target; AI admission uses measured available unified-memory fit.",
+    "First-class pen pressure, supported tilt, configurable response and tablet shortcuts.",
+    "Signed/notarized direct download with user-controlled in-app updates.",
+    "Visible background-AI pause at safe boundaries during painting/adjustment, then automatic resume.",
+    "p95 1 s warm switch / 150 ms RAW preview / 50 ms brush display are goals for 24\u201350 MP and 20-layer fixtures; final limits approved after native prototype measurements in sc-24694."
+  ],
+  "requirements_planning_completed": 24657,
+  "measured_limit_approval_story": 24694
+}
