@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import subprocess
+import catalog_source
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,15 +33,18 @@ def digest(data):
 def mask(text):
     return LEX.sub(lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group()), text)
 
+def baseline_root(name):
+    return ROOT / ('engines/catalog' if name == 'PhotoCatalog' else 'vendor/' + name)
+
 def paths():
     result = []
     for baseline, roots in SOURCE_ROOTS.items():
         for folder in roots:
-            start = ROOT / 'vendor' / baseline / folder
+            start = baseline_root(baseline) / folder
             if start.is_file(): result.append(start)
             elif start.exists():
                 result.extend(p for p in start.rglob('*') if p.is_file() and p.suffix in SUFFIXES)
-    result.extend(ROOT / 'vendor/PhotoCatalog' / p for p in ('build.rs', 'desktop/vite.config.ts', 'desktop/src-tauri/build.rs'))
+    result.extend(ROOT / 'engines/catalog' / p for p in ('build.rs', 'desktop/vite.config.ts', 'desktop/src-tauri/build.rs'))
     return sorted(set(result))
 
 def is_test(path):
@@ -51,7 +55,7 @@ def story_for(path, symbol=''):
     """Map individual source rows; primary owner plus integration terminal review."""
     p = path.lower()
     s = symbol.lower()
-    if 'photocatalog' in p:
+    if 'photocatalog' in p or 'engines/catalog/' in p:
         if any(x in p for x in ('lightroom', 'migration')): return 'sc-24662'
         if 'backup' in p: return 'sc-24677'
         if any(x in p for x in ('relink', 'storage_volume', 'catalog_storage')): return 'sc-24661'
@@ -253,7 +257,7 @@ def fixture_assets():
         'edge64': {'construction': '64x64 transparent RGBA image; opaque white square x/y in [16,48), one opaque black pixel at (32,32)', 'purpose': 'blur, geometry, matte, paint and effect spatial assertions'},
         'ramp256': {'construction': '256x1 RGBA image pixel(x)=[x,x,x,255] for x in 0...255; companion same-size opaque flat gray [128,128,128,255]', 'purpose': 'tone endpoints, monotonicity, identity, blur-flat-field assertions'},
         'hdr2': {'construction': '2x2 straight-alpha linear-sRGB f32 pixels [[-0.1,0.18,1.6,1],[0.5,0.25,0.125,0.5],[1,1,1,1],[0,0,0,0]]', 'purpose': 'LensWorks precision contract; no source-byte mutation or premature clamp'},
-        'catalog-two': {'construction': 'Use vendor/PhotoCatalog/tests/catalog.rs setup/jpeg/synthetic_cr2 helpers: a.jpg 96x64 with B=3; b.CR2 miniature TIFF/JPEG container 48x32 EXIF orientation=6; source folder originals ü 日本語 outside catalog', 'purpose': 'two stable identities, CR2 preview orientation (32,48), repeat-import unchanged=2, offline cached preview; synthetic CR2 is not real RAW-camera evidence'},
+        'catalog-two': {'construction': 'Use engines/catalog/tests/catalog.rs setup/jpeg/synthetic_cr2 helpers: a.jpg 96x64 with B=3; b.CR2 miniature TIFF/JPEG container 48x32 EXIF orientation=6; source folder originals ü 日本語 outside catalog', 'purpose': 'two stable identities, CR2 preview orientation (32,48), repeat-import unchanged=2, offline cached preview; synthetic CR2 is not real RAW-camera evidence'},
         'layered3': {'construction': '64x64 document: bottom rgba-four expanded to canvas, middle edge64 raster layer with half-opacity reveal mask, top editable text LensWorks; one group; source-identity and source-byte hashes recorded', 'purpose': 'layer graph, export, undo, save/reopen, standalone/import conversion'},
         'lightroom-frozen': {'construction': 'Execute retained Lightroom/capture/plan/migration test builders listed by each referenced baseline test ID in an isolated directory; immutable source descriptors and approval snapshots included', 'purpose': 'source-backed full relationship, raw-payload, compatibility-report and interrupted migration assertions; do not invent undocumented Lightroom schema'},
         'real-raw': {'construction': 'Owner-selected real camera RAW fixture admitted by pinned decoder on target macOS, with file SHA-256, camera identity and embedded profile recorded before edit', 'purpose': 'additional real-camera gate; requires concrete camera fixture selection before passing status', 'unresolved': 'No single system-wide UTType/CIRAWFilter camera guarantee is possible from frozen source.'},
@@ -482,7 +486,7 @@ def special_rows():
     for fmt, token in (('PNG', 'func pngData'), ('JPEG', 'func jpegData')):
         pos = text.find(token)
         if pos >= 0: add(p, text.count('\n', 0, pos) + 1, 'raster export:' + fmt, 'format_route', 'ImageExporter: frozen flattened export, no PSD/PSB writer')
-    p = 'vendor/PhotoCatalog/src/media.rs'
+    p = 'engines/catalog/src/media.rs'
     text = (ROOT / p).read_text()
     match = re.search(r'pub fn supported_extension[\s\S]*?\n}', text)
     if match:
@@ -531,10 +535,10 @@ def build():
             row['acceptance_fixture'] = {'id': 'lensworks/' + row['story_id'] + '/' + row['id'], 'status': 'planned',
                                          'profile_id': fixture_profile_for(row), 'parameters': fixture_parameters(row),
                                          'baseline_regression_case_ids': row['baseline_test_references'], 'execution_evidence': None}
-    licenses = [p for baseline in PINS for p in (ROOT / 'vendor' / baseline).rglob('*')
+    licenses = [p for baseline in PINS for p in baseline_root(baseline).rglob('*')
                 if p.is_file() and '.git' not in p.parts and ('LICENSE' in p.name or 'NOTICE' in p.name)]
     return {'schema_version': 1, 'scope': 'Every first-party frozen product source file plus every extracted enum variant, declared field, operation, UI control, input binding, keyboard expansion and explicit format route. Transitive third-party implementation source is license-accounted separately.',
-            'baselines': [{'name': name, 'revision': pin, 'source': 'vendor/' + name} for name, pin in PINS.items()],
+            'baselines': [{'name': name, 'revision': pin, 'source': str(baseline_root(name).relative_to(ROOT)), **({'source_digest': catalog_source.verify()} if name == 'PhotoCatalog' else {})} for name, pin in PINS.items()],
             'provenance_files': ['DEPENDENCIES.json', 'THIRD_PARTY_NOTICES.md'],
             'licenses': [{'file': str(p.relative_to(ROOT)), 'sha256': digest(p.read_bytes())} for p in sorted(licenses)],
             'limitations': [
@@ -590,7 +594,8 @@ def audit(data, actual):
     stories = set(re.findall(r'^\| \[sc-(\d+)\]', (ROOT / 'docs/SHORTCUT_STORIES.md').read_text(), re.M))
     valid = {'sc-' + s for s in stories}
     if len(valid) != 37: errors.append(f'expected 37 story identities, found {len(valid)}')
-    for name, pin in PINS.items():
+    catalog_source.verify()
+    for name, pin in (('Compositor', PINS['Compositor']),):
         head = subprocess.check_output(['git', '-C', str(ROOT / 'vendor' / name), 'rev-parse', 'HEAD'], text=True).strip()
         if head != pin: errors.append(f'{name} HEAD {head} != frozen {pin}')
     dependencies = json.loads((ROOT / 'DEPENDENCIES.json').read_text())

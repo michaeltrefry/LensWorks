@@ -64,14 +64,16 @@ struct ShortcutDefinition: Identifiable {
     let title: String
     let group: String
     let original: ShortcutChord
-    var id: String { "\(group):\(title)" }
+    var commandID: LensWorksCommandID? = nil
+    var id: String { commandID?.rawValue ?? "\(group):\(title)" }
     var isMenu: Bool { group == "Menus" }
 
     static let all: [ShortcutDefinition] = {
-        func entry(_ title: String, _ key: String, _ modifiers: Int = 0, menu: Bool = false) -> ShortcutDefinition {
-            .init(title: title, group: menu ? "Menus" : "Canvas & Layers", original: ShortcutChord(key, modifiers))
+        func entry(_ title: String, _ key: String, _ modifiers: Int = 0, menu: Bool = false, commandID: LensWorksCommandID? = nil) -> ShortcutDefinition {
+            .init(title: title, group: menu ? "Menus" : "Canvas & Layers", original: ShortcutChord(key, modifiers), commandID: commandID)
         }
         var result: [ShortcutDefinition] = [
+            entry("Hide/Show Layer", "h", 9, menu: true, commandID: .visibility),
             entry("Undo", "z", 1, menu: true), entry("Redo", "z", 9, menu: true),
             entry("New Canvas", "n", 1, menu: true), entry("Open Project", "o", 1, menu: true),
             entry("Save", "s", 1, menu: true), entry("Save As", "s", 9, menu: true),

@@ -1,0 +1,615 @@
+//! In-process admission to a catalog's SQLite writer. SQLite still arbitrates
+//! independent processes. Waiting interactive work takes precedence over queued
+//! background transactions; each class is FIFO. An unbounded foreground stream
+//! can postpone background work. Parsing/rendering must happen before admission.
+use anyhow::{Result, ensure};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, ThreadId},
+    time::{Duration, Instant},
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Priority {
+    Foreground,
+    Background,
+}
+
+/// Worker-only admission. A selected migration child must obtain a parent
+/// writer grant at the same boundary as an ordinary in-process writer permit.
+/// The lease is released only after its caller's transaction has been dropped.
+pub(crate) trait ExternalAdmission: Send + Sync {
+    fn acquire(&self) -> Result<Box<dyn ExternalLease>>;
+}
+pub(crate) trait ExternalLease {
+    /// A failed release must poison/cancel the worker. The parent retains its
+    /// permit until a matching release or verified child reap.
+    fn release(&mut self);
+}
+
+#[derive(Default)]
+struct State {
+    owner: Option<ThreadId>,
+    next: [u64; 2],
+    serving: [u64; 2],
+    // Inclusive ranges, not one allocation for each canceled ticket. Repeated
+    // canceled requests behind one live waiter occupy only one range.
+    retired: [BTreeMap<u64, u64>; 2],
+}
+impl State {
+    fn advance_retired(&mut self, class: usize) {
+        while let Some(end) = self.retired[class].remove(&self.serving[class]) {
+            self.serving[class] = end + 1; // ticket allocation excludes u64::MAX
+        }
+    }
+    fn retire(&mut self, class: usize, ticket: u64) {
+        let mut start = ticket;
+        let mut end = ticket;
+        if let Some((&a, &b)) = self.retired[class].range(..=ticket).next_back() {
+            if b >= ticket {
+                return;
+            }
+            if b + 1 == ticket {
+                start = a;
+                self.retired[class].remove(&a);
+            }
+        }
+        if let Some(&next_end) = self.retired[class].get(&(ticket + 1)) {
+            end = next_end;
+            self.retired[class].remove(&(ticket + 1));
+        }
+        self.retired[class].insert(start, end);
+        self.advance_retired(class);
+    }
+}
+#[derive(Default)]
+pub(crate) struct Writers {
+    state: Mutex<State>,
+    changed: Condvar,
+    external: Option<Arc<dyn ExternalAdmission>>,
+}
+
+pub(crate) fn for_catalog(canonical_root: &Path) -> Arc<Writers> {
+    static REGISTRY: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Writers>>>> = OnceLock::new();
+    let mut registry = REGISTRY
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    registry.retain(|_, value| value.strong_count() != 0);
+    if let Some(value) = registry.get(canonical_root).and_then(Weak::upgrade) {
+        return value;
+    }
+    let value = Arc::new(Writers::default());
+    registry.insert(canonical_root.to_owned(), Arc::downgrade(&value));
+    value
+}
+
+/// Owns an allocated, not-yet-admitted ticket. Declared before the mutex guard
+/// so cancellation/error always unlocks State before retiring the ticket.
+struct WaitingTicket {
+    writers: Arc<Writers>,
+    ticket: Option<(usize, u64)>,
+}
+impl Drop for WaitingTicket {
+    fn drop(&mut self) {
+        if let Some((class, ticket)) = self.ticket {
+            self.writers
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retire(class, ticket);
+            self.writers.changed.notify_all();
+        }
+    }
+}
+impl Writers {
+    pub(crate) fn with_external(admission: Arc<dyn ExternalAdmission>) -> Arc<Self> {
+        Arc::new(Self {
+            external: Some(admission),
+            ..Self::default()
+        })
+    }
+    /// Notification is nonblocking and needs no writer mutex. The bounded wait
+    /// below also covers a notify-before-wait race.
+    pub(crate) fn wake_waiters(&self) {
+        self.changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_until_queued(&self, foreground: u64, background: u64) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut state = self.state.lock().unwrap();
+        while state.next[0] - state.serving[0] != foreground
+            || state.next[1] - state.serving[1] != background
+        {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "writer did not reach admission");
+            state = self.changed.wait_timeout(state, left).unwrap().0;
+        }
+    }
+    pub(crate) fn enter(self: &Arc<Self>, priority: Priority) -> Result<Permit> {
+        self.enter_checked(priority, None, None)
+    }
+    pub(crate) fn enter_cancellable(
+        self: &Arc<Self>,
+        priority: Priority,
+        cancel: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<Permit> {
+        self.enter_checked(priority, Some(cancel), deadline)
+    }
+    fn enter_checked(
+        self: &Arc<Self>,
+        priority: Priority,
+        cancel: Option<&AtomicBool>,
+        deadline: Option<Instant>,
+    ) -> Result<Permit> {
+        let mut waiting = WaitingTicket {
+            writers: self.clone(),
+            ticket: None,
+        };
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let owner = thread::current().id();
+        ensure!(
+            state.owner != Some(owner),
+            "recursive catalog writer admission; release the current transaction before calling another catalog writer"
+        );
+        ensure!(
+            !cancel.is_some_and(|c| c.load(Ordering::Acquire)),
+            "catalog writer admission canceled"
+        );
+        ensure!(
+            !deadline.is_some_and(|d| Instant::now() >= d),
+            "catalog writer admission deadline"
+        );
+        let class = usize::from(priority == Priority::Background);
+        let ticket = state.next[class];
+        state.next[class] = ticket
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("catalog writer ticket exhausted"))?;
+        waiting.ticket = Some((class, ticket));
+        self.changed.notify_all();
+        loop {
+            ensure!(
+                !cancel.is_some_and(|c| c.load(Ordering::Acquire)),
+                "catalog writer admission canceled"
+            );
+            ensure!(
+                !deadline.is_some_and(|d| Instant::now() >= d),
+                "catalog writer admission deadline"
+            );
+            state.advance_retired(0);
+            state.advance_retired(1);
+            if state.owner.is_none()
+                && state.serving[class] == ticket
+                && (class == 0 || state.next[0] == state.serving[0])
+            {
+                break;
+            }
+            state = if cancel.is_some() || deadline.is_some() {
+                let timeout = deadline
+                    .map(|d| d.saturating_duration_since(Instant::now()))
+                    .unwrap_or(Duration::from_millis(50))
+                    .min(Duration::from_millis(50));
+                self.changed
+                    .wait_timeout(state, timeout)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0
+            } else {
+                self.changed.wait(state).unwrap_or_else(|e| e.into_inner())
+            };
+        }
+        state.serving[class] += 1;
+        state.owner = Some(owner);
+        waiting.ticket = None;
+        drop(state);
+        let mut permit = Permit {
+            writers: self.clone(),
+            external: None,
+            _not_send: std::marker::PhantomData,
+        };
+        if let Some(external) = &self.external {
+            permit.external = Some(external.acquire()?);
+        }
+        Ok(permit)
+    }
+}
+
+/// Declare before the transaction: rollback precedes release even on error.
+/// Owned rather than borrowing Catalog, leaving its connection freely mutable.
+pub(crate) struct Permit {
+    writers: Arc<Writers>,
+    external: Option<Box<dyn ExternalLease>>,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl Drop for Permit {
+    fn drop(&mut self) {
+        if let Some(mut lease) = self.external.take() {
+            lease.release();
+        }
+        self.writers
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .owner = None;
+        self.writers.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Catalog, catalog_metadata::Source, organization::Operation, xmp_packets};
+    use rusqlite::params;
+    use std::fs;
+
+    fn queued(gate: &Writers, foreground: u64, background: u64) {
+        gate.wait_until_queued(foreground, background);
+    }
+    fn source() -> Source {
+        Source {
+            kind: "imported_catalog".into(),
+            locator: b"fixture".to_vec(),
+            display: "fixture".into(),
+            ambiguous: false,
+            provenance: serde_json::json!({"test":true}),
+        }
+    }
+
+    #[test]
+    fn export_revalidates_original_after_waiting_for_writer() -> Result<()> {
+        use crate::{
+            catalog_edits::VariantKey,
+            catalog_exports::{ExportTarget, MetadataSelection},
+            image_export::{
+                AlphaPolicy, IntegerDepth, OutputFormat, OutputProfile, OutputSize, OutputSpec,
+            },
+            metadata_export,
+            storage_volume::NativePath,
+        };
+        for publish in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().join("catalog");
+            let original = temp.path().join("original.png");
+            let destination = temp.path().join("export.png");
+            fs::write(&original, b"original fixture bytes")?;
+            let mut catalog = Catalog::open(&root)?;
+            let metadata=serde_json::json!({"format":"PNG","width":100,"height":100,"orientation":1,"camera_make":null,"camera_model":null,"captured_at":null,"preview_source":"fixture"}).to_string();
+            catalog.db.execute("INSERT INTO assets(id,location,path_display,state,metadata,preview_hash,fingerprint) VALUES('source',?1,'original','ready',?2,'fixture',?3)",params![crate::location_bytes(&original),metadata,blake3::hash(b"original fixture bytes").to_hex().to_string()])?;
+            catalog.record_storage_path("source", &NativePath::from_path(&original))?;
+            let job = catalog.begin_photo_export()?;
+            let target = ExportTarget {
+                key: VariantKey::master("source"),
+                expected_revision: 0,
+                destination: destination.clone(),
+                overwrite: false,
+                metadata: MetadataSelection::Omit,
+            };
+            let output = OutputSpec {
+                size: OutputSize::Original,
+                format: OutputFormat::Png {
+                    depth: IntegerDepth::Eight,
+                },
+                profile: OutputProfile::Srgb,
+                alpha: AlphaPolicy::Preserve,
+            };
+            catalog.append_photo_export(&job.id, 0, &target, &output, 1024, 1024)?;
+            catalog.seal_photo_export_job(&job.id, 1)?;
+            let work = catalog.claim_photo_export(&job.id)?.unwrap();
+            let staged = temp.path().join("rendered");
+            fs::write(&staged, b"rendered derivative")?;
+            let seal = metadata_export::seal_photo_export(
+                &work.plan.destination,
+                &staged,
+                1024,
+                &work.authority,
+                |_| Ok(()),
+            )?;
+            if publish {
+                catalog.accept_photo_export_seal(&work, &seal)?;
+            }
+            let gate = catalog.writers.clone();
+            let held = gate.enter(Priority::Background)?;
+            let job_id = job.id.clone();
+            let worker = thread::spawn(move || -> Result<()> {
+                let mut other = Catalog::open(root)?;
+                if publish {
+                    other.publish_photo_export_item(&job_id, 1).map(|_| ())
+                } else {
+                    other.accept_photo_export_seal(&work, &seal)
+                }
+            });
+            queued(&gate, 1, 0);
+            let mutation = fs::write(&original, b"changed while waiting");
+            // Even a refused Windows write must release the gate and join.
+            drop(held);
+            let result = worker.join().expect("export worker panicked");
+            if cfg!(windows) {
+                assert_eq!(
+                    mutation
+                        .expect_err("held proof allowed a write")
+                        .raw_os_error(),
+                    Some(32)
+                );
+                result?;
+                assert_eq!(fs::read(&original)?, b"original fixture bytes");
+                assert_eq!(destination.exists(), publish);
+                if publish {
+                    assert_eq!(fs::read(&destination)?, b"rendered derivative");
+                }
+                assert_eq!(
+                    catalog.photo_export_items(&job.id, 0, 1)?[0].state,
+                    if publish { "published" } else { "sealed" }
+                );
+            } else {
+                mutation?;
+                assert!(format!("{:#}", result.unwrap_err()).contains("original changed"));
+                assert!(!destination.exists());
+                assert_eq!(
+                    catalog.photo_export_items(&job.id, 0, 1)?[0].state,
+                    if publish { "sealed" } else { "rendering" }
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn edit_copy_validates_current_dimensions_after_waiting_for_writer() -> Result<()> {
+        use crate::{
+            catalog_edits::{EditTarget, VariantKey},
+            edit::{AdjustmentGroup, NormalizedRect, Recipe, RecipeV1},
+        };
+        for (before, after, expected) in [(1000, 2, "incompatible"), (2, 1000, "applied")] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().join("catalog");
+            let mut catalog = Catalog::open(&root)?;
+            let metadata = |size| {
+                serde_json::json!({"format":"PNG","width":size,"height":size,"orientation":1,"camera_make":null,"camera_model":null,"captured_at":null,"preview_source":"fixture"}).to_string()
+            };
+            for (asset, size) in [("source", 1000), ("target", before)] {
+                catalog.db.execute("INSERT INTO assets(id,location,path_display,state,metadata) VALUES(?1,?2,?1,'pending',?3)",params![asset,asset.as_bytes(),metadata(size)])?;
+            }
+            let source = VariantKey::master("source");
+            let target = VariantKey::master("target");
+            let recipe = Recipe::V1(RecipeV1 {
+                crop: Some(NormalizedRect {
+                    left: 0.1,
+                    top: 0.0,
+                    right: 0.11,
+                    bottom: 1.0,
+                }),
+                ..RecipeV1::default()
+            });
+            catalog.save_edit_recipe(&source, 0, &recipe)?;
+            let job = catalog.begin_edit_copy(&source, 1, &[AdjustmentGroup::Geometry])?;
+            catalog.append_edit_copy(
+                &job.id,
+                0,
+                &[EditTarget {
+                    key: target.clone(),
+                    expected_revision: 0,
+                }],
+            )?;
+            catalog.seal_edit_copy(&job.id, 1)?;
+            let gate = catalog.writers.clone();
+            let held = gate.enter(Priority::Background)?;
+            let job_id = job.id.clone();
+            let worker = thread::spawn(move || -> Result<()> {
+                let mut other = Catalog::open(root)?;
+                other.apply_edit_copy_step(&job_id, 1)?;
+                Ok(())
+            });
+            queued(&gate, 1, 0);
+            // Model the import transaction holding this writer permit: its new
+            // dimensions become authoritative before the waiting copy is admitted.
+            catalog.db.execute("UPDATE assets SET metadata=?1,render_generation=render_generation+1 WHERE id='target'",[metadata(after)])?;
+            drop(held);
+            worker.join().expect("copy worker panicked")?;
+            assert_eq!(catalog.edit_copy_items(&job.id, 0, 1)?[0].state, expected);
+            assert_eq!(
+                catalog.edit_variant(&target)?.revision,
+                i64::from(expected == "applied")
+            );
+        }
+        Ok(())
+    }
+    fn fixture() -> Result<(tempfile::TempDir, Catalog, PathBuf)> {
+        let temp = tempfile::tempdir()?;
+        let mut cat = Catalog::open(temp.path().join("catalog"))?;
+        for asset in ["background1", "background2", "foreground1", "foreground2"] {
+            cat.db.execute(
+                "INSERT INTO assets(id,location,path_display,state) VALUES(?1,?2,?1,'pending')",
+                params![asset, asset.as_bytes()],
+            )?;
+        }
+        while cat.organization_index(100)?.pending {}
+        let path = temp.path().join("source.xmp");
+        fs::write(&path, br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3"/></rdf:RDF>"#)?;
+        Ok((temp, cat, path))
+    }
+    #[test]
+    fn actual_metadata_calls_obey_priority_fifo_and_cannot_barge() -> Result<()> {
+        let (_temp, cat, path) = fixture()?;
+        let original = fs::read(&path)?;
+        let gate = cat.writers.clone();
+        let hold = gate.enter(Priority::Foreground)?;
+        let mut workers = Vec::new();
+        for (asset, foreground, waiting_fg, waiting_bg) in [
+            ("background1", false, 0, 1),
+            ("background2", false, 0, 2),
+            ("foreground1", true, 1, 2),
+            ("foreground2", true, 2, 2),
+        ] {
+            let root = cat.root.clone();
+            let path = path.clone();
+            workers.push(thread::spawn(move || -> Result<()> {
+                let mut other = Catalog::open(root.join("."))?;
+                if foreground {
+                    other.organize_asset(asset, 0, Operation::Rating { value: 4 })?;
+                } else {
+                    let inspection =
+                        xmp_packets::inspect_sidecar(&path, &xmp_packets::Limits::default())?;
+                    other.retain_metadata(asset, &source(), &inspection)?;
+                }
+                Ok(())
+            }));
+            queued(&gate, waiting_fg, waiting_bg);
+        }
+        // No operation can publish while the preceding transaction's permit exists.
+        assert_eq!(
+            cat.db
+                .query_row("SELECT COUNT(*) FROM metadata_history", [], |r| r
+                    .get::<_, i64>(0))?,
+            0
+        );
+        drop(hold);
+        for worker in workers {
+            worker.join().expect("writer panicked")?;
+        }
+        let order = cat
+            .db
+            .prepare("SELECT asset_id FROM metadata_history ORDER BY id")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            order,
+            ["foreground1", "foreground2", "background1", "background2"]
+        );
+        assert_eq!(fs::read(path)?, original);
+        for asset in order {
+            assert_eq!(cat.render_identity(&asset)?.metadata_revision, 1);
+        }
+        Ok(())
+    }
+    #[test]
+    fn rollback_unwind_and_recursive_callback_release_authority() -> Result<()> {
+        let (_temp, mut cat, path) = fixture()?;
+        let inspection = xmp_packets::inspect_sidecar(&path, &xmp_packets::Limits::default())?;
+        cat.retain_metadata("background1", &source(), &inspection)?;
+        let identity = cat.render_identity("background1")?;
+        let other = Catalog::open(&cat.root)?;
+        let gate = other.writers.clone();
+        let error = cat.with_render_identity(&identity, || -> Result<()> {
+            assert!(gate.enter(Priority::Foreground).is_err());
+            anyhow::bail!("injected publication failure")
+        });
+        assert!(error.is_err());
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                cat.with_render_identity(&identity, || -> Result<()> { panic!("injected unwind") });
+        }));
+        assert!(unwind.is_err());
+        let mut other = other;
+        assert_eq!(
+            other.organize_asset("foreground1", 0, Operation::Rating { value: 5 })?,
+            1
+        );
+        assert!(
+            other
+                .organize_asset("foreground1", 0, Operation::Rating { value: 2 })
+                .is_err()
+        );
+        assert_eq!(other.render_identity("foreground1")?.metadata_revision, 1);
+        let job = other.begin_organization_batch(Operation::Flag {
+            value: crate::organization::Flag::Pick,
+        })?;
+        other.append_organization_batch(
+            &job.id,
+            &[crate::organization::BatchItem {
+                asset_id: "foreground2".into(),
+                expected_revision: 0,
+            }],
+        )?;
+        other.seal_organization_batch(&job.id)?;
+        let failed = other
+            .step_organization_batch_with(&job.id, || anyhow::bail!("rollback written flag"))?;
+        assert_eq!(failed.state, "paused");
+        assert_eq!(other.render_identity("foreground2")?.metadata_revision, 0);
+        assert_eq!(other.db.query_row("SELECT count(*) FROM organization_flags WHERE sequence=(SELECT sequence FROM assets WHERE id='foreground2')", [], |r| r.get::<_,i64>(0))?, 0);
+        assert_eq!(
+            other.organize_asset("foreground2", 0, Operation::Rating { value: 2 })?,
+            1
+        );
+        let independent = tempfile::tempdir()?;
+        let mut independent = Catalog::open(independent.path())?;
+        let hold = gate.enter(Priority::Foreground)?;
+        independent.create_collection("unrelated", serde_json::Value::Null)?;
+        // Current-schema open and read-only snapshot admission do not wait for a writer.
+        let opened = Catalog::open(&cat.root)?;
+        assert_eq!(opened.render_identity("foreground1")?.metadata_revision, 1);
+        drop(hold);
+        Ok(())
+    }
+    #[test]
+    fn preview_import_commit_yields_to_foreground_generation_authority() -> Result<()> {
+        let (_temp, cat, _path) = fixture()?;
+        let gate = cat.writers.clone();
+        let held = gate.enter(Priority::Foreground)?;
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let root = cat.root.clone();
+        let background_order = order.clone();
+        let background = thread::spawn(move || -> Result<()> {
+            let mut other = Catalog::open(root)?;
+            let identity = other.render_identity("background1")?;
+            let metadata = crate::Metadata {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                orientation: 1,
+                camera_make: None,
+                camera_model: None,
+                captured_at: None,
+                lens: None,
+                preview_source: "integration fixture".into(),
+            };
+            assert!(
+                other
+                    .commit_preview_import(
+                        &identity,
+                        &"a".repeat(64),
+                        &metadata,
+                        &"b".repeat(64),
+                        || {
+                            background_order.lock().unwrap().push("background");
+                            Ok(())
+                        },
+                        || Ok(())
+                    )?
+                    .is_some()
+            );
+            Ok(())
+        });
+        queued(&gate, 0, 1);
+        let root = cat.root.clone();
+        let foreground_order = order.clone();
+        let foreground = thread::spawn(move || -> Result<()> {
+            let mut other = Catalog::open(root)?;
+            let identity = other.render_identity("foreground1")?;
+            assert!(
+                other
+                    .with_render_identity(&identity, || {
+                        foreground_order.lock().unwrap().push("foreground");
+                        Ok(())
+                    })?
+                    .is_some()
+            );
+            Ok(())
+        });
+        queued(&gate, 1, 1);
+        drop(held);
+        foreground.join().expect("foreground panicked")?;
+        background.join().expect("background panicked")?;
+        assert_eq!(*order.lock().unwrap(), ["foreground", "background"]);
+        assert_eq!(cat.render_identity("background1")?.state, "ready");
+        Ok(())
+    }
+}

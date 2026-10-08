@@ -5,6 +5,8 @@ struct LayerAppearanceControls: View {
     let layerID: UUID?
     @State private var percentage = "100"
     @State private var stepper = ArrowStepper()
+    @State private var cancellingPercentage = false
+    @State private var interactionToken: UUID?
     @FocusState private var focused: Bool
     var body: some View {
         VStack(spacing: 8) {
@@ -17,17 +19,21 @@ struct LayerAppearanceControls: View {
                     .scrubbable(sensitivity: 1,
                                 value: Binding<Double>(get: { (session.activeLayer?.opacity ?? 1) * 100 }, set: step),
                                 range: 0...100,
-                                onStart: { session.beginOpacityEdit() },
-                                onEnd: { session.finishOpacityEdit() })
+                                onStart: beginInteraction,
+                                onEnd: finishInteraction)
                 Slider(value: Binding(get: { session.activeLayer?.opacity ?? 1 },
-                                      set: { session.setLayerOpacity($0) }), in: 0...1,
-                       onEditingChanged: { if $0 { session.beginOpacityEdit() } else { session.finishOpacityEdit() } })
+                                      set: { setOpacity($0) }), in: 0...1,
+                       onEditingChanged: { if $0 { beginInteraction() } else { finishInteraction() } })
                 HStack(spacing: 2) {
                     TextField("Opacity percent", text: $percentage)
                         .textFieldStyle(.roundedBorder).frame(width: 44).focused($focused)
                         .onSubmit { releaseFocus() }
-                        .onExitCommand { releaseFocus() }
-                        .onChange(of: focused) { _, isFocused in if !isFocused { applyPercentage() } }
+                        .onExitCommand { cancellingPercentage = true; cancelInteraction(); focused = false; sync() }
+                        .onChange(of: focused) { _, isFocused in
+                            if isFocused { beginInteraction() }
+                            else if cancellingPercentage { cancellingPercentage = false; sync() }
+                            else { applyPercentage(); finishInteraction() }
+                        }
                         .arrowSteps(editing: focused, stepper: stepper,
                                     value: { ((session.activeLayer?.opacity ?? 1) * 100).rounded() },
                                     change: { step($0) })
@@ -37,12 +43,35 @@ struct LayerAppearanceControls: View {
         }.padding(12).disabled(!session.canEditOpacity)
             .onAppear { sync() }
             .onChange(of: session.activeLayer?.opacity) { _, _ in if !focused { sync() } }
-            .onDisappear { session.finishOpacityEdit() }
+            .onDisappear { finishInteraction() }
+            .onExitCommand { cancelInteraction(); sync() }
+    }
+    private func beginInteraction() {
+        guard interactionToken == nil, session.activeLayerID == layerID else { return }
+        session.beginOpacityEdit(); interactionToken = session.commandInteraction?.token
+    }
+    private func finishInteraction() {
+        guard let token = interactionToken else { return }
+        defer { interactionToken = nil }
+        guard session.commandInteraction?.token == token else { return }
+        session.finishOpacityEdit()
+    }
+    private func cancelInteraction() {
+        guard let token = interactionToken else { return }
+        defer { interactionToken = nil }
+        guard session.commandInteraction?.token == token else { return }
+        session.cancelOpacityEdit()
+    }
+    private func setOpacity(_ value: Double) {
+        if interactionToken == nil { beginInteraction() }
+        guard let token = interactionToken, session.commandInteraction?.token == token,
+              session.activeLayerID == layerID else { return }
+        session.setLayerOpacity(value)
     }
     /// Up and Down nudge the opacity by one percent, or ten with Shift.
     private func step(_ percent: Double) {
         guard session.activeLayerID == layerID else { return }
-        session.setLayerOpacity(min(100, max(0, percent)) / 100)
+        setOpacity(min(100, max(0, percent)) / 100)
         sync()
     }
     /// Losing focus applies the value; the canvas takes the focus back so a tool's key works straight away.
@@ -53,7 +82,7 @@ struct LayerAppearanceControls: View {
     private func sync() { percentage = String(Int(((session.activeLayer?.opacity ?? 1) * 100).rounded())) }
     private func applyPercentage() {
         guard session.activeLayerID == layerID else { return }
-        if let value = Double(percentage), value.isFinite { session.setLayerOpacity(value / 100) }
+        if let value = Double(percentage), value.isFinite { setOpacity(value / 100) }
         sync()
     }
 }

@@ -25,4 +25,4 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-PhotoCatalog and its transitive native/Rust dependencies are retained at the recorded pin. Their licenses remain with their sources. The Adobe DNG SDK license is included by the dependency acquisition script. Sparkle is recorded as a frozen baseline reference and is not linked; LensWorks distribution and updates require sc-24690 acceptance.
+LensWorks owns the copied catalog sources in engines/catalog and has no build or runtime dependency on the PhotoCatalog repository. The upstream revision in DEPENDENCIES.json records the original copy's provenance. The copied catalog and its transitive native/Rust dependency licenses remain with their sources. The Adobe DNG SDK license is included by the dependency acquisition script. Sparkle is recorded as a frozen baseline reference and is not linked; LensWorks distribution and updates require sc-24690 acceptance.

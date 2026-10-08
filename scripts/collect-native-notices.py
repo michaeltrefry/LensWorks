@@ -6,6 +6,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+from native_notice_reuse import reuse_native_notices, reuse_crate_notices
 
 if sys.version_info < (3, 11):
     raise SystemExit('Notice collection requires Python 3.11 or later')
@@ -16,7 +17,16 @@ root = pathlib.Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=pathlib.Path, required=True)
 parser.add_argument('--fetch', action='store_true', help='Retrieve checksum/commit-pinned official notices and corresponding sources')
+parser.add_argument('--reuse-native-notices', type=pathlib.Path, help='Reuse only matching aom/VMAF/LibRaw obligations from a prior complete native inventory')
+parser.add_argument('--reuse-inventory-sha256', help='Explicit SHA256 of the prior inventory.json')
+parser.add_argument('--reuse-manifest-sha256', help='Explicit SHA256 of the prior manifest.json')
+parser.add_argument('--reuse-crate-notices', action='store_true', help='Also verify and reuse exact prior zune-core@0.4.12 / zune-jpeg@0.4.21 upstream notices against current cached crate archives')
 args = parser.parse_args()
+if args.reuse_native_notices:
+    if args.fetch or not args.reuse_inventory_sha256 or not args.reuse_manifest_sha256:
+        parser.error('Offline reuse requires both prior JSON pins and cannot be combined with --fetch')
+elif args.reuse_inventory_sha256 or args.reuse_manifest_sha256 or args.reuse_crate_notices:
+    parser.error('Reuse pins require --reuse-native-notices')
 output = args.output.absolute()
 if output.exists():
     raise SystemExit('Notice output must be a new directory')
@@ -26,14 +36,14 @@ stage = output.parent / (output.name + '-inputs')
 if stage.exists():
     raise SystemExit('Notice input staging must be new')
 (stage / 'desktop/src-tauri').mkdir(parents=True)
-locks = [root / 'adapters/catalog/Cargo.lock', root / 'vendor/PhotoCatalog/Cargo.lock']
+locks = [root / 'adapters/catalog/Cargo.lock', root / 'engines/catalog/Cargo.lock']
 lock_bytes = {lock: lock.read_bytes() for lock in locks}
 lock_hashes = {str(lock.relative_to(root)): hashlib.sha256(data).hexdigest() for lock, data in lock_bytes.items()}
-manifest_bytes = {root / name: (root / name).read_bytes() for name in ('adapters/catalog/Cargo.toml', 'vendor/PhotoCatalog/Cargo.toml')}
+manifest_bytes = {root / name: (root / name).read_bytes() for name in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml')}
 packages = {}
 graphs = []
 payload_identities = set()
-for manifest in ('adapters/catalog/Cargo.toml', 'vendor/PhotoCatalog/Cargo.toml'):
+for manifest in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml'):
     command = ['cargo', 'tree', '--manifest-path', str(root / manifest), '--locked', '--offline', '--edges', 'normal,build', '--target', 'aarch64-apple-darwin', '--prefix', 'none', '--format', '{p}']
     tree = subprocess.check_output(command, text=True)
     for line in tree.splitlines():
@@ -62,9 +72,9 @@ for destination, source in [('Cargo.lock', locks[1]), ('rust-toolchain.toml', ro
 (stage / 'desktop/package-lock.json').write_text(json.dumps({'packages': {}}))
 (stage / 'vendor').mkdir()
 for name in ('xmp_toolkit', 'libsqlite3-sys'):
-    (stage / 'vendor' / name).symlink_to(root / 'vendor/PhotoCatalog/vendor' / name, target_is_directory=True)
+    (stage / 'vendor' / name).symlink_to(root / 'engines/catalog/vendor' / name, target_is_directory=True)
 sysroot = subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip()
-command = [sys.executable, str(root / 'vendor/PhotoCatalog/scripts/collect_desktop_notices.py'), '--checkout', str(stage), '--sdk', str(root / '.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1'), '--output', str(output), '--rust-sysroot', sysroot]
+command = [sys.executable, str(root / 'engines/catalog/scripts/collect_desktop_notices.py'), '--checkout', str(stage), '--sdk', str(root / '.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1'), '--output', str(output), '--rust-sysroot', sysroot]
 if args.fetch:
     command.append('--fetch')
 result = subprocess.run(command)
@@ -72,6 +82,15 @@ report_path = output / 'inventory.json'
 if not report_path.exists():
     raise SystemExit(result.returncode or 'Collector did not produce a report')
 report = json.loads(report_path.read_text())
+if args.reuse_native_notices:
+    if result.returncode not in (0, 1):
+        raise SystemExit('Collector failed outside its missing-notice outcome; reuse cannot cover that failure')
+    manifest = reuse_native_notices(output, report, args.reuse_native_notices,
+                                   args.reuse_inventory_sha256, args.reuse_manifest_sha256)
+    if args.reuse_crate_notices:
+        manifest = reuse_crate_notices(output, report, manifest, args.reuse_native_notices,
+                                      args.reuse_inventory_sha256, args.reuse_manifest_sha256)
+    (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
 if any(path.read_bytes() != data for path, data in {**lock_bytes, **manifest_bytes}.items()):
     raise SystemExit('Payload dependency input changed during notice collection')
 report['native_input_locks'] = lock_hashes

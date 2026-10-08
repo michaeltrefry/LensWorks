@@ -1,0 +1,65 @@
+{
+  "acceptance": "These source-declared bounds authorize no acceptance by themselves. The unchanged thresholded method must run TWO NEW complete tours on fresh catalogs/working directories with exact declared host TEST_RUNNER thresholds, preserve all originals, produce independently verified loaded-editor window captures within BOTH bounds and observe public Quit. CI must deliver these checked-in values and actually pass its smoke. Original R7 calibration remains MEASURED_NOT_ACCEPTED.",
+  "host_transport_environment": [
+    "TEST_RUNNER_LW_S47_FIXTURE_ROOT",
+    "TEST_RUNNER_LW_CATALOG_TEST_WORKER",
+    "TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER",
+    "TEST_RUNNER_LW_S47_MAX_CHANNEL_DELTA",
+    "TEST_RUNNER_LW_S47_MAX_CHANGED_PIXEL_FRACTION"
+  ],
+  "method": "Two independent full native catalog-to-editor tours on one host, selected uniquely by the loaded editor window marker/full source identity, retain receiver-window PNGs and separate per-run domain records, observe public Quit and preserve all originals. Compare the complete dense RGBA8 images; no crop, ignored region, label normalization or pixel exclusion. Window geometry alone does not certify image content. Current raw measurements and independently visually verified captures are the calibration sample.",
+  "result": {
+    "calibration": {
+      "actual_independent_review": {
+        "path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-actual-independent-r7/review.json",
+        "sha256": "8fda5223da190fccddac1dc4da10d94ed551a82376c65b6664e3ebcc901b282a"
+      },
+      "observedPairs": 1,
+      "publication": {
+        "path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-root-r7/report-publication.json",
+        "sha256": "0f27463fa828bde1f3f656a4c6e02696978e26876c2968340c4a74bf96315708"
+      },
+      "raw_status": "MEASURED_NOT_ACCEPTED",
+      "report": {
+        "path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-report-r7/calibration-report.json",
+        "sha256": "ff31edd7ee7fe1f4ecdacffbc884203844e59c1e8e8020ab221ffb42e2931d91"
+      },
+      "runs": [
+        {
+          "domain_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/BA3EBCAA-3935-4B81-B6E5-8D65300D2671.json",
+          "domain_sha256": "6ffbbdcb5b05f03e6f2052cba4be41723fd86c0c14d67a9a6738dd466f1bf13f",
+          "png_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/D55A6C04-895A-423A-99D3-86AF6F11A451.png",
+          "png_sha256": "92d09948c2974e8634e496301e39108209bc606e768746fa69b152f255aeb848",
+          "root_visual_review": "LensWorks editor visibly present; harbor canvas/layer/catalog/filmstrip and correct run-specific Demo catalog visible"
+        },
+        {
+          "domain_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/D5F13A4B-02FC-4779-8A5A-A62CAD7F371C.json",
+          "domain_sha256": "40e96ff2630b5d885571fa3027cdd31b718952c85725239f395c4d5616892684",
+          "png_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/5E5363E9-ED8A-4A72-96AA-8170A99D182F.png",
+          "png_sha256": "8232b32b59e05bf6b11c5eb995dd133122066cc3c9e6f4f3e05a99d1dbc5f936",
+          "root_visual_review": "LensWorks editor visibly present; harbor canvas/layer/catalog/filmstrip and correct run-specific Demo catalog visible"
+        }
+      ]
+    },
+    "derivation": {
+      "changedPixels": 665,
+      "height": 1001,
+      "maximumChangedPixelFraction": "Exact665/1729728 changed-pixel ratio, no rounding increase or added margin",
+      "maximumChannelDelta": "Exact observed maximum, no added margin",
+      "totalPixels": 1729728,
+      "width": 1728
+    },
+    "maximumChangedPixelFraction": 0.0003844535094535095,
+    "maximumChannelDelta": 191,
+    "scope": "Empirical bound from one same-host current-source pair only. Not a population noise bound or CI-host result. Fresh full acceptance pair and actual CI smoke must independently pass; failures never automatically widen these limits."
+  },
+  "runner_environment": [
+    "LW_S47_FIXTURE_ROOT",
+    "LW_CATALOG_TEST_WORKER",
+    "LW_CATALOG_TEST_DECODE_WORKER",
+    "LW_S47_MAX_CHANNEL_DELTA",
+    "LW_S47_MAX_CHANGED_PIXEL_FRACTION"
+  ],
+  "schema": "lensworks.s47.same-host-screenshot-tolerance.v4",
+  "status": "MEASURED_DECLARED_PENDING_FRESH_ACCEPTANCE"
+}

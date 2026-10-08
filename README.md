@@ -7,8 +7,11 @@ source reuse and a compiling application do not establish product acceptance.
 
 The Swift editor adapts the exact MIT-licensed Compositor baseline in
 [DEPENDENCIES.json](DEPENDENCIES.json). LensWorks owns its Swift/Rust boundary;
-PhotoCatalog catalog, metadata and migration services remain pinned and unchanged.
-The read-only source baselines are Git submodules.
+Catalog, metadata, migration and recovery services are being moved from the
+PhotoCatalog baseline into source owned and maintained by LensWorks. The original
+PhotoCatalog repository remains unchanged. LensWorks must build and run without
+that repository, including after its retirement or deletion. The copied baseline
+is provenance, not a restriction against fixing LensWorks-owned code.
 
 ## Build the development application
 

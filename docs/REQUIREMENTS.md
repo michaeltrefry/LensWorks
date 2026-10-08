@@ -16,9 +16,12 @@ by Michael. Native implementation and installed acceptance remain unstarted.
 - The new application uses Swift for its native application and editor.
   Compositor provides the editor and visual-design foundation; catalog-management
   screens should extend its existing visual language.
-- PhotoCatalog's Rust catalog, metadata, migration, and recovery services are
-  retained as a pinned dependency behind a Swift interface. The PhotoCatalog
-  repository remains unchanged; the Swift-facing adapter belongs to LensWorks.
+- Copy PhotoCatalog's complete UI-independent Rust catalog, metadata, migration,
+  and recovery services into LensWorks-owned source behind its Swift interface.
+  PhotoCatalog's repository remains unchanged and is not a build or runtime
+  dependency. LensWorks must remain buildable and functional after that repository
+  is retired or deleted. Preserve licenses and record the copied baseline as
+  provenance; maintain and fix the copied code inside LensWorks.
 - Launch support is Apple-silicon Macs running macOS 26.2 or later.
 - Opening a catalog photo switches the same window into the editor, retaining
   a filmstrip and catalog navigation.

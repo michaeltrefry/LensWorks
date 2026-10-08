@@ -85,39 +85,33 @@ extension EditorSession {
     var canEditAppearance: Bool { canEditLayers && selectedLayerIDs.count == 1 && activeLayer?.isGroup == false }
     /// A folder takes an opacity of its own, which dims everything inside it (see LayerOpacity);
     /// blending still belongs to each layer, so the rest of the appearance controls stay off for folders.
-    var canEditOpacity: Bool { canEditLayers && selectedLayerIDs.count == 1 && activeLayer != nil }
+    var canEditOpacity: Bool { canEditLayersForCommand && (commandInteraction == nil || commandInteraction?.commandID == .opacity) && selectedLayerIDs.count == 1 && activeLayer != nil }
     func beginOpacityEdit() {
-        guard canEditOpacity, opacityEditLayerID == nil, let id = activeLayerID else { return }
-        beginEdit("Layer Opacity")
-        opacityEditLayerID = id
+        guard commandInteraction == nil, canEditOpacity, let id = activeLayerID else { return }
+        do { _ = try beginCommandInteraction(.opacity([id], activeLayer?.opacity ?? 1)); opacityEditLayerID = id }
+        catch { commandRefusal = error.localizedDescription }
     }
     func finishOpacityEdit() {
-        guard opacityEditLayerID != nil else { return }
-        opacityEditLayerID = nil
-        endEdit()
+        guard opacityEditLayerID != nil, let interaction = commandInteraction else { return }
+        do { try endCommandInteraction(interaction.token); opacityEditLayerID = nil }
+        catch { commandRefusal = error.localizedDescription }
+    }
+    func cancelOpacityEdit() {
+        guard opacityEditLayerID != nil, let interaction = commandInteraction else { return }
+        do { try cancelCommandInteraction(interaction.token); opacityEditLayerID = nil }
+        catch { commandRefusal = error.localizedDescription }
     }
     func setLayerOpacity(_ opacity: Double) {
-        guard opacity.isFinite, canEditOpacity,
-              let id = opacityEditLayerID ?? activeLayerID,
-              let index = document?.layers.firstIndex(where: { $0.id == id }) else { return }
-        let standalone = opacityEditLayerID == nil
-        if standalone { beginEdit("Layer Opacity") }
-        document?.layers[index].opacity = min(1, max(0, opacity))
-        if standalone { endEdit() }
+        guard let id = opacityEditLayerID ?? activeLayerID else { return }
+        guard opacity.isFinite else { return }
+        _ = runCommand(.opacity([id], min(1, max(0, opacity))))
     }
-    /// Sets every selected layer's opacity as one undo step. A selected folder takes the value too,
-    /// dimming its contents on top of their own opacity.
     func setSelectedLayersOpacity(_ opacity: Double) {
-        guard opacity.isFinite, canEditLayers, let document else { return }
-        let value = min(1, max(0, opacity))
-        let indices = document.layers.indices.filter {
-            selectedLayerIDs.contains(document.layers[$0].id) && document.layers[$0].opacity != value
-        }
-        guard !indices.isEmpty else { return }
         finishOpacityEdit()
-        beginEdit("Layer Opacity")
-        for index in indices { self.document?.layers[index].opacity = value }
-        endEdit()
+        guard let document else { return }
+        let ids = document.layers.map(\.id).filter(selectedLayerIDs.contains)
+        guard opacity.isFinite else { return }
+        _ = runCommand(.opacity(ids, min(1, max(0, opacity))))
     }
     /// Shift-+ / Shift-−: the active layer's blend mode steps to the next or previous one in the
     /// blend menu's order, wrapping around, as one undo step.

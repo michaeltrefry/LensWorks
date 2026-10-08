@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Source identity is published atomically with layers inside the native project package.
 nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
@@ -10,6 +11,9 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
     var projectPath: String
     var name: String
     var originalNativePath: LWCatalogNativePath? = nil
+    var originalVariantKey: LWCatalogEditsVariantKey? = nil
+    // Schema-1 records predating logical copies describe the retained master.
+    var sourceVariantID: String { originalVariantKey?.variant_id ?? "master" }
 
     static func sidecar(for project: URL) -> URL {
         project.appendingPathExtension("lensworks.json")
@@ -33,13 +37,24 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
         }
     }
 
+    private static func admittedBytes(_ url: URL, limit: Int) throws -> Data {
+        let descriptor = url.path.withCString { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) }
+        guard descriptor >= 0 else { throw LensWorksCatalogError.message("The working version record could not be admitted.") }
+        let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? file.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size >= 0, info.st_size <= limit else {
+            throw LensWorksCatalogError.message("The working version record is not a bounded regular file.")
+        }
+        let bytes = try file.read(upToCount: limit + 1) ?? Data()
+        guard bytes.count <= limit else { throw ProjectError.tooLarge }
+        return bytes
+    }
+
     static func read(from project: URL) throws -> Self? {
         struct Header: Decodable { let workingVersionID: UUID? }
         let manifest = project.appendingPathComponent("manifest.json")
-        let manifestValues = try manifest.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-        guard manifestValues.isRegularFile == true, manifestValues.isSymbolicLink != true,
-              let manifestSize = manifestValues.fileSize, manifestSize <= 4 * 1024 * 1024 else { throw ProjectError.invalid }
-        let header = try JSONDecoder().decode(Header.self, from: Data(contentsOf: manifest))
+        let header = try JSONDecoder().decode(Header.self, from: admittedBytes(manifest, limit: 4 * 1024 * 1024))
         let embedded = project.appendingPathComponent("LensWorks.json")
         let metadata = header.workingVersionID != nil || FileManager.default.fileExists(atPath: embedded.path) ? embedded : sidecar(for: project)
         guard FileManager.default.fileExists(atPath: metadata.path) else {
@@ -48,12 +63,10 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
             }
             return nil
         }
-        let values = try metadata.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size <= 64 * 1024 else {
-            throw LensWorksCatalogError.message("The working version’s source record is invalid.")
-        }
-        var record = try JSONDecoder().decode(Self.self, from: Data(contentsOf: metadata))
-        guard record.schema == 1, !record.photoID.isEmpty, !record.originalPath.isEmpty,
+        var record = try JSONDecoder().decode(Self.self, from: admittedBytes(metadata, limit: 64 * 1024))
+        guard record.schema == 1, !record.photoID.isEmpty, !record.originalPath.isEmpty, !record.catalogPath.isEmpty,
+              record.originalVariantKey == nil || (record.originalVariantKey?.asset_id == record.photoID && record.originalVariantKey?.variant_id.isEmpty == false),
+              ![record.photoID, record.catalogPath, record.originalPath, record.originalVariantKey?.variant_id ?? ""].contains(where: { $0.utf8.contains(0) }),
               header.workingVersionID == nil || record.id == header.workingVersionID else {
             throw LensWorksCatalogError.message("The working version’s source record is invalid.")
         }
@@ -63,7 +76,9 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
     }
 
     func encoded() throws -> Data {
-        guard schema == 1, !photoID.isEmpty, !originalPath.isEmpty, !catalogPath.isEmpty else {
+        guard schema == 1, !photoID.isEmpty, !originalPath.isEmpty, !catalogPath.isEmpty,
+              originalVariantKey == nil || (originalVariantKey?.asset_id == photoID && originalVariantKey?.variant_id.isEmpty == false),
+              ![photoID, catalogPath, originalPath, originalVariantKey?.variant_id ?? ""].contains(where: { $0.utf8.contains(0) }) else {
             throw LensWorksCatalogError.message("The working version’s source record is invalid.")
         }
         let encoder = JSONEncoder()
@@ -109,7 +124,7 @@ actor LensWorksVersionStore {
         // FileWrapper can leave the held URL's directory bit stale after first publication.
         guard existing != target else { return version }
         return LensWorksWorkingVersion(id: UUID(), photoID: version.photoID, catalogPath: version.catalogPath,
-            originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent, originalNativePath: version.originalNativePath)
+            originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent, originalNativePath: version.originalNativePath, originalVariantKey: version.originalVariantKey)
     }
     func validate(_ version: LensWorksWorkingVersion?, destination: URL) throws { try version?.validateDestination(destination) }
     func list(paths: [String], directory: String?) -> LensWorksVersionListing {

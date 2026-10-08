@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute exact pinned public-service semantic fixtures, separately from ABI tests."""
+"""Execute exact owned public-service semantic fixtures, separately from ABI tests."""
 import json
 import os
 import pathlib
@@ -8,14 +8,12 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-PIN = "f4f8d3f12acc77fe5632720702c52a7cfefb5b58"
-VENDOR = ROOT / "vendor/PhotoCatalog"
-assert subprocess.check_output(["git", "-C", str(VENDOR), "rev-parse", "HEAD"], text=True).strip() == PIN
-assert not subprocess.check_output(["git", "-C", str(VENDOR), "status", "--porcelain"], text=True)
+ENGINE = ROOT / "engines/catalog"
+subprocess.run([sys.executable, str(ROOT / "scripts/catalog_source.py")], check=True)
 ENV = dict(os.environ, MACOSX_DEPLOYMENT_TARGET="26.2", CARGO_BUILD_JOBS="4",
            PHOTOCATALOG_DNG_SDK=str(ROOT / ".build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1"),
            PHOTOCATALOG_TEST_EXECUTABLE=str(ROOT / ".build/rust-catalog/release/photocatalog"))
-CARGO = ["cargo", "test", "--release", "--locked", "--manifest-path", str(VENDOR / "Cargo.toml"),
+CARGO = ["cargo", "test", "--release", "--locked", "--manifest-path", str(ENGINE / "Cargo.toml"),
          "--target-dir", str(ROOT / ".build/rust-catalog")]
 CASES = [
     "application::organization::tests::hierarchy_collection_cas_membership_and_synonyms_preserve_evidence",

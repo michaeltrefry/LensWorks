@@ -1,0 +1,40 @@
+name: S47 procedural photographs and native UI tour
+on: [push, pull_request]
+permissions: {contents: read}
+jobs:
+  deterministic-fixtures-and-tour:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - name: Verify the provisioned source-pinned Apple-silicon native route
+        run: ./scripts/ci/provision_s47_native_prerequisites.sh
+      - name: Generate and validate procedurally licensed fixtures
+        run: |
+          python3 -m unittest scripts.tests.test_generate_s47_procedural_photos
+          python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s47-fixtures" --seed 25317 --catalog-directory "$RUNNER_TEMP/s47-fixtures/WorkingVersions-1/Demo.catalog"
+      - name: Build source-bound owned helpers and UI-test scheme
+        run: |
+          ./scripts/build-native.sh
+          test -x .build/rust-catalog/release/photocatalog
+          test -x .build/rust-catalog/release/lensworks-decode-worker
+          shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
+          xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
+      - name: Deliver the source-declared measured screenshot tolerance
+        run: |
+          python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance
+          python3 scripts/ci/load_s47_screenshot_tolerance.py
+      - name: Run two complete unattended native UI tours
+        env:
+          TEST_RUNNER_LW_S47_FIXTURE_ROOT: ${{ runner.temp }}/s47-fixtures
+          TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
+          TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
+        run: |
+          test -n "$TEST_RUNNER_LW_S47_MAX_CHANNEL_DELTA"
+          test -n "$TEST_RUNNER_LW_S47_MAX_CHANGED_PIXEL_FRACTION"
+          xcodebuild test-without-building -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO -only-testing:CompositorUITests/CompositorUITests/testS47DeterministicDemoCatalogTourOpensPhotoEditorAndComparesConsecutiveScreenshots -resultBundlePath S47UITour.xcresult
+      - name: Upload tour evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: s47-procedural-ui-tour, path: S47UITour.xcresult, if-no-files-found: ignore, retention-days: 7}

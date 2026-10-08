@@ -230,7 +230,10 @@ struct NativeLayerList: NSViewRepresentable {
             case #selector(duplicateLayerAction):
                 return session.canEditLayers && session.activeLayer != nil
             case #selector(renameLayerAction):
-                return session.canEditLayers && session.activeLayer != nil && session.selectedLayerIDs.count == 1
+                let reason = session.activeLayerID.map { session.commandAvailability(.beginRename($0)) } ?? "Select a layer first."
+                menuItem.toolTip = reason
+                menuItem.title = LensWorksCommandRegistry.menuLabel("Rename Layer…", reason: reason)
+                return reason == nil && session.selectedLayerIDs.count == 1
             case #selector(deleteLayerAction):
                 return session.canEditLayers && session.activeLayer != nil
             case #selector(toggleClippingMaskAction):
@@ -252,7 +255,10 @@ struct NativeLayerList: NSViewRepresentable {
             case #selector(toggleMaskLinkAction):
                 return session.canEditLayers && session.activeLayer?.mask != nil && session.activeLayer?.isGroup == false && session.activeLayer?.adjustment == nil
             case #selector(toggleVisibilityAction):
-                return session.canEditLayers && session.activeLayer != nil
+                let command = LensWorksLayerCommand.visibility(session.activeLayerID.map { [$0] } ?? [], nil)
+                let reason = session.commandAvailability(command); menuItem.toolTip = reason
+                menuItem.title = LensWorksCommandRegistry.menuLabel(session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer", reason: reason)
+                return reason == nil
             default:
                 if menuItem.submenu != nil && menuItem.title == "Add Mask" {
                     return session.canEditMask && session.activeLayer?.mask == nil
@@ -266,8 +272,8 @@ struct NativeLayerList: NSViewRepresentable {
         }
 
         @objc func renameLayerAction(_ sender: Any?) {
-            guard session.canEditLayers, let id = session.activeLayerID else { return }
-            session.renamingLayerID = id
+            guard let id = session.activeLayerID else { return }
+            _ = session.runCommand(.beginRename(id))
         }
 
         @objc func deleteLayerAction(_ sender: Any?) {
@@ -369,7 +375,7 @@ struct NativeLayerList: NSViewRepresentable {
                 if rows[table.clickedRow].liveText != nil { session.editActiveText(); return }
                 if rows[table.clickedRow].adjustment?.kind.isEditable == true { session.adjustmentEditingID = id; return }
             }
-            session.renamingLayerID = id
+            _ = session.runCommand(.beginRename(id))
         }
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
             guard session.canEditLayers, rows.indices.contains(row) else { return nil }
@@ -1027,7 +1033,7 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
         guard renaming, let session, let layerID else { return }
         let typed = nameLabel.stringValue
         restoreLabel()
-        if keeping { session.renameLayer(layerID, to: typed) }
+        if keeping, session.renamingLayerID == layerID, session.commandRenameAdmission != nil { session.renameLayer(layerID, to: typed) }
         if session.renamingLayerID == layerID { session.renamingLayerID = nil }
         // Show whatever name the layer ended up with, marked as the row shows it.
         if let layer = session.document?.layers.first(where: { $0.id == layerID }) {

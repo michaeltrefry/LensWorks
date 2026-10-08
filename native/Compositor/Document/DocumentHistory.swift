@@ -10,7 +10,7 @@ final class DocumentHistory {
         let activeLayerID: UUID?
         let revision: UUID
     }
-    private struct Entry {
+    struct Entry {
         let name: String
         let before: Snapshot
         let after: Snapshot
@@ -22,6 +22,26 @@ final class DocumentHistory {
     private var pending: Snapshot?
     private var pendingName = "Edit"
     private var depth = 0
+    private var interactionToken: UUID?
+    struct Archive { let past: [Entry]; let future: [Entry]; let revision: UUID }
+    var archive: Archive { .init(past: past, future: future, revision: revision) }
+    func restoreArchive(_ archive: Archive, saved: Bool = true) {
+        past = archive.past; future = archive.future; revision = archive.revision
+        savedRevision = saved ? revision : nil; pending = nil; depth = 0; interactionToken = nil
+    }
+    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?) -> UUID? {
+        guard depth == 0 else { return nil }
+        let token = UUID(); interactionToken = token
+        begin(name, document: document, selection: selection); return token
+    }
+    func endInteraction(_ token: UUID, document: CanvasDocument?, selection: UUID?) -> Bool {
+        guard interactionToken == token, depth == 1 else { return false }
+        interactionToken = nil; end(document: document, selection: selection); return true
+    }
+    func cancelInteraction(_ token: UUID) -> Snapshot? {
+        guard interactionToken == token, depth == 1, let starting = pending else { return nil }
+        interactionToken = nil; pending = nil; depth = 0; return starting
+    }
     let entryLimit: Int
     let retainedByteLimit: Int
 
@@ -38,6 +58,7 @@ final class DocumentHistory {
     var isModified: Bool { revision != savedRevision }
     var undoCount: Int { past.count }
     func markSaved() { savedRevision = revision }
+    func markUnsaved() { savedRevision = nil }
     /// The document as it stands, for a save that captures it now and finishes later.
     var currentRevision: UUID { revision }
     /// A save of `saved` finished. Edits made while it was writing leave the document modified; undoing back to it doesn't.
@@ -47,6 +68,7 @@ final class DocumentHistory {
         future.removeAll()
         pending = nil
         depth = 0
+        interactionToken = nil
         revision = UUID()
         savedRevision = revision
     }

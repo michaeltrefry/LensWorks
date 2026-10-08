@@ -59,7 +59,7 @@ struct ProjectTests {
         #expect(reopened.activeLayerID == session.activeLayerID)
         #expect(reopened.document?.layers.last?.asset == nil)
         #expect(!reopened.isModified)
-        #expect(!reopened.canUndo)
+        #expect(reopened.canUndo) // Version 13 retains the same project-native Undo history.
         let image = try #require(loaded.images[imageID]?.image)
         #expect(image.width == 64 && image.height == 32)
         let bitmap = NSBitmapImageRep(cgImage: image)

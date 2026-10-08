@@ -1,6 +1,6 @@
 # Catalog service capability coverage
 
-Frozen PhotoCatalog `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`; story `sc-24658`. 248 reachable request/result/config/core types and 609 enum variants; 171 commands and 357 input enum choices. Source coverage is not native acceptance.
+LensWorks-owned catalog (upstream provenance `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`); story `sc-24658`. 248 reachable request/result/config/core types and 609 enum variants; 171 commands and 357 input enum choices. Source coverage is not native acceptance.
 
 The matrix contains 171 command rows, 186 nested input choice rows, 756 associated/struct field rows and 6 public original/render identity seams. Every row maps to a concrete fixture profile. All execution is planned/unrun unless exact evidence appears in the JSON execution ledger.
 
@@ -186,7 +186,7 @@ The JSON contains the complete field/type/serde/import graph, all source hashes,
 
 ### metadata-resolution
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Retain fixture.png with two XMP title candidates: Camera and Chosen; collect the real VariantKey and metadata revision.
 2. Read Identity, paged Fields/Candidates/Sources/Observations/Models/Packets/Decisions/FileInstances and all text/blob/import chunks with page limit 2 and chunk length 16.
@@ -204,7 +204,7 @@ Fault fixtures:
 
 ### metadata-write-recovery
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Use fixture.png plus fixture.png.xmp containing title Before; record both original hashes.
 2. Read Options; Start with InputBegin, append exact UTF8 edit document bytes, InputFinish, Prepare/Review and Commit, then SidecarPlan and SidecarApply using returned token/generation/review digest and attempt.
@@ -222,7 +222,7 @@ Fault fixtures:
 
 ### organization-revisions
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Import fixture-a.png and fixture-b.png; create flat keyword LensWorks, hierarchical keyword Travel/Paris, synonym LW and collection Picks.
 2. Apply rating4, Pick flag, Blue label, add/remove/move keywords and collection member edits using current per-image revision.
@@ -240,7 +240,7 @@ Fault fixtures:
 
 ### relink-review-identity
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Import fixture-a.png at root-A, record source hashes; copy exact bytes to root-B, then move root-A aside.
 2. Read Rules; Begin with asset scope; Prepare root-B; page Plans/Items/Sources; revise or Confirm with the returned plan revision.
@@ -258,7 +258,7 @@ Fault fixtures:
 
 ### adjustment-transfer
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Import two images and save source exposure1.25/contrast0.2; target exposure-0.5/contrast-0.1.
 2. Begin selecting only Exposure; Append target at real expected revision; Seal with exact total; Inspect and Run; read Jobs/Items.
@@ -276,7 +276,7 @@ Fault fixtures:
 
 ### preview-policy-relocation
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Read Status and SetBudgets with explicit nonzero proxy/thumbnail budgets from Options-compatible bounds.
 2. BeginOriginalRootReview with source root, step exact returned review token with directories2 to completion.
@@ -294,7 +294,7 @@ Fault fixtures:
 
 ### guarded-migration
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Create a tiny closed Lightroom SQLite fixture and use retained worker fixture documents for every Operation/InputRole.
 2. Begin with exact PartDescriptor byte lengths/digests; Upload ordered UTF8 fragments; Finish each role with computed BLAKE3; Act; poll Status and ResultPage.
@@ -312,7 +312,7 @@ Fault fixtures:
 
 ### workbench-input-review
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Use read-only Workbench on a tiny closed Lightroom SQLite fixture; Open returns real workbench/generation; read Options and Status.
 2. Exercise every Action and Query with the required returned revision/evidence; upload Inventory, SelectionRequest, Approval and ApprovalDraft via InputBegin/Append/Finish.
@@ -330,7 +330,7 @@ Fault fixtures:
 
 ### export-staging-recovery
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Import a tiny RGBA float-capable fixture, record original BLAKE3; read Options, admit an ICC Profile and release it after use.
 2. Begin; resolve Paths/Destinations/DestinationRows; Append a target with exact revision and explicit OutputSize/OutputFormat/Profile/AlphaPolicy/Metadata; Seal exact total.
@@ -348,7 +348,7 @@ Fault fixtures:
 
 ### catalog-open-close
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Create an empty catalog beneath a temporary root; read real Status.catalog token; Close and OpenExisting same root.
 2. Query Status from an independent job while another request is pending; release all returned owned buffers and jobs.
@@ -366,7 +366,7 @@ Fault fixtures:
 
 ### import-resume
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Create source root with exactly two tiny PNGs plus an unsupported text file and record every file hash.
 2. Create catalog; ImportStart; poll ImportStatus; cancel one run via returned import id; reopen and ImportResume the same source.
@@ -384,7 +384,7 @@ Fault fixtures:
 
 ### backup-restore-held-jobs
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Create catalog with two images and one pending organization/export job; record source and catalog identity.
 2. BackupCreate into new bundle; poll BackupStatus; BackupInspect verifies actual receipt; BackupRestore into new destination; open restored destination.
@@ -402,7 +402,7 @@ Fault fixtures:
 
 ### browse-edit-history
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Import two fixture images with different ratings/names; Images/Folders paginate with limit1 and returned cursors.
 2. Search each nondefault filter and Sort/Direction against known metadata; Image/Variants retain exact master/variant keys.
@@ -420,7 +420,7 @@ Fault fixtures:
 
 ### preview-generation-bytes
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Import fixture.png; request thumbnail then proxy with viewport main and increasing generations; poll PreviewStatus.
 2. Copy admitted preview bytes into owned buffer; release viewport and cancel the matching ticket; reopen offline original root after retained preview exists.
@@ -438,7 +438,7 @@ Fault fixtures:
 
 ### source-identity
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Obtain real logical/physical/edit identity through retained Catalog methods.
 2. Change recipe/metadata/source observations separately and retry stale CAS.
@@ -454,7 +454,7 @@ Fault fixtures:
 
 ### full-float-original
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. Use CPU-only native full TIFF decoder with negative/high fractional f32 pixels and known BLAKE3.
 2. Apply exact retained recipe renderer and stage to a fresh destination.
@@ -471,7 +471,7 @@ Fault fixtures:
 
 ### wire-conformance
 
-Status: **planned_unrun**. Source baseline: `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+Status: **planned_unrun**. Source baseline: `f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729`.
 
 1. For every wire case, deserialize into exact Rust application::Request and Swift LWApplicationRequest.
 2. Serialize Swift request back and deserialize Rust again; compare typed value via JSON tree, including defaults and flattened fields.
@@ -489,18 +489,18 @@ Fault fixtures:
 
 | Source symbol | Fixture | Concrete action |
 | --- | --- | --- |
-| `vendor/PhotoCatalog/src/catalog_edits.rs:559::edit_render_identity` | `source-identity` | Query VariantKey::master(real asset); bind physical_generation, fingerprint, image identity, edit revision and recipe digest. Save exposure1.25 and compare identity before/after; same original fingerprint but new edit revision/digest. Attempt with_edit_identity using stale identity: callback not invoked, result None. |
-| `vendor/PhotoCatalog/src/catalog_images.rs:290::image_metadata_identity` | `source-identity` | Query master and created variant separately; metadata edits advance only the applicable image revision. Source observation change advances shared source epoch/physical generation; source hash remains original. |
-| `vendor/PhotoCatalog/src/edit/render.rs:212::decode_original` | `full-float-original` | Decode tiny float TIFF with pixels[-0.25,0.5012345,1.25,1.0] under actual expected BLAKE3 and WhiteBalance::AsShot. Assert f32 linear channels retain negative/high values and >8bit fractional precision; exact=true and original dimensions2x2. Wrong fingerprint fails SourceChanged; source file bytes remain unchanged. |
-| `vendor/PhotoCatalog/src/media/full.rs:244::decode_full_limited` | `full-float-original` | Decode actual PNG/TIFF fixture under finite DecodeLimits; preserve orientation/color/provenance. Exceed encoded/pixel/allocation limits and assert typed ResourceLimit rather than unbounded allocation. |
-| `vendor/PhotoCatalog/src/edit/render.rs:311::render_recipe` | `full-float-original` | Apply validated exposure+1EV to linear[0.25,0.125,0.5,1] original input; expected RGB doubles before output clipping. RenderPurpose::ExportExact must reject proxy-only input; cancellation cannot publish partial current output. |
-| `vendor/PhotoCatalog/src/photo_render.rs:88::render_staged_photo` | `full-float-original` | Render verified original to caller-owned fresh stage with PNG/JPEG/TIFF OutputSpec and explicit alpha policy. Compare original BLAKE3 before/after and receipt source_fingerprint, recipe_digest, renderer identity. Changed source/occupied stage/cancel fails without publishing destination. |
+| `engines/catalog/src/catalog_edits.rs:559::edit_render_identity` | `source-identity` | Query VariantKey::master(real asset); bind physical_generation, fingerprint, image identity, edit revision and recipe digest. Save exposure1.25 and compare identity before/after; same original fingerprint but new edit revision/digest. Attempt with_edit_identity using stale identity: callback not invoked, result None. |
+| `engines/catalog/src/catalog_images.rs:290::image_metadata_identity` | `source-identity` | Query master and created variant separately; metadata edits advance only the applicable image revision. Source observation change advances shared source epoch/physical generation; source hash remains original. |
+| `engines/catalog/src/edit/render.rs:212::decode_original` | `full-float-original` | Decode tiny float TIFF with pixels[-0.25,0.5012345,1.25,1.0] under actual expected BLAKE3 and WhiteBalance::AsShot. Assert f32 linear channels retain negative/high values and >8bit fractional precision; exact=true and original dimensions2x2. Wrong fingerprint fails SourceChanged; source file bytes remain unchanged. |
+| `engines/catalog/src/media/full.rs:244::decode_full_limited` | `full-float-original` | Decode actual PNG/TIFF fixture under finite DecodeLimits; preserve orientation/color/provenance. Exceed encoded/pixel/allocation limits and assert typed ResourceLimit rather than unbounded allocation. |
+| `engines/catalog/src/edit/render.rs:311::render_recipe` | `full-float-original` | Apply validated exposure+1EV to linear[0.25,0.125,0.5,1] original input; expected RGB doubles before output clipping. RenderPurpose::ExportExact must reject proxy-only input; cancellation cannot publish partial current output. |
+| `engines/catalog/src/photo_render.rs:88::render_staged_photo` | `full-float-original` | Render verified original to caller-owned fresh stage with PNG/JPEG/TIFF OutputSpec and explicit alpha policy. Compare original BLAKE3 before/after and receipt source_fingerprint, recipe_digest, renderer identity. Changed source/occupied stage/cancel fails without publishing destination. |
 
 Full precision linear f32 decoding and verified source identity are independent public Rust seams; retained preview/browse JPEG or Compositor RGBA8 is insufficient acceptance. PSD/PSB import does not grant an export route. Frozen license/provenance remain in DEPENDENCIES.json and THIRD_PARTY_NOTICES.md.
 
 ## Audit contract
 
-Run `python3 scripts/audit-catalog-service-coverage.py --check-swift`. The audit independently extracts module-scope declarations/imports and exact fields/serde tags/macro-expanded limits and decimal wrappers, verifies the frozen revision/file hashes, and rejects missing coverage or changed source authority. It checks actual Swift associated/struct payload types, not just member names. `--self-test-source-resolution` executes lexical-scope/local-shadow/module-alias/reexport-cycle/wildcard-ambiguity regressions, populated generic pages, and negative wrong graph/Swift type bindings. `--write` regenerates source-derived artifacts; none of these commands execute operational acceptance fixtures.
+Run `python3 scripts/audit-catalog-service-coverage.py --check-swift`. The audit independently extracts module-scope declarations/imports and exact fields/serde tags/macro-expanded limits and decimal wrappers, verifies the owned source digest and file hashes, and rejects missing coverage or changed source authority. It checks actual Swift associated/struct payload types, not just member names. `--self-test-source-resolution` executes lexical-scope/local-shadow/module-alias/reexport-cycle/wildcard-ambiguity regressions, populated generic pages, and negative wrong graph/Swift type bindings. `--write` regenerates source-derived artifacts; none of these commands execute operational acceptance fixtures.
 
 ## Source ambiguities and execution limits
 

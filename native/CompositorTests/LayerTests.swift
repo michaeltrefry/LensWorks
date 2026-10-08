@@ -276,7 +276,7 @@ struct LayerTests {
         // Duplicate
         #expect(titles.contains("Duplicate Layer"))
         // Rename
-        #expect(titles.contains("Rename…"))
+        #expect(titles.contains("Rename Layer…"))
         // Delete
         #expect(titles.contains("Delete Layer"))
         // Mask actions

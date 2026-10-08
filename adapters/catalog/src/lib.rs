@@ -1,4 +1,4 @@
-//! LensWorks-owned, blocking C/JSON boundary over the pinned PhotoCatalog core.
+//! LensWorks-owned, blocking C/JSON boundary over the owned catalog core.
 pub mod full_decode;
 mod managed;
 pub use managed::{
@@ -14,7 +14,8 @@ use std::{
     sync::Mutex,
 };
 
-pub const SOURCE_REVISION: &str = "f4f8d3f12acc77fe5632720702c52a7cfefb5b58";
+// Historical upstream revision is provenance; runtime authority is owned bytes.
+pub const SOURCE_REVISION: &str = env!("LENSWORKS_CATALOG_SOURCE_DIGEST");
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_ITEMS: usize = 1000;
 // Stateless calls close their catalog before returning. This mutex prevents

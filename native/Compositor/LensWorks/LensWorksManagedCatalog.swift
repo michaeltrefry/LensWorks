@@ -1,8 +1,8 @@
 import Foundation
 
-/// Generated contract authority is tied to DEPENDENCIES.json; conformance checks read that ledger.
+/// Runtime authority is the LensWorks-owned catalog file-ledger digest; the upstream commit is provenance only.
 nonisolated enum LWManagedAuthority {
-    static let sourceRevision = "f4f8d3f12acc77fe5632720702c52a7cfefb5b58"
+    static let sourceRevision = "c0ea59092dc44c2adf92f5dd031eea1e33cb78d0e8a6ceb222c5419be8f94440"
     static let protocolVersion: UInt32 = 2
     static func validate(sourceRevision: String, protocolVersion: UInt32 = Self.protocolVersion) throws {
         guard sourceRevision == Self.sourceRevision, protocolVersion == Self.protocolVersion else {
