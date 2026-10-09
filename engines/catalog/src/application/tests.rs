@@ -1346,3 +1346,122 @@ fn retained_failed_admission_blocks_global_writes_until_explicit_close() -> anyh
     }
     Ok(())
 }
+
+#[test]
+fn managed_close_retry_admission_queues_exact_token_without_retiring_owners() -> Result<()> {
+    use desktop::backup::{Admission, AdmissionReply, AdmissionRequest};
+    let root = tempfile::tempdir()?;
+    let (bridge, mut actor, token, _) = drain_actor(root.path())?;
+    actor.managed = Some(ManagedCatalogConfig {
+        filesystem: crate::catalog_session::unused_filesystem(&root.path().join("admission-facts"))?,
+    });
+    let cache = actor.open.as_ref().unwrap().service.cache_configuration().clone();
+    assert!(actor.command(Request::Close { catalog: token.clone() }, &Cancellation::default()).is_err());
+    assert!(actor.open.as_ref().unwrap().closing);
+    assert_eq!(actor.open.as_ref().unwrap().service.active_worker_pids().len(), 1);
+    assert_eq!(actor.open.as_ref().unwrap().service.scheduler_usage().reserved_bytes, 4096);
+    let canceled = bridge.backup_admission(AdmissionRequest::Close { catalog: token.clone(), epoch: 41 })?;
+    canceled.cancel.cancel();
+    *bridge.0.thread.lock().unwrap() = Some(thread::spawn(move || actor.run()));
+    assert!(matches!(canceled.receiver.recv_timeout(Duration::from_secs(5))?,
+        AdmissionReply::Error(BridgeError { code: ErrorCode::Canceled, .. })));
+    let wrong = bridge.backup_admission(AdmissionRequest::Close { catalog: "wrong-close-token".into(), epoch: 42 })?;
+    assert!(matches!(wrong.receiver.recv_timeout(Duration::from_secs(5))?,
+        AdmissionReply::Error(BridgeError { code: ErrorCode::StaleSession, .. })));
+    let backup = bridge.backup_admission(AdmissionRequest::Create { catalog: token.clone() })?;
+    assert!(matches!(backup.receiver.recv_timeout(Duration::from_secs(5))?,
+        AdmissionReply::Error(BridgeError { code: ErrorCode::Busy, .. })));
+    let retry = bridge.backup_admission(AdmissionRequest::Close { catalog: token.clone(), epoch: 43 })?;
+    assert!(matches!(retry.receiver.recv_timeout(Duration::from_secs(5))?,
+        AdmissionReply::Ok(Admission::Close { epoch: 43 })));
+    assert!(matches!(bridge.submit(Request::Status)?.receiver.recv_timeout(Duration::from_secs(5))?,
+        Reply::Ok { value: Response::Status(s) } if matches!(s.phase, Phase::Closing) && s.catalog.as_ref() == Some(&token)));
+    assert!(crate::ImportLock::acquire(&root.path().join("catalog/import.lock")).is_err());
+    assert!(preview::PreviewStore::open(cache.clone(), &[]).is_err());
+    assert!(matches!(bridge.submit(Request::Create { path: NativePath::from_path(&root.path().join("new-work")) }),
+        Err(BridgeError { code: ErrorCode::Busy, .. })));
+    assert!(matches!(bridge.submit(Request::Close { catalog: token.clone() })?.receiver.recv_timeout(Duration::from_secs(5))?,
+        Reply::Ok { value: Response::Status(s) } if matches!(s.phase, Phase::Closed) && s.catalog.is_none()));
+    let stale = bridge.backup_admission(AdmissionRequest::Close { catalog: token, epoch: 43 })?;
+    assert!(matches!(stale.receiver.recv_timeout(Duration::from_secs(5))?,
+        AdmissionReply::Error(BridgeError { code: ErrorCode::StaleSession, .. })));
+    bridge.try_shutdown()?;
+    assert!(bridge.0.thread.lock().unwrap().is_none());
+    drop(crate::ImportLock::acquire(&root.path().join("catalog/import.lock"))?);
+    drop(preview::PreviewStore::open(cache, &[])?);
+    assert!(!root.path().join("new-work").exists());
+    Ok(())
+}
+
+#[test]
+fn managed_close_retry_admission_preserves_failed_admission_and_session_tokens() -> Result<()> {
+    use desktop::backup::{Admission, AdmissionRequest};
+    for initialized in [false, true] {
+        let root = tempfile::tempdir()?;
+        let bridge = disconnected();
+        let mut actor = Actor::new(Config {
+            worker_executable: std::env::current_exe()?, cache_root: None,
+            original_roots: vec![], preview_policy: Default::default(),
+            preview_limits: Default::default(), limits: Default::default(), import_checkpoint: None,
+        }, bridge.0.shared.clone());
+        actor.managed = Some(ManagedCatalogConfig {
+            filesystem: crate::catalog_session::unused_filesystem(&root.path().join("admission-facts"))?,
+        });
+        match crate::catalog_session::retained_admission(root.path(), initialized)? {
+            Ok(session) => actor.failed_session = Some(session),
+            Err(cleanup) => actor.failed_admission = Some(cleanup),
+        }
+        actor.publish_failed_admission("retained cleanup control".into());
+        let token = actor.status().catalog.unwrap();
+        assert!(matches!(actor.backup_admission(AdmissionRequest::Close { catalog: "wrong-retained-token".into(), epoch: 7 }),
+            Err(BridgeError { code: ErrorCode::StaleSession, .. })));
+        assert!(matches!(actor.command(Request::Close { catalog: "wrong-retained-token".into() }, &Cancellation::default()),
+            Err(BridgeError { code: ErrorCode::StaleSession, .. })));
+        assert!(matches!(actor.backup_admission(AdmissionRequest::Create { catalog: token.clone() }),
+            Err(BridgeError { code: ErrorCode::Busy, .. })));
+        assert!(matches!(actor.backup_admission(AdmissionRequest::Close { catalog: token.clone(), epoch: 7 })?, Admission::Close { epoch: 7 }));
+        assert!(actor.open.is_none());
+        assert_eq!(actor.failed_session.is_some(), initialized);
+        assert_eq!(actor.failed_admission.is_some(), !initialized);
+        assert!(matches!(actor.status().phase, Phase::Closing));
+        assert_eq!(actor.status().catalog.as_ref(), Some(&token));
+        assert!(matches!(actor.command(Request::OpenExisting { path: NativePath::from_path(&root.path().join("must-not-open")) }, &Cancellation::default()),
+            Err(BridgeError { code: ErrorCode::Busy, .. })));
+        assert!(matches!(actor.command(Request::Close { catalog: token.clone() }, &Cancellation::default())?,
+            Response::Status(s) if matches!(s.phase, Phase::Closed) && s.catalog.is_none()));
+        assert!(actor.failed_admission.is_none() && actor.failed_session.is_none());
+        assert!(matches!(actor.backup_admission(AdmissionRequest::Close { catalog: token, epoch: 7 }),
+            Err(BridgeError { code: ErrorCode::StaleSession, .. })));
+        assert!(!root.path().join("must-not-open").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn managed_close_retry_admission_keeps_live_open_and_exact_epoch_until_checked_close() -> Result<()> {
+    use desktop::backup::{Admission, AdmissionRequest};
+    let root = tempfile::tempdir()?;
+    let (_, mut actor, token, failures) = drain_actor(root.path())?;
+    failures.store(0, Ordering::Release);
+    assert!(matches!(actor.backup_admission(AdmissionRequest::Close { catalog: token.clone(), epoch: 0 }),
+        Err(BridgeError { code: ErrorCode::InvalidRequest, .. })));
+    actor.managed = Some(ManagedCatalogConfig {
+        filesystem: crate::catalog_session::unused_filesystem(&root.path().join("admission-facts"))?,
+    });
+    assert!(matches!(actor.backup_admission(AdmissionRequest::Close { catalog: "replaced-open-token".into(), epoch: 0 }),
+        Err(BridgeError { code: ErrorCode::StaleSession, .. })));
+    for epoch in [0, 1, u64::MAX] {
+        assert!(matches!(actor.backup_admission(AdmissionRequest::Close { catalog: token.clone(), epoch })?,
+            Admission::Close { epoch: admitted } if admitted == epoch));
+        let open = actor.open.as_ref().unwrap();
+        assert_eq!(open.token, token);
+        assert!(!open.closing);
+        assert_eq!(open.service.active_worker_pids().len(), 1);
+        assert_eq!(open.service.scheduler_usage().reserved_bytes, 4096);
+        assert!(crate::ImportLock::acquire(&root.path().join("catalog/import.lock")).is_err());
+    }
+    assert!(matches!(actor.command(Request::Close { catalog: token }, &Cancellation::default())?,
+        Response::Status(s) if matches!(s.phase, Phase::Closed)));
+    assert!(actor.open.is_none());
+    Ok(())
+}

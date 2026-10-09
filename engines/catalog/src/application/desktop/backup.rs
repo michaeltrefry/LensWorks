@@ -175,6 +175,15 @@ impl Actor {
                 "backup admission requires the managed catalog actor",
             ));
         }
+        let (catalog, close_epoch) = match request {
+            AdmissionRequest::Create { catalog } => (catalog, None),
+            AdmissionRequest::Close { catalog, epoch } => (catalog, Some(epoch)),
+        };
+        if let Some(epoch) = close_epoch {
+            // Admission authorizes only a checked Close attempt, never Closed.
+            self.validate_close_token(&catalog)?;
+            return Ok(Admission::Close { epoch });
+        }
         if self.open.as_ref().is_some_and(|open| open.closing)
             || self.failed_admission.is_some()
             || self.failed_session.is_some()
@@ -183,14 +192,6 @@ impl Actor {
                 ErrorCode::Busy,
                 "catalog is closing; retry Close after cleanup failure",
             ));
-        }
-        let (catalog, close_epoch) = match request {
-            AdmissionRequest::Create { catalog } => (catalog, None),
-            AdmissionRequest::Close { catalog, epoch } => (catalog, Some(epoch)),
-        };
-        if let Some(epoch) = close_epoch {
-            self.current(&catalog)?;
-            return Ok(Admission::Close { epoch });
         }
         if self.migration.held() {
             return Err(error(

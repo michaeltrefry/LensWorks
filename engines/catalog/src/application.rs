@@ -1544,6 +1544,19 @@ impl Actor {
                     .map(|s| s.bootstrap.session.as_str())
             })
     }
+    fn validate_close_token(&mut self, catalog: &str) -> std::result::Result<(), BridgeError> {
+        if let Some(expected) = self.retained_admission_token() {
+            if catalog != expected {
+                return Err(error(
+                    ErrorCode::StaleSession,
+                    "retained catalog cleanup session changed",
+                ));
+            }
+        } else {
+            self.current_for_close(catalog)?;
+        }
+        Ok(())
+    }
     fn publish_failed_admission(&self, message: String) {
         let token = self.retained_admission_token().map(str::to_owned);
         let mut queue = self.shared.queue.lock().unwrap();
@@ -2236,16 +2249,7 @@ impl Actor {
                 Ok(Response::Status(self.status()))
             }
             Request::Close { catalog } => {
-                if let Some(expected) = self.retained_admission_token() {
-                    if catalog != expected {
-                        return Err(error(
-                            ErrorCode::StaleSession,
-                            "retained catalog cleanup session changed",
-                        ));
-                    }
-                } else {
-                    self.current_for_close(&catalog)?;
-                }
+                self.validate_close_token(&catalog)?;
                 self.close()?;
                 Ok(Response::Status(self.status()))
             }

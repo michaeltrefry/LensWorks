@@ -18,10 +18,10 @@ RUNNER = 'd0733d4606bc88d86982241bd125d883c39e1d9d9a928105996ca8575c1d3e3e'
 WRAPPER = '4ce893980058bd52d70142b48f8e3d728fa13629abe98eb1fd395329cf9b371f'
 AUDITOR = 'efa9657fb1fa0d4ce1ea0bc2e6a727e6996506599c5d554882656ce45aa4aca9'
 STORAGE = '3e27f9b58f6ed900dfc71c1ea3c2ac5b4ae7ebe3e8ab088bdd07839376efc6be'
-RETAINED = '67106c1d1964fd6da138686cbe8242486f035d0d015fdc1bc8b4b20a0b9c67c9'
+RETAINED = '9a5d2f564eff0004df3fa67d14db0851df9ef08c924036c10c622766cbf5fd98'
 COMMON = '3fa500277b4e44d3aca6b1d960df9b879193d9e21f8934367e4e047eace9d2e0'
-HELPERS = {'PhotoCatalogWorker': '7656bfbb814c927e5fd91789106b7879ebfbc97c1d110d06eeccebacdc1407da',
-           'LensWorksDecodeWorker': '05aa382c0ee3990e306eab11f95b3eddd877fed13402907b9c55c11211d336f8'}
+HELPERS = {'PhotoCatalogWorker': '1a501ed75841c27aad6a8b579f36c192024ea5c2ccab4b78e8f988b1ccab7c72',
+           'LensWorksDecodeWorker': '421a01853f1bd87015056ab4c74a0c61b4085f30b58d77217b2547b6e656159e'}
 FIELDS = {'previewSettings.thumbnail_root', 'previewSettings.large_root',
           'previewSettings.relocation.source', 'previewSettings.relocation.destination'}
 SCHEDULES = {

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "c0ea59092dc44c2adf92f5dd031eea1e33cb78d0e8a6ceb222c5419be8f94440",
+  "source_digest": "7afb00a2f1920046271d679c125de30d8fbfb6c4055b7343995ad024d633cecc",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1945,8 +1945,8 @@
     {
       "path": "src/application.rs",
       "mode": "100644",
-      "bytes": 143645,
-      "sha256": "23b607dab08e67c2a6d636e2f2d70d883fe04049bb2344bb6c05dc349e4fc765"
+      "bytes": 143735,
+      "sha256": "96b713d0f2ddaac16f9426e11ceda07575487aab3b7413b7153524a256eb16f5"
     },
     {
       "path": "src/application/backup.rs",
@@ -1981,8 +1981,8 @@
     {
       "path": "src/application/desktop/backup.rs",
       "mode": "100644",
-      "bytes": 7711,
-      "sha256": "96360138f6f475e1a300dc957f716992ee1c28fb4afa60f893b51d03705ff8e0"
+      "bytes": 7804,
+      "sha256": "496f528c4f2e344a310dda2a40867503aea4e52ad30b000e2b98022c6e23459d"
     },
     {
       "path": "src/application/desktop/export_native.rs",
@@ -2323,8 +2323,8 @@
     {
       "path": "src/application/tests.rs",
       "mode": "100644",
-      "bytes": 47800,
-      "sha256": "47ae236199cd0afb03a1760e892ba6e93c75d46b52326c83070d4e3af97a776d"
+      "bytes": 55670,
+      "sha256": "6a9fcf8b50a9553815954e584cf785308d75eb40d3cbdecb8d61f02b80df8fb8"
     },
     {
       "path": "src/bin/catalog_probe.rs",

@@ -319,6 +319,309 @@ extension CompositorUITests {
         return S47TourCapture(run: run, screenshot: screenshot, originalHashes: afterQuit)
     }
 
+    // Actual S38 UI routes use new fixture-owner prepared directories and read native packages.
+    // They never invoke the registry directly or change the application's defaults.
+    private struct S38Package {
+        let manifest: NSDictionary
+        let source: NSDictionary
+        let history: NSDictionary
+        let stateRecords: NSDictionary
+        let imageHashes: [String: String]
+        var layerID: String { manifest["activeLayerID"] as! String }
+        var past: [[String: Any]] { history["past"] as! [[String: Any]] }
+        var future: [[String: Any]] { history["future"] as! [[String: Any]] }
+        var layer: [String: Any] { (manifest["layers"] as! [[String: Any]]).first { $0["id"] as? String == layerID }! }
+        var opacity: Double { (layer["opacity"] as? NSNumber)?.doubleValue ?? 1 }
+        var visible: Bool { (layer["isVisible"] as! NSNumber).boolValue }
+    }
+    private struct S38UIContext {
+        let app: XCUIApplication
+        let editor: XCUIElement
+        let fixture: URL
+        let project: URL
+        let originals: [String: String]
+    }
+    private func s38Object(_ url: URL) throws -> NSDictionary {
+        let bytes = try Data(contentsOf: url)
+        guard bytes.count <= 8 * 1024 * 1024,
+              let object = try JSONSerialization.jsonObject(with: bytes) as? NSDictionary else {
+            throw NSError(domain: "LensWorks.S38", code: 1)
+        }
+        return object
+    }
+    private func s38ReadPackage(_ url: URL) throws -> S38Package {
+        let manifest = try s38Object(url.appendingPathComponent("manifest.json"))
+        let source = try s38Object(url.appendingPathComponent("LensWorks.json"))
+        let historyRoot = url.appendingPathComponent("History")
+        let history = try s38Object(historyRoot.appendingPathComponent("index.json"))
+        guard (manifest["version"] as? NSNumber)?.intValue == 13,
+              let document = manifest["documentID"] as? String, UUID(uuidString: document) != nil,
+              let active = manifest["activeLayerID"] as? String, UUID(uuidString: active) != nil,
+              let layers = manifest["layers"] as? [[String: Any]], layers.count == 1,
+              layers[0]["id"] as? String == active, layers[0]["isVisible"] is NSNumber,
+              let working = manifest["workingVersionID"] as? String, working == source["id"] as? String,
+              (history["version"] as? NSNumber)?.intValue == 1,
+              let revision = history["revision"] as? String, UUID(uuidString: revision) != nil,
+              let past = history["past"] as? [[String: Any]], let future = history["future"] as? [[String: Any]],
+              (past + future).allSatisfy({ $0["name"] is String && $0["before"] is NSNumber && $0["after"] is NSNumber }),
+              let states = history["states"] as? [String] else { throw NSError(domain: "LensWorks.S38", code: 2) }
+        let stateRecords = NSMutableDictionary()
+        for name in states {
+            guard URL(fileURLWithPath: name).lastPathComponent == name, name.hasSuffix(".json") else { throw NSError(domain: "LensWorks.S38", code: 3) }
+            stateRecords[name] = try s38Object(historyRoot.appendingPathComponent("states").appendingPathComponent(name))
+        }
+        guard let declaredAssets = history["assets"] as? [String],
+              Set(declaredAssets).count == declaredAssets.count,
+              declaredAssets.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && URL(fileURLWithPath: $0).lastPathComponent == $0 }) else { throw NSError(domain: "LensWorks.S38", code: 4) }
+        var images: [String: String] = [:]
+        let imagesRoot = url.appendingPathComponent("images")
+        let assetsRoot = historyRoot.appendingPathComponent("assets")
+        var folders = [imagesRoot]
+        if FileManager.default.fileExists(atPath: assetsRoot.path) { folders.append(assetsRoot) }
+        else if !declaredAssets.isEmpty { throw NSError(domain: "LensWorks.S38", code: 4) }
+        for folder in folders {
+            for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey]) {
+                guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw NSError(domain: "LensWorks.S38", code: 4) }
+                images[folder.lastPathComponent + "/" + file.lastPathComponent] = try s47SHA256(file)
+            }
+        }
+        guard Set(images.keys.filter { $0.hasPrefix("assets/") }.map { String($0.dropFirst(7)) }) == Set(declaredAssets) else { throw NSError(domain: "LensWorks.S38", code: 4) }
+        var available = Set(declaredAssets)
+        for layer in layers {
+            let id = try XCTUnwrap(layer["id"] as? String)
+            for (field, prefix) in [("imageFile", "current-image:"), ("maskFile", "current-mask:")] {
+                if let name = layer[field] as? String {
+                    guard !name.isEmpty, name != ".", name != "..", URL(fileURLWithPath: name).lastPathComponent == name,
+                          images["images/" + name] != nil else { throw NSError(domain: "LensWorks.S38", code: 4) }
+                    available.insert(prefix + id)
+                }
+            }
+        }
+        var referenced = Set<String>()
+        for name in states {
+            let record = try XCTUnwrap(stateRecords[name] as? NSDictionary)
+            for field in ["images", "masks"] {
+                guard let refs = record[field] as? [String], refs.count.isMultiple(of: 2) else { throw NSError(domain: "LensWorks.S38", code: 4) }
+                for index in stride(from: 0, to: refs.count, by: 2) {
+                    guard UUID(uuidString: refs[index]) != nil, available.contains(refs[index + 1]) else { throw NSError(domain: "LensWorks.S38", code: 4) }
+                    referenced.insert(refs[index + 1])
+                }
+            }
+        }
+        guard Set(declaredAssets).isSubset(of: referenced) else { throw NSError(domain: "LensWorks.S38", code: 4) }
+        return S38Package(manifest: manifest, source: source, history: history, stateRecords: stateRecords, imageHashes: images)
+    }
+    @MainActor
+    private func s38Open(run: Int) throws -> S38UIContext {
+        let environment = ProcessInfo.processInfo.environment
+        let fixture = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S38_FIXTURE_ROOT"))
+        let worker = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_WORKER")
+        let decode = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_DECODE_WORKER")
+        let configuration = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
+        let before = try s47FixtureHashes(fixture)
+        let output = fixture.appendingPathComponent("WorkingVersions-\(run)")
+        let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory,
+              (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700,
+              output.resolvingSymlinksInPath().path == output.path,
+              try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty else {
+            throw NSError(domain: "LensWorks.S38", code: 5, userInfo: [NSLocalizedDescriptionKey: "The fixture owner must prepare three new real empty private working folders."])
+        }
+        let catalog = output.appendingPathComponent("Demo.catalog")
+        let app = XCUIApplication()
+        addTeardownBlock { @MainActor in
+            guard app.state == .runningForeground || app.state == .runningBackground else { return }
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 15), "S38 failure teardown uses public Quit on the same owned application")
+        }
+        app.launchEnvironment["XCTestConfigurationFilePath"] = configuration
+        app.launchEnvironment["LW_CATALOG_TEST_WORKER"] = worker
+        app.launchEnvironment["LW_CATALOG_TEST_DECODE_WORKER"] = decode
+        app.launchArguments = ["--lensworks-catalog", catalog.path, "--lensworks-create-catalog", "--lensworks-import", fixture.appendingPathComponent("photos").path, "--lensworks-output", output.path]
+        app.launch(); app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30))
+        let grid = app.scrollViews["LensWorks.catalogGrid"]
+        XCTAssertTrue(grid.waitForExistence(timeout: 30))
+        let photo = grid.staticTexts["LensWorks.catalogAsset.single-harbor.png"]
+        XCTAssertTrue(photo.waitForExistence(timeout: 30)); photo.doubleClick()
+        let loaded = app.staticTexts["LensWorks.loadedEditorDocument"]
+        XCTAssertTrue(loaded.waitForExistence(timeout: 20))
+        XCTAssertEqual(loaded.value as? String, "single-harbor.png|master|160x120")
+        let editors = app.windows.containing(.staticText, identifier: "LensWorks.loadedEditorDocument")
+        XCTAssertEqual(editors.count, 1)
+        guard editors.count == 1 else { throw NSError(domain: "LensWorks.S38", code: 6) }
+        let projects = try FileManager.default.contentsOfDirectory(at: output, includingPropertiesForKeys: nil).filter { $0.pathExtension == "comp" }
+        XCTAssertEqual(projects.count, 1)
+        let project = try XCTUnwrap(projects.first)
+        let package = try s38ReadPackage(project)
+        XCTAssertEqual(package.source["schema"] as? NSNumber, 1)
+        XCTAssertEqual(package.source["catalogPath"] as? String, catalog.path)
+        XCTAssertEqual(package.source["originalPath"] as? String, fixture.appendingPathComponent("photos/single-harbor.png").path)
+        let key = try XCTUnwrap(package.source["originalVariantKey"] as? NSDictionary)
+        XCTAssertEqual(key["variant_id"] as? String, "master")
+        XCTAssertEqual(key["asset_id"] as? String, package.source["photoID"] as? String)
+        XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(package.source["photoID"] as? String)))
+        let nativePath = try XCTUnwrap(package.source["originalNativePath"] as? NSDictionary)
+        XCTAssertEqual(nativePath["encoding"] as? String, "UnixBytes")
+        XCTAssertEqual(nativePath["units"] as? [UInt8], Array(fixture.appendingPathComponent("photos/single-harbor.png").path.utf8))
+        return S38UIContext(app: app, editor: editors.element(boundBy: 0), fixture: fixture, project: project, originals: before)
+    }
+    @MainActor
+    private func s38Choose(_ label: String, menu: String, in context: S38UIContext) {
+        let parent = context.app.menuBars.menuBarItems[menu]
+        XCTAssertTrue(parent.exists && parent.isEnabled); parent.click()
+        let item = context.app.menuBars.menuItems[label]
+        XCTAssertTrue(item.waitForExistence(timeout: 10) && item.isEnabled); item.click()
+    }
+    @MainActor
+    private func s38Saved(_ context: S38UIContext, matching: @escaping (S38Package) -> Bool) throws -> S38Package {
+        s38Choose("Save", menu: "File", in: context)
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let snapshot = try? self.s38ReadPackage(context.project) else { return false }
+            return matching(snapshot)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed, "Public Save must publish the exact native package state")
+        let result = try s38ReadPackage(context.project)
+        XCTAssertTrue(matching(result)); return result
+    }
+    private func s38Conserved(_ before: S38Package, _ after: S38Package, field: String? = nil, value: Any? = nil) {
+        let expected = before.manifest.mutableCopy() as! NSMutableDictionary
+        if let field, let value {
+            var layers = expected["layers"] as! [[String: Any]]
+            let index = layers.firstIndex { $0["id"] as? String == before.layerID }!
+            layers[index][field] = value; expected["layers"] = layers
+        }
+        XCTAssertEqual(after.manifest, expected, "Only the admitted field of the same native layer may change")
+        XCTAssertEqual(after.source, before.source, "Full working-version source, native path, VariantKey and identity must remain unchanged")
+        XCTAssertEqual(after.imageHashes, before.imageHashes, "Every native current/history image backing must retain whole bytes")
+    }
+    @MainActor
+    private func s38Finish(_ context: S38UIContext, expected: S38Package) throws {
+        XCTAssertEqual(context.editor.staticTexts["LensWorks.loadedEditorDocument"].value as? String, "single-harbor.png|master|160x120")
+        XCTAssertEqual(try s47FixtureHashes(context.fixture), context.originals)
+        context.app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(context.app.wait(for: .notRunning, timeout: 15))
+        let terminal = try s38ReadPackage(context.project)
+        XCTAssertEqual(terminal.manifest, expected.manifest); XCTAssertEqual(terminal.history, expected.history)
+        XCTAssertEqual(terminal.stateRecords, expected.stateRecords); XCTAssertEqual(terminal.source, expected.source)
+        XCTAssertEqual(terminal.imageHashes, expected.imageHashes)
+        XCTAssertEqual(try s47FixtureHashes(context.fixture), context.originals)
+        let evidence: [String: Any] = ["schema": "lensworks.s38.native-ui-package.v1", "project": context.project.path, "manifest": terminal.manifest, "workingSource": terminal.source, "history": terminal.history, "historyStates": terminal.stateRecords, "wholeImageHashes": terminal.imageHashes, "originalHashes": context.originals]
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "S38 native terminal package " + context.project.lastPathComponent
+        attachment.lifetime = .keepAlways; add(attachment)
+    }
+    @MainActor
+    private func s38VisibilityShortcut(_ context: S38UIContext) throws -> String {
+        s38Choose("Keyboard Shortcuts…", menu: "Edit", in: context)
+        let panel = context.app.dialogs["keyboardShortcuts"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 10))
+        let search = panel.textFields["Search shortcuts"]
+        XCTAssertTrue(search.exists); search.click(); search.typeText("Hide/Show Layer")
+        let recorder = panel.buttons.matching(NSPredicate(format: "label MATCHES %@", "^[⌃⌥⇧⌘]*(?:.|Delete|Return|Esc|Tab|Space)$"))
+        XCTAssertEqual(recorder.count, 1, "The exact registered visibility row must have one effective chord")
+        guard recorder.count == 1 else { throw NSError(domain: "LensWorks.S38", code: 7) }
+        let chord = recorder.element(boundBy: 0).label
+        panel.buttons["Cancel"].click()
+        XCTAssertTrue(panel.waitForNonExistence(timeout: 10)); return chord
+    }
+    @MainActor
+    private func s38TypeShortcut(_ label: String, on app: XCUIApplication) throws {
+        var key = label; var modifiers: XCUIElement.KeyModifierFlags = []
+        for (symbol, flag) in [("⌃", XCUIElement.KeyModifierFlags.control), ("⌥", .option), ("⇧", .shift), ("⌘", .command)] {
+            if key.hasPrefix(symbol) { modifiers.insert(flag); key.removeFirst() }
+        }
+        switch key {
+        case "Delete": app.typeKey(.delete, modifierFlags: modifiers)
+        case "Return": app.typeKey(.return, modifierFlags: modifiers)
+        case "Esc": app.typeKey(.escape, modifierFlags: modifiers)
+        case "Tab": app.typeKey(.tab, modifierFlags: modifiers)
+        case "Space": app.typeKey(.space, modifierFlags: modifiers)
+        case "←": app.typeKey(.leftArrow, modifierFlags: modifiers)
+        case "→": app.typeKey(.rightArrow, modifierFlags: modifiers)
+        case "↓": app.typeKey(.downArrow, modifierFlags: modifiers)
+        case "↑": app.typeKey(.upArrow, modifierFlags: modifiers)
+        default:
+            guard key.count == 1 else { throw NSError(domain: "LensWorks.S38", code: 8) }
+            app.typeKey(key.lowercased(), modifierFlags: modifiers)
+        }
+    }
+    @MainActor
+    func testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo() throws {
+        let context = try s38Open(run: 1)
+        let baseline = try s38Saved(context) { $0.visible && $0.opacity == 1 }
+        let chord = try s38VisibilityShortcut(context)
+        let layerMenu = context.app.menuBars.menuBarItems["Layer"]
+        layerMenu.click()
+        let hide = layerMenu.menuItems["Hide Layer"]
+        XCTAssertTrue(hide.exists && hide.isEnabled); XCTAssertEqual(hide.title, "Hide Layer"); hide.click()
+        let hidden = try s38Saved(context) { !$0.visible && $0.past.count == baseline.past.count + 1 }
+        s38Conserved(baseline, hidden, field: "isVisible", value: false)
+        XCTAssertEqual(hidden.past.last?["name"] as? String, "Hide Layer")
+        s38Choose("Undo Hide Layer", menu: "Edit", in: context)
+        let undone = try s38Saved(context) { $0.visible && $0.past.count == baseline.past.count }
+        s38Conserved(baseline, undone); XCTAssertEqual(undone.future.last?["name"] as? String, "Hide Layer")
+        context.editor.buttons["fitCanvas"].click()
+        try s38TypeShortcut(chord, on: context.app)
+        let shortcutHidden = try s38Saved(context) { !$0.visible && $0.past.count == baseline.past.count + 1 }
+        s38Conserved(baseline, shortcutHidden, field: "isVisible", value: false)
+        XCTAssertEqual(shortcutHidden.past.last?["name"] as? String, "Hide Layer")
+        XCTAssertEqual(shortcutHidden.future.count, 0)
+        s38Choose("Undo Hide Layer", menu: "Edit", in: context)
+        let final = try s38Saved(context) { $0.visible && $0.past.count == baseline.past.count }
+        s38Conserved(baseline, final); try s38Finish(context, expected: final)
+    }
+    @MainActor
+    func testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory() throws {
+        let context = try s38Open(run: 2)
+        let baseline = try s38Saved(context) { $0.visible && $0.opacity == 1 }
+        let percent = context.editor.textFields["Opacity percent"]
+        XCTAssertTrue(percent.exists && percent.isEnabled); percent.click()
+        for value in ["99", "98", "97"] { percent.typeKey(.downArrow, modifierFlags: []); XCTAssertEqual(percent.value as? String, value) }
+        percent.typeKey(.return, modifierFlags: [])
+        let burst = try s38Saved(context) { $0.opacity == 0.97 && $0.past.count == baseline.past.count + 1 }
+        s38Conserved(baseline, burst, field: "opacity", value: 0.97)
+        XCTAssertEqual(burst.past.last?["name"] as? String, "Layer Opacity")
+        s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
+        let starting = try s38Saved(context) { $0.opacity == 1 && $0.past.count == baseline.past.count }
+        s38Conserved(baseline, starting); XCTAssertEqual(starting.future.last?["name"] as? String, "Layer Opacity")
+        percent.click()
+        for value in ["99", "98", "97"] { percent.typeKey(.downArrow, modifierFlags: []); XCTAssertEqual(percent.value as? String, value) }
+        percent.typeKey(.escape, modifierFlags: []); XCTAssertEqual(percent.value as? String, "100")
+        let cancelled = try s38Saved(context) { $0.opacity == 1 && $0.history.isEqual(starting.history) }
+        s38Conserved(starting, cancelled); XCTAssertEqual(cancelled.history, starting.history)
+        XCTAssertEqual(cancelled.stateRecords, starting.stateRecords)
+        s38Choose("Redo Layer Opacity", menu: "Edit", in: context)
+        let redone = try s38Saved(context) { $0.opacity == 0.97 && $0.past.count == baseline.past.count + 1 }
+        s38Conserved(baseline, redone, field: "opacity", value: 0.97)
+        s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
+        let final = try s38Saved(context) { $0.opacity == 1 && $0.past.count == baseline.past.count }
+        s38Conserved(baseline, final); try s38Finish(context, expected: final)
+    }
+    @MainActor
+    func testS38DisabledRegisteredLayerMenuDisplaysTransformReason() throws {
+        let context = try s38Open(run: 3)
+        let baseline = try s38Saved(context) { $0.visible && $0.opacity == 1 }
+        s38Choose("Transform Layer", menu: "Layer", in: context)
+        XCTAssertTrue(context.editor.buttons["Apply"].waitForExistence(timeout: 10))
+        let layerMenu = context.app.menuBars.menuBarItems["Layer"]
+        layerMenu.click()
+        let hide = layerMenu.menuItems["Hide Layer — Finish the current tool, dialog or layer edit first."]
+        XCTAssertTrue(hide.waitForExistence(timeout: 10))
+        XCTAssertFalse(hide.isEnabled)
+        XCTAssertEqual(hide.title, "Hide Layer — Finish the current tool, dialog or layer edit first.")
+        context.app.typeKey(.escape, modifierFlags: [])
+        let cancel = context.editor.buttons["Cancel"]
+        XCTAssertTrue(cancel.exists && cancel.isEnabled); cancel.click()
+        layerMenu.click()
+        let restored = layerMenu.menuItems["Hide Layer"]
+        XCTAssertTrue(restored.exists && restored.isEnabled); XCTAssertEqual(restored.title, "Hide Layer")
+        context.app.typeKey(.escape, modifierFlags: [])
+        let final = try s38Saved(context) { $0.history.isEqual(baseline.history) }
+        s38Conserved(baseline, final); XCTAssertEqual(final.history, baseline.history)
+        XCTAssertEqual(final.stateRecords, baseline.stateRecords); try s38Finish(context, expected: final)
+    }
+
     @MainActor
     func testS47DeterministicDemoCatalogTourOpensPhotoEditorAndComparesConsecutiveScreenshots() throws {
         let environment = ProcessInfo.processInfo.environment
