@@ -2,6 +2,9 @@ fn main() {
     println!("cargo:rerun-if-changed=native/decode.cpp");
     println!("cargo:rerun-if-changed=native/decode.h");
     println!("cargo:rerun-if-changed=native/dng.cpp");
+    println!("cargo:rerun-if-changed=native/dng_stage_plane.h");
+    println!("cargo:rerun-if-changed=native/pc_dng_allocation.h");
+    println!("cargo:rerun-if-changed=native/pc_private_file.h");
     println!("cargo:rerun-if-changed=native/preview.cpp");
     println!("cargo:rerun-if-changed=native/preview.h");
     println!("cargo:rerun-if-env-changed=PHOTOCATALOG_DNG_SDK");
@@ -43,6 +46,10 @@ fn main() {
         _ => panic!("unsupported DNG target"),
     };
     build.define(platform, "1");
+    if platform == "qWinOS" {
+        println!("cargo:rustc-link-lib=advapi32");
+        println!("cargo:rustc-link-lib=bcrypt");
+    }
     build
         .opt_level(2)
         .cpp(true)
@@ -51,6 +58,7 @@ fn main() {
         .file("native/preview.cpp")
         .std("c++17")
         .include(&source)
+        .include("native")
         .define("qDNGUseXMP", "0")
         .define("qDNGUseLibJPEG", "1")
         .define("qDNGThreadSafe", "1")
@@ -66,6 +74,7 @@ fn main() {
                     "dng_xmp_sdk.cpp",
                     "dng_update_meta.cpp",
                     "dng_jxl.cpp",
+                    "dng_memory.cpp",
                 ]
                 .iter()
                 .any(|x| p.file_name().unwrap() == *x)
@@ -97,6 +106,29 @@ fn main() {
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("dng_jxl.cpp");
     std::fs::write(&patched, jxl).unwrap();
     sources.push(patched);
+    // Preserve the SDK source cache. Exact generated-copy substitutions cover
+    // memory_data, default blocks and the public allocator malloc/free bypasses.
+    let mut memory = std::fs::read_to_string(source.join("dng_memory.cpp")).unwrap();
+    let block_start = memory.find("\t#if qLinux\n").expect("SDK malloc platform branch");
+    let block_end = block_start + memory[block_start..].find("\t#endif").expect("SDK malloc platform end") + "\t#endif".len();
+    let platform_block = memory[block_start..block_end].to_owned();
+    assert!(platform_block.contains("posix_memalign") && platform_block.contains("malloc(PhysicalSize())"), "SDK block allocation shape");
+    memory.replace_range(block_start..block_end, "\tfMalloc = (char *) pc_dng_malloc ((size_t) PhysicalSize ());");
+    for (from, to) in [
+        ("fBuffer = (char *) malloc (size);", "fBuffer = (char *) pc_dng_malloc (size);"),
+        ("free (fBuffer);", "pc_dng_free (fBuffer);"),
+        ("free (fMalloc);", "pc_dng_free (fMalloc);"),
+        ("return malloc (size);", "return pc_dng_malloc (size);"),
+        ("free (ptr);", "pc_dng_free (ptr);"),
+    ] {
+        assert_eq!(memory.matches(from).count(), 1, "SDK allocation patch mismatch");
+        memory = memory.replace(from, to);
+    }
+    memory.insert_str(0, "#include \"pc_dng_allocation.h\"\n");
+    let patched_memory = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("dng_memory.cpp");
+    std::fs::write(&patched_memory, memory).unwrap();
+    sources.push(patched_memory);
+
     sources.sort();
     build.files(sources).warnings(false);
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {

@@ -8,6 +8,7 @@ final class ProjectTab: Identifiable {
     let session: EditorSession
     let controller: ProjectController
     let defaultName: String
+    var sourceCloseConfirmed = false
     var title: String { session.projectURL?.deletingPathExtension().lastPathComponent ?? defaultName }
     init(name: String) {
         defaultName = name
@@ -97,11 +98,25 @@ final class ProjectWorkspace {
         return true
     }
     func close(_ id: UUID) async {
-        guard canSwitch, let tab = tabs.first(where: { $0.id == id }) else { return }
+        guard !isManaging, let tab = tabs.first(where: { $0.id == id }),
+              canSwitch || tab.sourceCloseConfirmed else { return }
         isManaging = true
         defer { isManaging = false }
         tab.controller.window = window
-        guard await tab.controller.confirmQuit() else { return }
+        if !tab.sourceCloseConfirmed {
+            guard await tab.controller.confirmQuit() else { return }
+            tab.sourceCloseConfirmed = true
+        }
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(30000))
+        do {
+            try await tab.controller.releaseConfirmedSourceProject(deadline: deadline)
+            let projectionCharge = try LWFloatWorkingSet.sourceGraphs.reserve(try LWSourceMetadataStorage.product(tabs.count,256))
+            var protected: [LWSourceWorkspaceOwners] = []
+            for other in tabs where other.id != id { protected.append(try other.session.sourceWorkspaceOwners()) }
+            try tab.session.finishConfirmedSourceRetirement(protectedOwners: protected, deadline: deadline)
+            withExtendedLifetime(projectionCharge) {}
+            try await LWSourceDeveloper.shared.drainRetainedSessions(deadline: deadline)
+        } catch { tab.session.commandRefusal = "Source Close failed; retry Close: " + error.localizedDescription; return }
         removeTab(id)
     }
     func removeTab(_ id: UUID) {
@@ -138,12 +153,21 @@ final class ProjectWorkspace {
     func confirmQuit() async -> Bool {
         guard !isManaging, finishTextEditing() else { return false }
         await settlePendingEdits()
-        guard canSwitch else { NSSound.beep(); return false }
+        guard canSwitch || current.sourceCloseConfirmed else { NSSound.beep(); return false }
         isManaging = true; defer { isManaging = false }
-        for tab in quitOrder {
+        // Finish every user confirmation before releasing any document. Cancel
+        // leaves all unconfirmed live projects available, with no new cleanup grant.
+        for tab in quitOrder where !tab.sourceCloseConfirmed {
             selectedID = tab.id; tab.controller.window = window
             guard await tab.controller.confirmQuit() else { return false }
         }
+        for tab in tabs { tab.sourceCloseConfirmed = true }
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(30000))
+        do {
+            for tab in tabs { try await tab.controller.releaseConfirmedSourceProject(deadline: deadline) }
+            for tab in tabs { try tab.session.finishConfirmedSourceRetirement(protectedOwners: [], deadline: deadline) }
+            try await LWSourceDeveloper.shared.drainRetainedSessions(includeActive: true, deadline: deadline)
+        } catch { current.session.commandRefusal = "Source Quit failed; retry Quit: " + error.localizedDescription; return false }
         return true
     }
     func closeWindow(_ window: NSWindow) async {
@@ -258,7 +282,7 @@ final class ProjectWorkspace {
                     opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] }, adjustment: layer.adjustment, shape: layer.shape, effects: layer.effects, text: layer.text)
             }
             target.session.isProjectBusy = false
-            target.session.beginEdit("Copy Layers from Project")
+            guard target.session.beginEdit("Copy Layers from Project") else { return }
             if target.session.document == nil { target.session.createDocument(width: Int(size.width), height: Int(size.height)) }
             target.session.document?.layers.append(contentsOf: layers)
             target.session.activeLayerID = mapping[id]

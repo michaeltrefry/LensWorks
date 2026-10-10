@@ -30,6 +30,15 @@ static PAYLOAD_BYTES: AtomicUsize = AtomicUsize::new(0);
 static FLOAT_WORKERS: AtomicUsize = AtomicUsize::new(0);
 static LIVE_JOBS: AtomicUsize = AtomicUsize::new(0);
 static LIVE_HASHERS: AtomicUsize = AtomicUsize::new(0);
+struct FloatWorkerLease;
+impl FloatWorkerLease {
+    fn reserve()->Result<Self>{
+        FLOAT_WORKERS.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire)
+            .map_err(|_|error("resource_limit","one isolated float worker allowance"))?;
+        Ok(Self)
+    }
+}
+impl Drop for FloatWorkerLease { fn drop(&mut self){FLOAT_WORKERS.fetch_sub(1,Ordering::AcqRel);} }
 struct Lease {
     bytes: usize,
 }
@@ -134,8 +143,21 @@ struct Session {
     callbacks: Mutex<Vec<Weak<Subscription>>>,
     jobs: Mutex<Vec<Weak<Job>>>,
     decode_worker: std::path::PathBuf,
+    original_roots: Vec<std::path::PathBuf>,
 }
 impl Session {
+    fn document_source(&self, original: &NativePath) -> Result<std::path::PathBuf> {
+        let selected = path(original.clone())?;
+        let physical = std::fs::canonicalize(&selected).map_err(native)?;
+        if physical != selected || !self.original_roots.iter().any(|root| physical.starts_with(root) && physical != *root) {
+            return Err(error("invalid_request", "document source must be a physical file under an admitted originals root"));
+        }
+        let metadata = std::fs::symlink_metadata(&selected).map_err(native)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(error("invalid_request", "document source must be a regular original"));
+        }
+        Ok(selected)
+    }
     fn preflight(&self, r: &app::Request) -> Result<()> {
         let (path, create) = match r {
             app::Request::OpenExisting { path } => (path, false),
@@ -203,6 +225,13 @@ impl Session {
         }
     }
     fn status(&self) -> Value {
+        if *lock(&self.admission_closed) {
+            let pending=lock(&self.jobs).iter().filter_map(Weak::upgrade)
+                .filter(|job|lock(&job.retained_decoder).as_ref().is_some_and(|owner|!owner.is_drained())).count();
+            if pending!=0{return json!({"phase":"draining","pending":pending,"outcome_unknown":true,
+                "message":"owned decoder exit remains unverified; retry checked Close","pid":0});}
+        }
+
         let owner = lock(&self.owner);
         match &*owner {
             Owner::Ready(b) | Owner::Draining(b) => {
@@ -240,6 +269,9 @@ impl Session {
         }
         let mut owner = lock(&self.owner);
         if matches!(&*owner, Owner::Closed) {
+            if lock(&self.jobs).iter().filter_map(Weak::upgrade).any(|job|!job.done()) {
+                return Err(error("draining","waiting for owned decoder drain/job completion"));
+            }
             return Ok(json!({"phase":"closed"}));
         }
         let mut state = lock(&self.shutdown_state);
@@ -333,12 +365,14 @@ impl Drop for Session {
 enum Bytes {
     Owned(Vec<u8>),
     Preview(app::PreviewBytes),
+    SourcePlane { plane: crate::full_decode::SourcePlane, session: u64 },
 }
 impl Bytes {
     fn bytes(&self) -> &[u8] {
         match self {
             Self::Owned(b) => b,
             Self::Preview(b) => b.bytes(),
+            Self::SourcePlane { .. } => &[],
         }
     }
 }
@@ -378,6 +412,8 @@ struct Job {
     local_cancel: Arc<AtomicBool>,
     handle: Mutex<u64>,
     lease: Mutex<Option<Lease>>,
+    worker: Mutex<Option<FloatWorkerLease>>,
+    retained_decoder: Mutex<Option<Arc<crate::full_decode::RetainedDecoder>>>,
 }
 impl Drop for Job {
     fn drop(&mut self) {
@@ -392,13 +428,33 @@ impl Job {
         }
     }
     fn done(&self) -> bool {
-        let s = lock(&self.state);
-        s.result.is_some() || s.taken
+        { let s=lock(&self.state); if s.result.is_none() && !s.taken {return false;} }
+        let mut retained=lock(&self.retained_decoder);
+        if let Some(owner)=retained.as_ref() {
+            if owner.try_drain().is_err(){return false;}
+            retained.take();
+        }
+        lock(&self.worker).take();true
+    }
+    fn register_decoder(&self, owner:Arc<crate::full_decode::RetainedDecoder>) {
+        // Published immediately after spawn, before polling/allocation can fail
+        // or unwind. One admitted worker has exactly one retained child owner.
+        *lock(&self.retained_decoder)=Some(owner);
+    }
+    fn decode_failure(&self, failure:anyhow::Error)->Error {
+        if let Some(retained)=failure.downcast_ref::<crate::full_decode::RetainedDecodeFailure>() {
+            *lock(&self.retained_decoder)=Some(retained.owner.clone());
+            return error("draining",failure);
+        }
+        if self.local_cancel.load(Ordering::Acquire){error("canceled",failure)}else{native(failure)}
     }
     fn finish(&self, result: Result<Buffer>) {
         *lock(&self.cancel) = None;
         lock(&self.lease).take();
         lock(&self.state).result = Some(result);
+        // Receiver completion alone is not child drain. Preserve the worker slot
+        // on unverified termination until a checked Close/JobRelease retry.
+        let _ = self.done();
         let callbacks: Vec<_> = lock(&self.session.callbacks)
             .iter()
             .filter_map(Weak::upgrade)
@@ -589,6 +645,16 @@ fn job(h: u64) -> Result<Arc<Job>> {
         unreachable!()
     }
 }
+fn source_plane_buffer(handle: u64, session_handle: u64) -> Result<Arc<Buffer>> {
+    let Entry::Buffer(buffer) = lock(registry()).get(handle, 3)? else { unreachable!() };
+    let Bytes::SourcePlane { session: owner, .. } = &buffer.bytes else {
+        return Err(error("invalid_handle", "expected source plane buffer"));
+    };
+    if *owner != session_handle {
+        return Err(error("invalid_handle", "source plane belongs to a different session"));
+    }
+    Ok(buffer)
+}
 fn decimal(s: &str) -> Result<u64> {
     let n = s
         .parse::<u64>()
@@ -735,6 +801,31 @@ enum Command {
         export_job: String,
         sequence: app::I64,
     },
+    DocumentSourceRevision {
+        session: String,
+        original: NativePath,
+        max_encoded_bytes: app::U64,
+    },
+    DevelopDocumentSource {
+        session: String,
+        source: crate::full_decode::SourceDevelopment,
+        tile: Option<crate::full_decode::SourceTileRect>,
+        limits: app::exports::DecodeLimits,
+        worker_bytes: app::U64,
+        max_output_bytes: app::U64,
+    },
+    OpenDocumentSourcePlane {
+        session: String,
+        source: crate::full_decode::SourceDevelopment,
+        limits: app::exports::DecodeLimits,
+        worker_bytes: app::U64,
+    },
+    DocumentSourcePlaneTile {
+        session: String,
+        plane: String,
+        tile: crate::full_decode::SourceTileRect,
+        max_output_bytes: app::U64,
+    },
     DecodeFull {
         session: String,
         catalog: String,
@@ -772,6 +863,8 @@ fn new_job(s: Arc<Session>, bytes: usize) -> Result<(u64, Arc<Job>)> {
         local_cancel: Arc::new(AtomicBool::new(false)),
         handle: Mutex::new(0),
         lease: Mutex::new(Some(lease)),
+        worker: Mutex::new(None),
+        retained_decoder: Mutex::new(None),
     });
     let h = lock(registry()).insert(Entry::Job(j.clone()))?;
     *lock(&j.handle) = h;
@@ -941,6 +1034,7 @@ fn execute(bytes: &[u8]) -> Result<Value> {
                 callbacks: Mutex::new(Vec::new()),
                 jobs: Mutex::new(Vec::new()),
                 decode_worker: decode,
+                original_roots: config.original_roots.iter().map(|root| std::fs::canonicalize(root).map_err(native)).collect::<Result<Vec<_>>>()?,
             });
             let h = lock(registry()).insert(Entry::Session(s.clone()))?;
             *lock(&s.handle) = h;
@@ -998,8 +1092,9 @@ fn execute(bytes: &[u8]) -> Result<Value> {
         Command::SessionRelease { session: h } => {
             let h = decimal(&h)?;
             let s = session(h)?;
-            if !matches!(*lock(&s.owner), Owner::Closed) {
-                return Err(error("busy", "shutdown must finish before release"));
+            if !matches!(*lock(&s.owner), Owner::Closed) ||
+                lock(&s.jobs).iter().filter_map(Weak::upgrade).any(|job|!job.done()) {
+                return Err(error("busy", "checked shutdown and every owned decoder drain must finish before release"));
             }
             lock(registry()).remove(h, 1)?;
             Ok(json!({"released":true}))
@@ -1156,6 +1251,95 @@ fn execute(bytes: &[u8]) -> Result<Value> {
             })?;
             Ok(json!({"job":h.to_string()}))
         }
+        Command::DocumentSourceRevision { session: h, original, max_encoded_bytes } => {
+            let s = session(decimal(&h)?)?;
+            s.bridge()?;
+            if max_encoded_bytes.0 == 0 || max_encoded_bytes.0 == u64::MAX || max_encoded_bytes.0 > s.worker_limit {
+                return Err(error("resource_limit", "explicit original read allowance required"));
+            }
+            let source = s.document_source(&original)?;
+            let (h, j) = new_job(s.clone(), MAX_INPUT)?;
+            spawn_job(j, move |j| {
+                if j.local_cancel.load(Ordering::Acquire) { return Err(error("canceled", "original inspection canceled")); }
+                let revision: app::exports::FileRevision = photocatalog::metadata_export::inspect_file_revision_with_checkpoint(&source, max_encoded_bytes.0, &mut |_| {
+                    if j.local_cancel.load(Ordering::Acquire) {
+                        return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "original inspection canceled"));
+                    }
+                    Ok(())
+                }).map_err(native)?.into();
+                if j.local_cancel.load(Ordering::Acquire) { return Err(error("canceled", "original inspection canceled")); }
+                s.document_source(&original)?;
+                json_buffer(json!({"original":original,"original_revision":revision,"source_revision":super::SOURCE_REVISION,"protocol":2}), lock(&j.lease).take().unwrap())
+            })?;
+            Ok(json!({"job":h.to_string()}))
+        }
+        Command::DevelopDocumentSource { session: h, source, tile, limits, worker_bytes, max_output_bytes } => {
+            let s = session(decimal(&h)?)?;
+            s.bridge()?;
+            s.document_source(&source.original)?;
+            if worker_bytes.0 == 0 || worker_bytes.0 > s.worker_limit || max_output_bytes.0 == 0
+                || max_output_bytes.0 > PAYLOAD_LIMIT.load(Ordering::Acquire) as u64 {
+                return Err(error("resource_limit", "document decode outside worker/result allowance"));
+            }
+            if let Some(rect) = tile { rect.validate(None, max_output_bytes.0).map_err(native)?; }
+            let (h, j) = new_job(s.clone(), max_output_bytes.0 as usize)?;
+            spawn_job(j, move |j| {
+                *lock(&j.worker)=Some(FloatWorkerLease::reserve()?);
+                s.document_source(&source.original)?;
+                let decoded = match tile {
+                    Some(tile) => crate::full_decode::run_source_tile(&s.decode_worker, source.clone(), tile, limits, worker_bytes.0, max_output_bytes.0, &j.local_cancel, &|owner|j.register_decoder(owner)),
+                    None => crate::full_decode::run_source(&s.decode_worker, source.clone(), limits, worker_bytes.0, max_output_bytes.0, &j.local_cancel, &|owner|j.register_decoder(owner)),
+                };
+                let (bytes, descriptor) = decoded.map_err(|e|j.decode_failure(e))?;
+                if j.local_cancel.load(Ordering::Acquire) { return Err(error("canceled", "document decode canceled after worker drain")); }
+                s.document_source(&source.original)?;
+                let mut lease = lock(&j.lease).take().unwrap(); lease.shrink(bytes.len());
+                Ok(Buffer { bytes: Bytes::Owned(bytes), descriptor, _lease:lease })
+            })?;
+            Ok(json!({"job":h.to_string()}))
+        }
+        Command::OpenDocumentSourcePlane { session: h, source, limits, worker_bytes } => {
+            let session_handle = decimal(&h)?;
+            let s = session(session_handle)?; s.bridge()?; s.document_source(&source.original)?;
+            if worker_bytes.0 == 0 || worker_bytes.0 > s.worker_limit {
+                return Err(error("resource_limit", "source plane decode outside worker allowance"));
+            }
+            // Only bounded descriptor/validation scratch occupies this managed result.
+            // The complete immutable payload is held by an unlinked file, not a Vec.
+            let (h, j) = new_job(s.clone(), MAX_INPUT)?;
+            spawn_job(j, move |j| {
+                *lock(&j.worker)=Some(FloatWorkerLease::reserve()?);
+                s.document_source(&source.original)?;
+                let plane = crate::full_decode::run_source_plane(&s.decode_worker, source.clone(), limits,
+                    worker_bytes.0, &j.local_cancel, &|owner|j.register_decoder(owner)).map_err(|e|j.decode_failure(e))?;
+                if j.local_cancel.load(Ordering::Acquire) { return Err(error("canceled", "source plane canceled after worker drain")); }
+                s.document_source(&source.original)?;
+                let mut descriptor = plane.descriptor.clone();
+                descriptor["payload_digest"] = plane.payload_digest.clone().into();
+                Ok(Buffer { bytes: Bytes::SourcePlane { plane, session: session_handle }, descriptor,
+                    _lease: lock(&j.lease).take().unwrap() })
+            })?;
+            Ok(json!({"job":h.to_string()}))
+        }
+        Command::DocumentSourcePlaneTile { session: h, plane: p, tile, max_output_bytes } => {
+            let session_handle = decimal(&h)?;
+            let s = session(session_handle)?; s.bridge()?;
+            let buffer = source_plane_buffer(decimal(&p)?, session_handle)?;
+            if max_output_bytes.0 == 0 || max_output_bytes.0 > PAYLOAD_LIMIT.load(Ordering::Acquire) as u64 {
+                return Err(error("resource_limit", "source tile outside result allowance"));
+            }
+            let required = tile.validate(None, max_output_bytes.0).map_err(native)?;
+            let (h, j) = new_job(s, usize::try_from(required).map_err(native)?)?;
+            spawn_job(j, move |j| {
+                let Bytes::SourcePlane { plane, .. } = &buffer.bytes else { unreachable!() };
+                let (bytes, descriptor) = plane.read_tile(tile, max_output_bytes.0, &j.local_cancel).map_err(|e|
+                    if j.local_cancel.load(Ordering::Acquire) { error("canceled", e) } else { native(e) })?;
+                if j.local_cancel.load(Ordering::Acquire) { return Err(error("canceled", "source tile canceled before publication")); }
+                let mut lease = lock(&j.lease).take().unwrap(); lease.shrink(bytes.len());
+                Ok(Buffer { bytes: Bytes::Owned(bytes), descriptor, _lease: lease })
+            })?;
+            Ok(json!({"job":h.to_string()}))
+        }
         Command::DecodeFull {
             session: h,
             catalog,
@@ -1179,16 +1363,7 @@ fn execute(bytes: &[u8]) -> Result<Value> {
             }
             let (h, j) = new_job(s.clone(), max_output_bytes.0 as usize)?;
             spawn_job(j, move |j| {
-                struct WorkerLease;
-                impl Drop for WorkerLease {
-                    fn drop(&mut self) {
-                        FLOAT_WORKERS.fetch_sub(1, Ordering::AcqRel);
-                    }
-                }
-                FLOAT_WORKERS
-                    .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-                    .map_err(|_| error("resource_limit", "one isolated float worker allowance"))?;
-                let _worker = WorkerLease;
+                *lock(&j.worker)=Some(FloatWorkerLease::reserve()?);
                 let prepared = plan(&s, j, catalog.clone(), export_job.clone(), sequence)?;
                 let (bytes, descriptor) = crate::full_decode::run(
                     &s.decode_worker,
@@ -1197,14 +1372,9 @@ fn execute(bytes: &[u8]) -> Result<Value> {
                     worker_bytes.0,
                     max_output_bytes.0,
                     &j.local_cancel,
+                    &|owner|j.register_decoder(owner),
                 )
-                .map_err(|e| {
-                    if j.local_cancel.load(Ordering::Acquire) {
-                        error("canceled", e)
-                    } else {
-                        native(e)
-                    }
-                })?;
+                .map_err(|e|j.decode_failure(e))?;
                 if j.local_cancel.load(Ordering::Acquire) {
                     return Err(error("canceled", "decode canceled after worker drain"));
                 }
@@ -1455,6 +1625,7 @@ pub unsafe extern "C" fn lw_catalog_buffer_copy(
         let Entry::Buffer(b) = lock(registry()).get(h, 3)? else {
             unreachable!()
         };
+        if matches!(&b.bytes, Bytes::SourcePlane { .. }) { return Err(error("invalid_request", "source planes require an admitted bounded range job")); }
         let bytes = b.bytes.bytes();
         if offset > bytes.len() {
             return Err(error("range", "buffer offset"));
@@ -1557,6 +1728,69 @@ pub extern "C" fn lw_catalog_unsubscribe_and_drain(h: u64, timeout_ms: u32) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_decoder_refuses_job_session_release_and_worker_readmission_until_checked_exit() {
+        let request=|value:Value|execute(&serde_json::to_vec(&value).unwrap());
+        for unwind in [false,true] {
+        let session=empty_session();
+        let sh=lock(registry()).insert(Entry::Session(session.clone())).unwrap();
+        *lock(&session.handle)=sh;
+        let (handle,job)=new_job(session.clone(),128).unwrap();
+        *lock(&job.worker)=Some(FloatWorkerLease::reserve().unwrap());
+        let owner=crate::full_decode::source_tile_tests::retirement_owner();
+        owner.refuse(true);
+        job.register_decoder(owner.clone());
+        let terminal = if unwind { fenced(||->Result<Buffer>{panic!("controlled receiver unwind after child registration")}) }
+            else { Err(error("draining","injected drain uncertainty after actual child admission")) };
+        job.finish(terminal);
+        assert!(!job.done());assert_eq!(FLOAT_WORKERS.load(Ordering::Acquire),1);
+        assert!(FloatWorkerLease::reserve().is_err());
+        let refused=request(json!({"version":2,"op":"job_release","job":handle.to_string()})).unwrap_err();
+        assert_eq!(refused.code,"busy");
+        assert_eq!(session.shutdown().unwrap_err().code,"draining");
+        assert_eq!(session.status()["phase"],"draining");assert_eq!(session.status()["outcome_unknown"],true);
+        assert_eq!(request(json!({"version":2,"op":"session_release","session":sh.to_string()})).unwrap_err().code,"busy");
+        assert!(matches!(lock(registry()).get(handle,2),Ok(Entry::Job(_))));
+        owner.refuse(false);
+        let deadline=Instant::now()+Duration::from_secs(5);
+        while !job.done(){assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(2));}
+        assert_eq!(FLOAT_WORKERS.load(Ordering::Acquire),0);
+        assert!(lock(&job.retained_decoder).is_none());
+        session.shutdown().unwrap();
+        request(json!({"version":2,"op":"job_release","job":handle.to_string()})).unwrap();
+        assert_eq!(request(json!({"version":2,"op":"job_release","job":handle.to_string()})).unwrap_err().code,"invalid_handle");
+        request(json!({"version":2,"op":"session_release","session":sh.to_string()})).unwrap();
+        let replacement=FloatWorkerLease::reserve().unwrap();drop(replacement);
+        }
+    }
+    #[test]
+    fn managed_source_plane_handle_binds_owner_and_retains_inflight_file() {
+        let initial = PAYLOAD_BYTES.load(Ordering::Acquire);
+        let buffer = Buffer {
+            bytes: Bytes::SourcePlane { plane: crate::full_decode::source_tile_tests::held_plane(), session: 123 },
+            descriptor: json!({"kind":"source_float_plane"}),
+            _lease: Lease::reserve(128).unwrap(),
+        };
+        let handle = lock(registry()).insert(Entry::Buffer(Arc::new(buffer))).unwrap();
+        assert!(matches!(source_plane_buffer(handle,124),Err(e) if e.code=="invalid_handle"));
+        let inflight = source_plane_buffer(handle,123).unwrap();
+        let mut count = 99;
+        let mut byte = 0;
+        assert_ne!(unsafe { lw_catalog_buffer_copy(handle,0,&mut byte,1,&mut count) },0);
+        assert_eq!(count,0);
+        assert_eq!(lw_catalog_buffer_release(handle),0);
+        assert!(matches!(source_plane_buffer(handle,123),Err(e) if e.code=="invalid_handle"));
+        let Bytes::SourcePlane { plane, .. } = &inflight.bytes else { panic!() };
+        let (bytes,_) = plane.read_tile(crate::full_decode::SourceTileRect{x:1,y:0,width:1,height:1},16,&AtomicBool::new(false)).unwrap();
+        assert_eq!(f32::from_le_bytes(bytes[..4].try_into().unwrap()),-1.0);
+        assert_eq!(PAYLOAD_BYTES.load(Ordering::Acquire),initial+128);
+        drop(inflight);
+        assert_eq!(PAYLOAD_BYTES.load(Ordering::Acquire),initial);
+        let ordinary = json_buffer(json!({}),Lease::reserve(128).unwrap()).unwrap();
+        let handle = lock(registry()).insert(Entry::Buffer(Arc::new(ordinary))).unwrap();
+        assert!(matches!(source_plane_buffer(handle,123),Err(e) if e.code=="invalid_handle"));
+        assert_eq!(lw_catalog_buffer_release(handle),0);
+    }
     fn empty_session() -> Arc<Session> {
         Arc::new(Session {
             published: AtomicBool::new(true),
@@ -1571,6 +1805,7 @@ mod tests {
             callbacks: Mutex::new(Vec::new()),
             jobs: Mutex::new(Vec::new()),
             decode_worker: "/missing-worker".into(),
+            original_roots: Vec::new(),
         })
     }
     fn close_session(s: &Session) {

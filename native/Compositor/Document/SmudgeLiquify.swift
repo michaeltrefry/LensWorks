@@ -33,6 +33,7 @@ final class WarpStroke {
     private var cpuImage: CGImage?
     /// The working copy as an image, fetched from the GPU the first time it's asked for after a dab.
     var image: CGImage? {
+        if layer.liveSource != nil { return sourcePreviewAsset?.image ?? layer.asset?.image }
         guard let gpu else { return cpuImage }
         if cpuImage == nil {
             gpu.read(into: context)
@@ -41,24 +42,45 @@ final class WarpStroke {
         return cpuImage
     }
     private var last: CGPoint?
+    private(set) var sourceStart:CGPoint?
+    private(set) var sourcePreview:LWFloatPlane?
+    private var sourcePreviewAsset:ImportedImage?
+    private var sourcePreviewTask:Task<Void,Never>?
+    private var sourcePreviewPending=false
+    var sourcePreviewDidChange:(() -> Void)?
+    weak var sourceSession: EditorSession?
+    private var sourceSelectionID:UUID?
+    private(set) var sourcePlaneAssets:[UUID:LWSourcePlaneAsset]=[:]
+    private(set) var sourceError:Error?
+    private(set) var sourceSelection:Data?
+    private var sourceCaptureMetadata:LWSourceMetadataStorage?
+    private var sourceDabMetadata:LWSourceMetadataStorage?
     /// Smudge: the color the brush carries, a (2r+1)² RGBA square.
     private var carried: [Float] = []
     private var scratch: [Float] = []
 
     init(layer: ImageLayer, image: CGImage, transform: LayerTransform, canvas: CGSize, mode: BlurToolMode, settings: BrushSettings,
-         useGPU: Bool = true) throws {
+         useGPU: Bool = true, sourceSelection:Data? = nil, sourceSelectionPlane:LWSourcePlaneAsset? = nil) throws {
         self.layer = layer
         self.mode = mode
+        if layer.liveSource != nil {
+            sourceCaptureMetadata=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.sum(8192,LWSourceMetadataStorage.product(sourceSelection?.count ?? 0,2)))
+        }
+        self.sourceSelection=sourceSelection
+        if let sourceSelectionPlane { let id=UUID();sourceSelectionID=id;sourcePlaneAssets[id]=sourceSelectionPlane }
         diameter = max(2, settings.diameter)
         hardness = min(0.98, max(0, settings.hardness))
         strength = min(1, max(0.01, settings.opacity))
         width = Int(canvas.width); height = Int(canvas.height)
-        context = try BrushRaster.context(width: width, height: height, mask: false)
-        LayerRenderer.draw(image, transform: transform, center: transform.center, in: context)
+        // The byte context belongs only to the retained raster implementation.
+        // Live RAW keeps an inert one-pixel context and evaluates immutable global planes.
+        context = try BrushRaster.context(width:layer.liveSource == nil ? width : 1,height:layer.liveSource == nil ? height : 1,mask:false)
+        if layer.liveSource == nil { LayerRenderer.draw(image,transform:transform,center:transform.center,in:context) }
         guard let data = context.data else { throw ExportError.render }
         // Top-left rows: a document point's row is its y.
-        pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
-        gpu = useGPU ? MetalWarp(pixels: context) : nil
+        pixels = data.bindMemory(to: UInt8.self, capacity:layer.liveSource == nil ? width*height*4 : 4)
+        gpu = useGPU && layer.liveSource == nil ? MetalWarp(pixels: context) : nil
+        sourcePreview=layer.asset?.linearPlane
         cpuImage = context.makeImage()
     }
 
@@ -74,6 +96,10 @@ final class WarpStroke {
 
     /// Continues the stroke to `point`, dabbing along the way, then refreshes `image`.
     func append(_ point: CGPoint) {
+        if layer.liveSource != nil {
+            do { try appendSource(point) } catch { sourceError=error }
+            return
+        }
         guard let from = last else {
             last = point
             if mode == .smudge {
@@ -105,6 +131,58 @@ final class WarpStroke {
             cpuImage = nil
         } else {
             cpuImage = context.makeImage()
+        }
+    }
+
+    /// Captures the same retained pointer/step sequence; evaluation uses exact
+    /// float samples and never installs the byte WarpStroke preview as RAW pixels.
+    private func appendSource(_ point:CGPoint) throws {
+        guard sourceError == nil,point.x.isFinite,point.y.isFinite else { throw ProjectError.invalid }
+        guard let from=last else { last=point;sourceStart=point;return }
+        let distance=hypot(point.x-from.x,point.y-from.y)
+        let spacing=max(1,diameter*(mode == .smudge ? 0.005 : 0.025))
+        guard distance.isFinite,distance/spacing <= CGFloat(100000-points.count) else { throw ProjectError.tooLarge }
+        guard distance >= spacing else { return }
+        let steps=Int((distance/spacing).rounded(.up))
+        let owner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.collectionBytes(count:points.count+steps,stride:MemoryLayout<CGPoint>.stride))
+        for i in 1...steps {
+            let t=CGFloat(i)/CGFloat(steps)
+            points.append(CGPoint(x:from.x+(point.x-from.x)*t,y:from.y+(point.y-from.y)*t))
+        }
+        sourceDabMetadata=owner;last=point
+        try scheduleSourcePreview()
+    }
+    func sourceRecord(selection:Data?) throws -> LWSourceRetouchStroke {
+        guard let node=layer.liveSource,let sourceStart,!points.isEmpty,mode != .blur else { throw ProjectError.invalid }
+        let frame=try node.capturedFrame(transform:layer.transform)
+        return LWSourceRetouchStroke(sourceID:node.id,upstreamRevision:node.revision,captureFrame:frame,
+            kind:mode == .smudge ? .smear : .liquify,seed:0,healMode:.contentAware,sampleAllLayers:false,aligned:false,
+            sampleAllLayersCompositeRevision:nil,blurRadius:0,radius:Double(diameter/2),hardness:Double(hardness),opacity:Double(strength),
+            points:points,sourceOffset:.zero,color:[0,0,0,0],pointsAreDabs:true,selectionSourceCoverage:selection,selectionPlaneID:sourceSelectionID,
+            selectionFrame:sourceSelectionID == nil ? nil:frame,sourceStart:sourceStart)
+    }
+
+    deinit { sourcePreviewTask?.cancel() }
+    private func scheduleSourcePreview() throws {
+        guard let original=layer.asset?.linearPlane,let node=layer.liveSource else { throw ProjectError.invalid }
+        sourcePreviewPending=true;guard sourcePreviewTask == nil else { return };sourcePreviewPending=false
+        var preview=try node.previewingRetouch(sourceRecord(selection:sourceSelection))
+        try preview.admitMetadataMutation(additionalBytes:LWSourceMetadataStorage.collectionBytes(count:sourcePlaneAssets.count,stride:MemoryLayout<LWSourcePlaneAsset>.stride+128))
+        for (id,asset) in sourcePlaneAssets { guard preview.planeAssets[id]==nil else { throw ProjectError.invalid };preview.planeAssets[id]=asset }
+        let retained=preview,map=try node.currentSpatialMap
+        let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+        guard let sourceSession else { throw ProjectError.invalid }
+        sourcePreviewTask=try sourceSession.makeSourcePreviewTask { [weak self] in
+            let worker=Task.detached(priority:.userInitiated) { try LWSourceRetouch.evaluate(retained,developed:original,map:map,workspace:workspace) }
+            let outcome=await withTaskCancellationHandler { await worker.result } onCancel: { workspace.cancellation.cancel();worker.cancel() }
+            guard let self,!Task.isCancelled else { return };self.sourcePreviewTask=nil
+            switch outcome {
+            case .success(let plane):
+                do { self.sourcePreviewAsset=try ImportedImage(plane:plane,name:self.layer.name);self.sourcePreview=plane;self.sourcePreviewDidChange?() }
+                catch { self.sourceError=error;return }
+            case .failure(let error):self.sourceError=error;return
+            }
+            if self.sourcePreviewPending { do { try self.scheduleSourcePreview() } catch { self.sourceError=error } }
         }
     }
 
@@ -204,13 +282,43 @@ extension EditorSession {
         }
         finishOpacityEdit()
         do {
+            let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+            let capturedSelection=try layer.liveSource == nil ? nil:LWSourceSelectionPlane.capture(selection?.clip(canvas:document.size),
+                mapping:BrushRaster.pixelToDocument(layer.transform,width:image.width,height:image.height),
+                width:image.width,height:image.height,workspace:workspace)
+            let sourceSelection=try capturedSelection.map(LWSourcePlaneAsset.init)
             let stroke = try WarpStroke(layer: layer, image: image, transform: displayedTransform(for: layer),
-                                        canvas: document.size, mode: blurMode, settings: brushSettings)
+                                        canvas: document.size, mode: blurMode, settings:brushSettings,sourceSelectionPlane:sourceSelection)
+            stroke.sourceSession = self
             stroke.append(point)
             warpStroke = stroke
+            stroke.sourcePreviewDidChange={ [weak self,weak stroke] in
+                guard let self,let stroke,self.warpStroke === stroke else { return };self.brushRevision+=1
+            }
             lastBrushPoint = (point, layer.id, false)
             brushRevision += 1
         } catch { brushError = error.localizedDescription }
+    }
+
+    private func commitSourceWarp(_ warp:WarpStroke,current:ImageLayer) throws {
+        guard let original=current.liveSource else { throw ProjectError.invalid }
+        var changed=try original.metadataCopy(additionalBytes:LWSourceMetadataStorage.collectionBytes(count:warp.sourcePlaneAssets.count,stride:MemoryLayout<LWSourcePlaneAsset>.stride+128))
+        for (id,asset) in warp.sourcePlaneAssets { guard changed.planeAssets[id]==nil else { throw ProjectError.invalid };changed.planeAssets[id]=asset }
+        try changed.appendRetouch(try warp.sourceRecord(selection:warp.sourceSelection))
+        changed.revision=UUID();changed.sourceLineage.append(changed.revision)
+        let epoch=commandContextEpoch
+        isProjectBusy=true
+        Task { @MainActor in
+            defer { isProjectBusy=false;brushRevision+=1 }
+            do {
+                let made=try await LWSourceDeveloper.shared.evaluatePlane(changed)
+                guard commandContextEpoch == epoch,let i=document?.layers.firstIndex(where:{$0.id == current.id}),
+                      let actual=document?.layers[i],actual.liveSource == original,actual.asset?.image === current.asset?.image,
+                      actual.transform == current.transform else { throw CancellationError() }
+                var updated=actual;updated.asset=try ImportedImage(plane:made.surface,name:actual.name);updated.liveSource=changed
+                guard beginEdit(warp.mode.rawValue) else { return };document?.layers[i]=updated;endEdit()
+            } catch { brushError=error.localizedDescription }
+        }
     }
 
     /// Paints the finished Smudge or Liquify result into the layer's pixels along the stroke, as one undo step.
@@ -218,10 +326,12 @@ extension EditorSession {
         guard let warp = warpStroke else { return }
         warpStroke = nil
         brushRevision += 1
+        if let error=warp.sourceError { brushError=error.localizedDescription;return }
         guard !warp.points.isEmpty, let result = warp.image,
               let current = document?.layers.first(where: { $0.id == warp.layer.id }),
               current.asset?.image === warp.layer.asset?.image, current.transform == warp.layer.transform else { return }
         do {
+            if current.liveSource != nil { try commitSourceWarp(warp,current:current);return }
             var settings = brushSettings
             // A hard tip a little wider than the brush covers everything the stroke moved.
             settings.diameter = warp.diameter + 4

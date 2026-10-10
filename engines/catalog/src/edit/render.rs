@@ -12,7 +12,7 @@ pub use prepared::{
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::Path,
     sync::OnceLock,
 };
@@ -39,6 +39,9 @@ pub struct PreparedLinearInput {
     exact: bool,
 }
 impl PreparedLinearInput {
+    /// Transfers the verified exact surface without an 8-bit conversion.
+    /// Proxies retain their explicit `exact` flag at the caller boundary.
+    pub fn into_rendered(self) -> RenderedImage { self.image }
     pub fn width(&self) -> u32 {
         self.image.width
     }
@@ -265,6 +268,49 @@ fn decode_original_with_hook(
         original_dimensions,
         exact: true,
     })
+}
+/// Decode once into an owned row consumer, retaining the original held identity
+/// across hashing, native decode and final publication. No browse image can enter.
+pub fn decode_original_rows(request:OriginalRequest<'_>,limits:DecodeLimits,cancel:&dyn CancelCheck,
+    sink:&mut dyn crate::media::LinearRowSink)->Result<crate::media::RenderedPlane,RenderError> {
+    decode_original_source_rows(request,limits,cancel,sink,false)
+}
+/// Explicit native type admission binds the source route without widening extension guesses.
+pub fn decode_original_source_rows(request:OriginalRequest<'_>,limits:DecodeLimits,cancel:&dyn CancelCheck,
+    sink:&mut dyn crate::media::LinearRowSink,raw_hint:bool)->Result<crate::media::RenderedPlane,RenderError> {
+    if !request.path.is_absolute(){return Err(RenderError::InvalidInput("absolute original path required".into()));}
+    cancel.check()?;
+    let mut held=open_original(request.path,limits.max_encoded_bytes)?;
+    let before=original_stamp(&held)?;
+    if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
+    held.seek(SeekFrom::Start(0))?;
+    let xy=color::white_point(request.white_balance)?;
+    // The decoder receives the very same held object that was fingerprinted.
+    // No second path open can substitute a transient same-name original.
+    let summary=crate::media::decode_with_white_point_held_rows(held.try_clone()?,request.path,limits,xy,sink,cancel,raw_hint).map_err(RenderError::Decode)?;
+    cancel.check()?;held.seek(SeekFrom::Start(0))?;
+    if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
+    let current=open_original(request.path,limits.max_encoded_bytes)?;
+    if original_stamp(&held)?!=before||original_stamp(&current)?!=before{return Err(RenderError::SourceChanged);}
+    Ok(summary)
+}
+/// Small reference/full-result source path shares the held RAW authority. Production
+/// large documents use decode_original_source_rows and the bounded spool lifetime.
+pub fn decode_original_source(request:OriginalRequest<'_>,limits:DecodeLimits,cancel:&dyn CancelCheck,
+    raw_hint:bool)->Result<PreparedLinearInput,RenderError> {
+    if !request.path.is_absolute(){return Err(RenderError::InvalidInput("absolute original path required".into()));}
+    cancel.check()?;let mut held=open_original(request.path,limits.max_encoded_bytes)?;
+    let before=original_stamp(&held)?;
+    if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
+    held.seek(SeekFrom::Start(0))?;let xy=color::white_point(request.white_balance)?;
+    let image=crate::media::decode_with_white_point_held_source(held.try_clone()?,request.path,limits,xy,cancel,raw_hint).map_err(RenderError::Decode)?;
+    cancel.check()?;held.seek(SeekFrom::Start(0))?;
+    if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
+    let current=open_original(request.path,limits.max_encoded_bytes)?;
+    if original_stamp(&held)?!=before||original_stamp(&current)?!=before{return Err(RenderError::SourceChanged);}
+    let original_dimensions=(image.width,image.height);
+    Ok(PreparedLinearInput{image,source_fingerprint:request.expected_fingerprint.into(),
+        white_balance:request.white_balance.clone(),renderer_identity:renderer_identity().into(),original_dimensions,exact:true})
 }
 pub fn prepare_linear_proxy(
     input: &PreparedLinearInput,
@@ -847,5 +893,52 @@ mod fingerprint_tests {
             verify_original_fingerprint(&link, "", 100, &()),
             Err(RenderError::InvalidInput(_))
         ));
+    }
+}
+
+
+#[cfg(test)]
+mod held_scene_source_controls {
+    use super::*;
+    use std::sync::atomic::{AtomicBool,Ordering};
+    fn source()->tempfile::NamedTempFile {
+        let mut source=tempfile::Builder::new().suffix(".tif").tempfile().unwrap();
+        {let mut encoder=tiff::encoder::TiffEncoder::new(source.as_file_mut()).unwrap();
+            encoder.write_image::<tiff::encoder::colortype::RGBA32Float>(2,2,
+                &[-3.,4.,0.25,0.,1.5,-0.2,2.,0.5,0.,0.,0.,1.,0.1,0.2,0.3,0.75]).unwrap();}
+        source
+    }
+    fn limits()->DecodeLimits{DecodeLimits{max_encoded_bytes:512*1024*1024,max_intermediate_pixels:200_000_000,
+        max_allocation_bytes:64*1024*1024}}
+    #[test]
+    fn source_row_mutation_refuses_final_graph_publication() {
+        let source=source();let fingerprint=blake3::hash(&fs::read(source.path()).unwrap()).to_hex().to_string();
+        struct Mutating<'a>{path:&'a Path,rows:u32}
+        impl crate::media::LinearRowSink for Mutating<'_>{
+            fn write_row(&mut self,_:u32,_:u32,_:u32,_:u32,_:&[[f32;4]])->std::result::Result<(),crate::media::DecodeError> {
+                self.rows+=1;
+                if self.rows==1 {let mut bytes=fs::read(self.path).unwrap();let end=bytes.len()-1;bytes[end]^=1;fs::write(self.path,bytes).unwrap();}
+                Ok(())
+            }
+        }
+        let mut rows=Mutating{path:source.path(),rows:0};
+        let result=decode_original_rows(OriginalRequest{path:source.path(),expected_fingerprint:&fingerprint,
+            white_balance:&WhiteBalance::AsShot},limits(),&(),&mut rows);
+        assert!(matches!(result,Err(RenderError::SourceChanged)));assert_eq!(rows.rows,2);
+    }
+    #[test]
+    fn row_cancellation_stops_next_row_and_refuses_source_result() {
+        let source=source();let fingerprint=blake3::hash(&fs::read(source.path()).unwrap()).to_hex().to_string();
+        struct Signal(AtomicBool);impl CancelCheck for Signal{fn is_canceled(&self)->bool{self.0.load(Ordering::Acquire)}}
+        struct Stop<'a>{signal:&'a Signal,rows:u32}
+        impl crate::media::LinearRowSink for Stop<'_>{
+            fn write_row(&mut self,_:u32,_:u32,_:u32,_:u32,_:&[[f32;4]])->std::result::Result<(),crate::media::DecodeError> {
+                self.rows+=1;self.signal.0.store(true,Ordering::Release);Ok(())
+            }
+        }
+        let signal=Signal(AtomicBool::new(false));let mut sink=Stop{signal:&signal,rows:0};
+        assert!(decode_original_rows(OriginalRequest{path:source.path(),expected_fingerprint:&fingerprint,
+            white_balance:&WhiteBalance::AsShot},limits(),&signal,&mut sink).is_err());assert_eq!(sink.rows,1);
+        assert_eq!(blake3::hash(&fs::read(source.path()).unwrap()).to_hex().to_string(),fingerprint);
     }
 }

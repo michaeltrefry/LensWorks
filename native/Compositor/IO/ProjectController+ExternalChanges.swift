@@ -8,7 +8,7 @@ extension ProjectController {
     /// Starts (or restarts) watching the project the session has open. Called after a successful open and after
     /// every save, so the digest of the package on disk is always the one we last read or wrote.
     func watchProject(at url: URL) {
-        guard url != externalChanges.watcher?.url else { return }
+        guard !sourceCloseRequested, url != externalChanges.watcher?.url else { return }
         externalChanges.watcher = ProjectWatcher(url: url) { [weak self] in self?.noteExternalChange() }
     }
 
@@ -18,6 +18,7 @@ extension ProjectController {
         externalChanges.recheck?.cancel()
         externalChanges.recheck = nil
         externalChanges.pending = false
+        externalChanges.checkTask?.cancel()
     }
 
     /// Remembers the package as it is now, so the next event compares against it.
@@ -31,20 +32,26 @@ extension ProjectController {
     }
 
     private func noteExternalChange() {
+        guard !sourceCloseRequested else { return }
         externalChanges.pending = true
-        guard !externalChanges.checking else { return }
-        Task { await checkExternalChange() }
+        guard externalChanges.checkTask == nil, !externalChanges.checking else { return }
+        externalChanges.checkTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.externalChanges.checkTask = nil }
+            await self.checkExternalChange()
+        }
     }
 
     private func checkExternalChange() async {
         externalChanges.checking = true
         defer { externalChanges.checking = false }
-        while externalChanges.pending {
+        while externalChanges.pending && !sourceCloseRequested && !Task.isCancelled {
             externalChanges.pending = false
             guard let url = session.projectURL, session.document != nil, !externalChanges.saving else { return }
             // Compare content, not modification dates: sync clients touch metadata without changing anything.
             guard let digest = await Task.detached(priority: .utility, operation: { try? ProjectDigest.compute(for: url) }).value,
                   digest != externalChanges.knownDigest else { continue }
+            guard !sourceCloseRequested, !Task.isCancelled else { return }
             // Wait for an edit in progress to finish rather than pulling the document out from under it.
             guard session.canStartProjectOperation, session.transformEdit == nil, workspace?.isManaging != true else {
                 scheduleRecheck(); return
@@ -61,6 +68,7 @@ extension ProjectController {
 
     /// Retries while the session is busy, backing off so a long operation is not polled.
     private func scheduleRecheck() {
+        guard !sourceCloseRequested else { return }
         externalChanges.pending = true
         externalChanges.recheck?.cancel()
         let attempt = externalChanges.recheckAttempt
@@ -79,7 +87,7 @@ extension ProjectController {
         // Loading runs off the main thread, as an open does. A package that fails to load, half written or
         // mid-sync, leaves the open document alone; the next change on disk is checked afresh.
         guard let snapshot = try? await ProjectStore.shared.load(from: url) else { return }
-        guard session.projectURL == url, session.document != nil else { return }
+        guard !sourceCloseRequested, !Task.isCancelled, session.projectURL == url, session.document != nil else { return }
         session.reloadProject(snapshot)
         workingVersion = snapshot.workingVersion
         // Remember the package as loaded, not as first seen: it may have changed again while a sheet was up.
@@ -103,6 +111,7 @@ extension ProjectController {
 final class ExternalChangeState {
     var watcher: ProjectWatcher?
     var knownDigest: ProjectDigest?
+    var checkTask: Task<Void,Never>?
     var checking = false
     var pending = false
     var saving = false

@@ -400,6 +400,11 @@ final class HueSaturationEdit {
     let original: ImportedImage
     let selection: SelectionClip?
     let pixelToDocument: CGAffineTransform
+    let transform:LayerTransform
+    var liveSource:LWLiveSourceNode?
+    var liveAdmission:LWDocumentEditAdmission?
+    var originalMask:LayerMask?
+    @ObservationIgnored var livePreviewPlane:LWFloatPlane?
     /// Downscaled original used for previews, with the mapping for its own pixel grid.
     @ObservationIgnored let previewSource: CGImage
     @ObservationIgnored let previewPixelToDocument: CGAffineTransform
@@ -413,14 +418,14 @@ final class HueSaturationEdit {
     /// shows the real thing rather than a coarse copy stretched to fit, as a Hue/Saturation layer already does.
     static let previewLimit = 8000
 
-    init(layerID: UUID, original: ImportedImage, selection: SelectionClip?, transform: LayerTransform) throws {
+    init(layerID: UUID, original: ImportedImage, selection: SelectionClip?, transform: LayerTransform, liveSource:LWLiveSourceNode? = nil) throws {
         self.layerID = layerID
         self.original = original
-        self.selection = selection
+        self.selection = selection;self.transform=transform;self.liveSource=liveSource
         let width = original.image.width, height = original.image.height
         pixelToDocument = BrushRaster.pixelToDocument(transform, width: width, height: height)
         let factor = min(1, Double(Self.previewLimit) / Double(max(width, height)))
-        if factor < 1 {
+        if factor < 1,liveSource == nil {
             let small = max(1, Int(Double(width) * factor)), tall = max(1, Int(Double(height) * factor))
             let context = try BrushRaster.context(width: small, height: tall, mask: false)
             context.interpolationQuality = .medium
@@ -451,7 +456,7 @@ extension EditorSession {
     private func canAdjust(allowingEmpty: Bool) -> Bool {
         _ = showsBusy
         // Text being edited is drawn by its editor, not the layer, so a filter's preview of it would be wrong: commit it first.
-        guard levels == nil, filterEdit == nil, textDraft == nil, document != nil, let layer = activeLayer, !isProjectBusy, !isImporting, brushStroke == nil,
+        guard !sourceClosePending,levels == nil, filterEdit == nil, textDraft == nil, document != nil, let layer = activeLayer, !isProjectBusy, !isImporting, brushStroke == nil,
               pixelMove == nil, renamingLayerID == nil, !showsNewDocument, !showsImporter,
               selectedLayerIDs.count == 1, !layer.isGroup, !isMaskSelected, layer.asset != nil || allowingEmpty,
               document?.effectiveVisibleIDs.contains(layer.id) == true, selection?.isEmpty != true else { return false }
@@ -464,8 +469,11 @@ extension EditorSession {
         if gradientEdit != nil { resolveGradient() }
         guard let document, let layer = activeLayer, let asset = layer.asset else { return }
         do {
-            hueSaturation = try HueSaturationEdit(layerID: layer.id, original: asset,
-                selection: try selection?.clip(canvas: document.size), transform: layer.transform)
+            let edit=try HueSaturationEdit(layerID: layer.id, original: asset,
+                selection: try selection?.clip(canvas: document.size), transform: layer.transform,liveSource:layer.liveSource)
+            edit.liveSource=layer.liveSource;edit.originalMask=layer.mask
+            if edit.liveSource != nil { edit.liveAdmission=try captureDocumentEditAdmission() }
+            hueSaturation=edit
         } catch { brushError = error.localizedDescription }
     }
 
@@ -481,7 +489,7 @@ extension EditorSession {
         guard preview, !settings.isIdentity else {
             hueSaturationTask?.cancel()
             hueSaturationPending = nil
-            edit.setPreview(nil)
+            edit.setPreview(nil);edit.livePreviewPlane=nil
             brushRevision += 1
             return
         }
@@ -494,7 +502,24 @@ extension EditorSession {
     private func renderPendingPreview(_ edit: HueSaturationEdit) {
         guard hueSaturation === edit, let job = hueSaturationPending, hueSaturationTask == nil else { return }
         hueSaturationPending = nil
-        hueSaturationTask = Task { @MainActor [weak self] in
+        do {
+        hueSaturationTask = try makeSourcePreviewTask { [weak self] in
+            if let self,let node=edit.liveSource,let admission=edit.liveAdmission {
+                do {
+                    try self.validateSourceAdjustmentAdmission(admission,layerID:edit.layerID,node:node,original:edit.original,transform:edit.transform,mask:edit.originalMask)
+                    var settings=LayerAdjustment(kind:.hsv);settings.hsvSettings=job.settings
+                    let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+                    let made=try await LWSourceAdjustmentPreparation.prepare(node,settings:settings,selection:edit.selection,transform:edit.transform,workspace:workspace)
+                    try Task.checkCancellation()
+                    try self.validateSourceAdjustmentAdmission(admission,layerID:edit.layerID,node:node,original:edit.original,transform:edit.transform,mask:edit.originalMask)
+                    guard self.hueSaturation === edit else { throw CancellationError() }
+                    let provider=LWFloatPlaneImage(plane:made.plane,cancellation:workspace.cancellation)
+                    let image=try provider.image();try provider.check()
+                    edit.livePreviewPlane=made.plane;edit.setPreview(image);self.brushRevision+=1
+                } catch { if self.hueSaturation === edit { self.brushError=error.localizedDescription } }
+                self.hueSaturationTask=nil;self.renderPendingPreview(edit)
+                return
+            }
             let adjusted = await self?.adjustedPixels(job)
             guard let self else { return }
             self.hueSaturationTask = nil
@@ -505,6 +530,7 @@ extension EditorSession {
             }
             self.renderPendingPreview(edit)
         }
+        } catch { commandRefusal = error.localizedDescription }
     }
 
     /// OK: renders at full quality and records one "Hue/Saturation" undo step. Identity
@@ -527,12 +553,20 @@ extension EditorSession {
         guard !settings.isIdentity else { return }
         isProjectBusy = true
         defer { isProjectBusy = false }
+        if let node=edit.liveSource,let admission=edit.liveAdmission {
+            do {
+                var value=LayerAdjustment(kind:.hsv);value.hsvSettings=settings
+                try await commitSourceAdjustment(admission:admission,layerID:edit.layerID,node:node,original:edit.original,
+                    transform:edit.transform,mask:edit.originalMask,settings:value,selection:edit.selection)
+            } catch { brushError=error.localizedDescription }
+            return
+        }
         let job = HueSaturationJob(image: edit.original.image, settings: settings,
                                    selection: edit.selection, pixelToDocument: edit.pixelToDocument, thumbnail: true)
         guard let adjusted = await adjustedPixels(job),
               let index = document?.layers.firstIndex(where: { $0.id == edit.layerID }),
               let current = document?.layers[index], current.asset?.image === edit.original.image else { return }
-        beginEdit("Hue/Saturation")
+        guard beginEdit("Hue/Saturation") else { return }
         document?.layers[index] = ImageLayer(id: current.id,
             asset: ImportedImage(image: adjusted.image, thumbnail: adjusted.thumbnail ?? adjusted.image, name: current.name),
             name: current.name, isVisible: current.isVisible, transform: current.transform, parentID: current.parentID,

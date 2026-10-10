@@ -3,7 +3,7 @@ import CoreImage
 import CoreText
 
 /// Filter › Dither's looks, grouped as the panel's menu lists them. The order matches `DitherPixels.h`.
-nonisolated enum DitherStyle: String, CaseIterable, Sendable {
+nonisolated enum DitherStyle: String, Codable, CaseIterable, Sendable {
     case atkinson = "Atkinson (Classic Mac)"
     case floydSteinberg = "Floyd–Steinberg"
     case bayer2 = "Bayer 2 × 2"
@@ -36,18 +36,18 @@ nonisolated enum DitherStyle: String, CaseIterable, Sendable {
 
 /// How a chunky pixel is drawn: a solid square, or a round dot with the dark color showing around it, like the lit
 /// pixels of a dot-matrix or LED screen.
-nonisolated enum DitherPixelShape: String, CaseIterable, Sendable {
+nonisolated enum DitherPixelShape: String, Codable, CaseIterable, Sendable {
     case square = "Square"
     case dot = "Dot"
 }
 
-nonisolated enum DitherColors: String, CaseIterable, Sendable {
+nonisolated enum DitherColors: String, Codable, CaseIterable, Sendable {
     case blackWhite = "Black & White"
     case twoColors = "Two Colors"
     case original = "Original"
 }
 
-nonisolated struct DitherSettings: Equatable, Sendable {
+nonisolated struct DitherSettings: Codable, Equatable, Sendable {
     static let pixelSizeRange: ClosedRange<Double> = 1...32
     static let cellSizeRange: ClosedRange<Double> = 4...64
     static let textSizeRange: ClosedRange<Double> = 6...64
@@ -194,7 +194,7 @@ nonisolated struct DitherSettings: Equatable, Sendable {
 
     /// Each distinct character drawn into a cell of monospaced text, `lineHeight` tall and one character wide, on a
     /// shared baseline as a terminal lays them out, sorted from least ink to most.
-    private static func glyphs(_ characters: String, lineHeight: Int) -> (maps: [UInt8], coverage: [Float], width: Int, height: Int) {
+    static func glyphs(_ characters: String, lineHeight: Int) -> (maps: [UInt8], coverage: [Float], width: Int, height: Int) {
         let font = NSFont.monospacedSystemFont(ofSize: CGFloat(lineHeight) / 1.2, weight: .bold)
         let height = lineHeight
         let width = max(1, Int(("M" as NSString).size(withAttributes: [.font: font]).width.rounded()))

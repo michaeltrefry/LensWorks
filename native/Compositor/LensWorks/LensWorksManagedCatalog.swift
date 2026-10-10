@@ -2,7 +2,7 @@ import Foundation
 
 /// Runtime authority is the LensWorks-owned catalog file-ledger digest; the upstream commit is provenance only.
 nonisolated enum LWManagedAuthority {
-    static let sourceRevision = "7afb00a2f1920046271d679c125de30d8fbfb6c4055b7343995ad024d633cecc"
+    static let sourceRevision = "eb91671f30773cb475bff152d6b52709e948e5e4d5fa47fcb25e2e2ef76502bc"
     static let protocolVersion: UInt32 = 2
     static func validate(sourceRevision: String, protocolVersion: UInt32 = Self.protocolVersion) throws {
         guard sourceRevision == Self.sourceRevision, protocolVersion == Self.protocolVersion else {
@@ -105,8 +105,258 @@ nonisolated struct LWManagedFloatDescriptor: Codable, Sendable {
         }
     }
 }
+/// Document authority is separate from a durable catalog export plan.
+nonisolated struct LWDocumentSourceDevelopment: Codable, Sendable {
+    let original: LWCatalogNativePath
+    let original_revision: LWApplicationExportsDtoFileRevision
+    let white_balance: LWEditRecipeWhiteBalance
+    let request_id: String
+    /// Native RAW admission is carried unchanged to the owned decoder; not a format support claim.
+    let raw_hint: Bool
+    init(original: LWCatalogNativePath, originalRevision: LWApplicationExportsDtoFileRevision, whiteBalance: LWEditRecipeWhiteBalance, requestID: UUID, rawHint: Bool = false) {
+        self.original = original; original_revision = originalRevision; white_balance = whiteBalance; request_id = requestID.uuidString.lowercased(); raw_hint = rawHint
+    }
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        guard Set(c.allKeys.map(\.stringValue)) == ["original", "original_revision", "white_balance", "request_id", "raw_hint"] else {
+            throw LensWorksManagedError.protocolViolation("Unknown or missing source development fields.")
+        }
+        original = try c.decode(LWCatalogNativePath.self, forKey: .init("original"))
+        original_revision = try c.decode(LWApplicationExportsDtoFileRevision.self, forKey: .init("original_revision"))
+        white_balance = try c.decode(LWEditRecipeWhiteBalance.self, forKey: .init("white_balance"))
+        request_id = try c.decode(String.self, forKey: .init("request_id"))
+        raw_hint = try c.decode(Bool.self, forKey: .init("raw_hint"))
+        guard let id = UUID(uuidString: request_id), id.uuidString.lowercased() == request_id else {
+            throw LensWorksManagedError.protocolViolation("Noncanonical source request UUID.")
+        }
+    }
+}
+nonisolated struct LWDocumentSourceRevision: Decodable, Sendable {
+    let original: LWCatalogNativePath
+    let original_revision: LWApplicationExportsDtoFileRevision
+    let source_revision: String
+    let `protocol`: UInt32
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        guard Set(c.allKeys.map(\.stringValue)) == ["original", "original_revision", "source_revision", "protocol"] else {
+            throw LensWorksManagedError.protocolViolation("Unknown or missing source revision fields.")
+        }
+        original = try c.decode(LWCatalogNativePath.self, forKey: .init("original"))
+        original_revision = try c.decode(LWApplicationExportsDtoFileRevision.self, forKey: .init("original_revision"))
+        source_revision = try c.decode(String.self, forKey: .init("source_revision"))
+        `protocol` = try c.decode(UInt32.self, forKey: .init("protocol"))
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+    }
+}
+nonisolated struct LWManagedSourceFloatDescriptor: Codable, Sendable {
+    let source_revision: String
+    let `protocol`: UInt32
+    let kind: String
+    let mime: String
+    let width: UInt32
+    let height: UInt32
+    let row_stride: LWCatalogU64
+    let byte_length: LWCatalogU64
+    let channels: UInt8
+    let sample: String
+    let color_space: String
+    let alpha: String
+    let orientation: String
+    let metadata: LWMediaMetadata
+    let provenance: LWMediaFullRenderProvenance
+    let source_authority: LWDocumentSourceDevelopment
+    let memory_enforcement: String
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        source_revision = try c.decode(String.self, forKey: .init("source_revision"))
+        `protocol` = try c.decode(UInt32.self, forKey: .init("protocol"))
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+        kind = try c.decode(String.self, forKey: .init("kind"))
+        mime = try c.decode(String.self, forKey: .init("mime"))
+        width = try c.decode(UInt32.self, forKey: .init("width"))
+        height = try c.decode(UInt32.self, forKey: .init("height"))
+        row_stride = try c.decode(LWCatalogU64.self, forKey: .init("row_stride"))
+        byte_length = try c.decode(LWCatalogU64.self, forKey: .init("byte_length"))
+        channels = try c.decode(UInt8.self, forKey: .init("channels"))
+        sample = try c.decode(String.self, forKey: .init("sample"))
+        color_space = try c.decode(String.self, forKey: .init("color_space"))
+        alpha = try c.decode(String.self, forKey: .init("alpha"))
+        orientation = try c.decode(String.self, forKey: .init("orientation"))
+        metadata = try c.decode(LWMediaMetadata.self, forKey: .init("metadata"))
+        provenance = try c.decode(LWMediaFullRenderProvenance.self, forKey: .init("provenance"))
+        source_authority = try c.decode(LWDocumentSourceDevelopment.self, forKey: .init("source_authority"))
+        let fields: Set<String> = ["source_revision", "protocol", "kind", "mime", "width", "height", "row_stride", "byte_length", "channels", "sample", "color_space", "alpha", "orientation", "metadata", "provenance", "source_authority", "memory_enforcement"]
+        guard Set(c.allKeys.map(\.stringValue)) == fields else { throw LensWorksManagedError.protocolViolation("Unknown or missing document float fields.") }
+        memory_enforcement = try c.decode(String.self, forKey: .init("memory_enforcement"))
+        try validate(length: byte_length.value)
+    }
+
+    func validate(length: UInt64) throws {
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+        let stride = UInt64(width) * 16
+        let (expected, overflow) = stride.multipliedReportingOverflow(by: UInt64(height))
+        guard kind == "source_float", mime == "application/x-lensworks-rgba-f32le", width > 0, height > 0,
+              !overflow, channels == 4, sample == "float32_le", color_space == "linear_srgb",
+              alpha == "straight", orientation == "applied", row_stride.value == stride,
+              byte_length.value == expected, length == expected else {
+            throw LensWorksManagedError.protocolViolation("The full-resolution surface descriptor has inconsistent geometry or color semantics.")
+        }
+    }
+}
+nonisolated struct LWManagedSourcePlaneDescriptor: Codable, Sendable {
+    let source_revision: String
+    let `protocol`: UInt32
+    let kind: String
+    let mime: String
+    let width: UInt32
+    let height: UInt32
+    let row_stride: LWCatalogU64
+    let byte_length: LWCatalogU64
+    let channels: UInt8
+    let sample: String
+    let color_space: String
+    let alpha: String
+    let orientation: String
+    let metadata: LWMediaMetadata
+    let provenance: LWMediaFullRenderProvenance
+    let source_authority: LWDocumentSourceDevelopment
+    let memory_enforcement: String
+    let payload_digest: String
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        source_revision = try c.decode(String.self, forKey: .init("source_revision"))
+        `protocol` = try c.decode(UInt32.self, forKey: .init("protocol"))
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+        kind = try c.decode(String.self, forKey: .init("kind"))
+        mime = try c.decode(String.self, forKey: .init("mime"))
+        width = try c.decode(UInt32.self, forKey: .init("width"))
+        height = try c.decode(UInt32.self, forKey: .init("height"))
+        row_stride = try c.decode(LWCatalogU64.self, forKey: .init("row_stride"))
+        byte_length = try c.decode(LWCatalogU64.self, forKey: .init("byte_length"))
+        channels = try c.decode(UInt8.self, forKey: .init("channels"))
+        sample = try c.decode(String.self, forKey: .init("sample"))
+        color_space = try c.decode(String.self, forKey: .init("color_space"))
+        alpha = try c.decode(String.self, forKey: .init("alpha"))
+        orientation = try c.decode(String.self, forKey: .init("orientation"))
+        metadata = try c.decode(LWMediaMetadata.self, forKey: .init("metadata"))
+        provenance = try c.decode(LWMediaFullRenderProvenance.self, forKey: .init("provenance"))
+        source_authority = try c.decode(LWDocumentSourceDevelopment.self, forKey: .init("source_authority"))
+        let fields: Set<String> = ["source_revision", "protocol", "kind", "mime", "width", "height", "row_stride", "byte_length", "channels", "sample", "color_space", "alpha", "orientation", "metadata", "provenance", "source_authority", "memory_enforcement", "payload_digest"]
+        guard Set(c.allKeys.map(\.stringValue)) == fields else { throw LensWorksManagedError.protocolViolation("Unknown or missing document float fields.") }
+        memory_enforcement = try c.decode(String.self, forKey: .init("memory_enforcement"))
+        payload_digest = try c.decode(String.self, forKey: .init("payload_digest"))
+        try validate(length: 0)
+    }
+
+    func validate(length: UInt64) throws {
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+        let stride = UInt64(width) * 16
+        let (expected, overflow) = stride.multipliedReportingOverflow(by: UInt64(height))
+        guard kind == "source_float_plane", payload_digest.count == 64, payload_digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }), mime == "application/x-lensworks-rgba-f32le", width > 0, height > 0,
+              !overflow, channels == 4, sample == "float32_le", color_space == "linear_srgb",
+              alpha == "straight", orientation == "applied", row_stride.value == stride,
+              byte_length.value == expected, length == 0, Int(width) <= DocumentLimits.maxSide, Int(height) <= DocumentLimits.maxSide, UInt64(width) * UInt64(height) <= UInt64(DocumentLimits.maxSurfacePixels) else {
+            throw LensWorksManagedError.protocolViolation("The immutable source plane descriptor has inconsistent geometry or color semantics.")
+        }
+    }
+}
+/// Integer range within the complete oriented original. A tile does not change source identity.
+nonisolated struct LWSourceTileRect: Codable, Equatable, Sendable {
+    let x: UInt32
+    let y: UInt32
+    let width: UInt32
+    let height: UInt32
+    init(x: UInt32, y: UInt32, width: UInt32, height: UInt32) {
+        self.x = x; self.y = y; self.width = width; self.height = height
+    }
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        guard Set(c.allKeys.map(\.stringValue)) == ["x", "y", "width", "height"] else {
+            throw LensWorksManagedError.protocolViolation("Unknown or missing source tile range fields.")
+        }
+        x = try c.decode(UInt32.self, forKey: .init("x")); y = try c.decode(UInt32.self, forKey: .init("y"))
+        width = try c.decode(UInt32.self, forKey: .init("width")); height = try c.decode(UInt32.self, forKey: .init("height"))
+        try validate(maximumBytes: 512 * 1024 * 1024)
+    }
+    func validate(frameWidth: UInt32? = nil, frameHeight: UInt32? = nil, maximumBytes: UInt64) throws {
+        let (right, rightOverflow) = x.addingReportingOverflow(width)
+        let (bottom, bottomOverflow) = y.addingReportingOverflow(height)
+        let (bytes, overflow) = (UInt64(width) * UInt64(height)).multipliedReportingOverflow(by: 16)
+        guard width > 0, height > 0, !rightOverflow, !bottomOverflow, !overflow,
+            bytes <= maximumBytes, maximumBytes > 0,
+            frameWidth.map({ $0 > 0 && right <= $0 }) ?? true,
+            frameHeight.map({ $0 > 0 && bottom <= $0 }) ?? true else {
+            throw LensWorksManagedError.protocolViolation("Source tile is outside its admitted extent or result allowance.")
+        }
+    }
+}
+nonisolated struct LWManagedSourceTileDescriptor: Codable, Sendable {
+    let source_revision: String
+    let `protocol`: UInt32
+    let kind: String
+    let mime: String
+    let width: UInt32
+    let height: UInt32
+    let row_stride: LWCatalogU64
+    let byte_length: LWCatalogU64
+    let channels: UInt8
+    let sample: String
+    let color_space: String
+    let alpha: String
+    let orientation: String
+    let metadata: LWMediaMetadata
+    let provenance: LWMediaFullRenderProvenance
+    let source_authority: LWDocumentSourceDevelopment
+    let memory_enforcement: String
+    let tile_rect: LWSourceTileRect
+    let frame_width: UInt32
+    let frame_height: UInt32
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        source_revision = try c.decode(String.self, forKey: .init("source_revision"))
+        `protocol` = try c.decode(UInt32.self, forKey: .init("protocol"))
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+        kind = try c.decode(String.self, forKey: .init("kind"))
+        mime = try c.decode(String.self, forKey: .init("mime"))
+        width = try c.decode(UInt32.self, forKey: .init("width"))
+        height = try c.decode(UInt32.self, forKey: .init("height"))
+        row_stride = try c.decode(LWCatalogU64.self, forKey: .init("row_stride"))
+        byte_length = try c.decode(LWCatalogU64.self, forKey: .init("byte_length"))
+        channels = try c.decode(UInt8.self, forKey: .init("channels"))
+        sample = try c.decode(String.self, forKey: .init("sample"))
+        color_space = try c.decode(String.self, forKey: .init("color_space"))
+        alpha = try c.decode(String.self, forKey: .init("alpha"))
+        orientation = try c.decode(String.self, forKey: .init("orientation"))
+        metadata = try c.decode(LWMediaMetadata.self, forKey: .init("metadata"))
+        provenance = try c.decode(LWMediaFullRenderProvenance.self, forKey: .init("provenance"))
+        source_authority = try c.decode(LWDocumentSourceDevelopment.self, forKey: .init("source_authority"))
+        let fields: Set<String> = ["source_revision", "protocol", "kind", "mime", "width", "height", "row_stride", "byte_length", "channels", "sample", "color_space", "alpha", "orientation", "metadata", "provenance", "source_authority", "memory_enforcement", "tile_rect", "frame_width", "frame_height"]
+        guard Set(c.allKeys.map(\.stringValue)) == fields else { throw LensWorksManagedError.protocolViolation("Unknown or missing document float fields.") }
+        memory_enforcement = try c.decode(String.self, forKey: .init("memory_enforcement"))
+        tile_rect = try c.decode(LWSourceTileRect.self, forKey: .init("tile_rect"))
+        frame_width = try c.decode(UInt32.self, forKey: .init("frame_width"))
+        frame_height = try c.decode(UInt32.self, forKey: .init("frame_height"))
+        try validate(length: byte_length.value)
+    }
+
+    func validate(length: UInt64) throws {
+        try LWManagedAuthority.validate(sourceRevision: source_revision, protocolVersion: `protocol`)
+        try tile_rect.validate(frameWidth: frame_width, frameHeight: frame_height, maximumBytes: length)
+        let stride = UInt64(width) * 16
+        let (expected, overflow) = stride.multipliedReportingOverflow(by: UInt64(height))
+        guard kind == "source_float_tile", width == tile_rect.width, height == tile_rect.height, mime == "application/x-lensworks-rgba-f32le", width > 0, height > 0,
+              !overflow, channels == 4, sample == "float32_le", color_space == "linear_srgb",
+              alpha == "straight", orientation == "applied", row_stride.value == stride,
+              byte_length.value == expected, length == expected else {
+            throw LensWorksManagedError.protocolViolation("The source tile descriptor has inconsistent geometry or color semantics.")
+        }
+    }
+}
 nonisolated enum LWManagedResultDescriptor: Decodable, Sendable {
-    case json(mime: String), preview(mime: String), float(LWManagedFloatDescriptor)
+    case json(mime: String), preview(mime: String), float(LWManagedFloatDescriptor), sourceFloat(LWManagedSourceFloatDescriptor), sourceTile(LWManagedSourceTileDescriptor), sourcePlane(LWManagedSourcePlaneDescriptor)
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
         let kind = try c.decode(String.self, forKey: .init("kind"))
@@ -115,6 +365,9 @@ nonisolated enum LWManagedResultDescriptor: Decodable, Sendable {
         case "json": guard mime == "application/json" else { throw LensWorksManagedError.protocolViolation("Unexpected JSON media type.") }; self = .json(mime: mime)
         case "preview": self = .preview(mime: mime)
         case "float": self = .float(try LWManagedFloatDescriptor(from: decoder))
+        case "source_float": self = .sourceFloat(try LWManagedSourceFloatDescriptor(from: decoder))
+        case "source_float_tile": self = .sourceTile(try LWManagedSourceTileDescriptor(from: decoder))
+        case "source_float_plane": self = .sourcePlane(try LWManagedSourcePlaneDescriptor(from: decoder))
         default: throw LensWorksManagedError.protocolViolation("Unknown result descriptor kind.")
         }
     }
@@ -159,6 +412,29 @@ nonisolated struct LWManagedSessionAdmission: Decodable, Sendable {
         owner.installSourceRevision(source_revision)
     }
 }
+/// Only the actual source-session create route uses this capture. A refused
+/// admission header still retains its exact returned handle for checked cleanup;
+/// it never makes that owner available for ordinary source commands.
+nonisolated struct LWManagedSourceAdmissionFailure: Error, @unchecked Sendable {
+    let owner: LWManagedSession
+    let reason: Error
+}
+nonisolated struct LWManagedSourceSessionAdmission: Decodable, Sendable {
+    let owner: LWManagedSession
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        let acquired = LWManagedSession(handle: try c.decode(LWCatalogSessionHandle.self, forKey: .init("session")))
+        do {
+            guard Set(c.allKeys.map(\.stringValue)) == ["session", "phase", "source_revision"] else {
+                throw LensWorksManagedError.protocolViolation("Unknown or missing source session admission fields.")
+            }
+            _ = try c.decode(LWManagedSessionPhase.self, forKey: .init("phase"))
+            let revision = try c.decode(String.self, forKey: .init("source_revision"))
+            try LWManagedAuthority.validate(sourceRevision: revision)
+            acquired.installSourceRevision(revision); owner = acquired
+        } catch { throw LWManagedSourceAdmissionFailure(owner: acquired, reason: error) }
+    }
+}
 nonisolated private struct LWCreatedJob: Decodable, Sendable { let job: LWCatalogJobHandle }
 nonisolated private struct LWReleased: Decodable, Sendable { let released: Bool }
 nonisolated private struct LWClosed: Decodable, Sendable { let phase: LWManagedSessionPhase }
@@ -169,6 +445,21 @@ nonisolated private struct LWSourceArguments: Encodable, Sendable { let session:
 nonisolated private struct LWDecodeArguments: Encodable, Sendable {
     let session: LWCatalogSessionHandle; let catalog: String; let export_job: String; let sequence: LWCatalogI64
     let limits: LWApplicationExportsDtoDecodeLimits; let worker_bytes: LWCatalogU64; let max_output_bytes: LWCatalogU64
+}
+nonisolated private struct LWDocumentSourceArguments: Encodable, Sendable {
+    let session: LWCatalogSessionHandle; let original: LWCatalogNativePath; let max_encoded_bytes: LWCatalogU64
+}
+nonisolated private struct LWDocumentDevelopArguments: Encodable, Sendable {
+    let session: LWCatalogSessionHandle; let source: LWDocumentSourceDevelopment; let tile: LWSourceTileRect?
+    let limits: LWApplicationExportsDtoDecodeLimits; let worker_bytes: LWCatalogU64; let max_output_bytes: LWCatalogU64
+}
+nonisolated private struct LWDocumentPlaneArguments: Encodable, Sendable {
+    let session: LWCatalogSessionHandle; let source: LWDocumentSourceDevelopment
+    let limits: LWApplicationExportsDtoDecodeLimits; let worker_bytes: LWCatalogU64
+}
+nonisolated private struct LWDocumentPlaneTileArguments: Encodable, Sendable {
+    let session: LWCatalogSessionHandle; let plane: LWCatalogBufferHandle
+    let tile: LWSourceTileRect; let max_output_bytes: LWCatalogU64
 }
 nonisolated private struct LWResultWire: Decodable, Sendable {
     let buffer: LWManagedBuffer
@@ -315,8 +606,12 @@ nonisolated struct LWManagedResult: Sendable {
     }
     /// Preserves negative and greater-than-one RGB values; no clipping, gamma conversion, or premultiplication.
     func floatSamples(maximumBytes: Int) async throws -> [Float] {
-        guard case .float(let descriptor) = descriptor else { throw LensWorksManagedError.protocolViolation("Expected a full-resolution float result.") }
-        try descriptor.validate(length: length)
+        switch descriptor {
+        case .float(let value): try value.validate(length: length)
+        case .sourceFloat(let value): try value.validate(length: length)
+        case .sourceTile(let value): try value.validate(length: length)
+        default: throw LensWorksManagedError.protocolViolation("Expected a full-resolution float result.")
+        }
         let data = try await buffer.copy(maximumBytes: maximumBytes, expectedLength: length)
         return stride(from: 0, to: data.count, by: 4).map { offset in
             let bits = UInt32(data[offset]) | UInt32(data[offset + 1]) << 8 | UInt32(data[offset + 2]) << 16 | UInt32(data[offset + 3]) << 24
@@ -339,6 +634,9 @@ nonisolated final class LWManagedJob: @unchecked Sendable {
         let buffer = wire.buffer
         do {
             if case .float(let descriptor) = wire.descriptor { try descriptor.validate(length: wire.length.value) }
+            if case .sourceFloat(let descriptor) = wire.descriptor { try descriptor.validate(length: wire.length.value) }
+            if case .sourceTile(let descriptor) = wire.descriptor { try descriptor.validate(length: wire.length.value) }
+            if case .sourcePlane(let descriptor) = wire.descriptor { try descriptor.validate(length: wire.length.value) }
             return LWManagedResult(buffer: buffer, length: wire.length.value, descriptor: wire.descriptor)
         } catch { buffer.release(); throw error }
     }
@@ -398,6 +696,10 @@ nonisolated final class LWManagedSession: @unchecked Sendable {
         let created = try await LWManagedTransport.request("session_create", LWCreateArguments(config: config), as: LWManagedSessionAdmission.self)
         return created.owner
     }
+    static func createSourceOwner(config: LWManagedSessionConfig) async throws -> LWManagedSession {
+        let created = try await LWManagedTransport.request("session_create", LWCreateArguments(config: config), as: LWManagedSourceSessionAdmission.self)
+        return created.owner
+    }
     private func admitted() throws { try lock.withLock { if released || closing { throw LensWorksManagedError.closed } } }
     func status() async throws -> LWManagedSessionStatus { if lock.withLock({ released }) { throw LensWorksManagedError.closed }; return try await LWManagedTransport.request("session_status", LWSessionArguments(session: handle), as: LWManagedSessionStatus.self) }
     /// Every retained public family is represented by LWApplicationRequest and its typed LWApplicationReply.
@@ -430,13 +732,53 @@ nonisolated final class LWManagedSession: @unchecked Sendable {
         let created = try await LWManagedTransport.request("source_identity", LWSourceArguments(session: handle, catalog: catalog, export_job: exportJob, sequence: sequence), as: LWCreatedJob.self)
         return LWManagedJob(handle: created.job)
     }
-    func decodeFull(catalog: String, exportJob: String, sequence: LWCatalogI64, limits: LWApplicationExportsDtoDecodeLimits, workerBytes: LWCatalogU64, maximumOutputBytes: LWCatalogU64) async throws -> LWManagedJob {
+    func decodeFull(catalog: String, exportJob: String, sequence: LWCatalogI64, limits: LWApplicationExportsDtoDecodeLimits, workerBytes: LWCatalogU64, maximumOutputBytes: LWCatalogU64, tile: LWSourceTileRect? = nil) async throws -> LWManagedJob {
         try admitted()
         let caps = [limits.max_encoded_bytes.value, limits.max_intermediate_pixels.value, limits.max_allocation_bytes.value, workerBytes.value, maximumOutputBytes.value]
         guard caps.allSatisfy({ $0 > 0 && $0 < UInt64.max }), limits.max_allocation_bytes.value <= workerBytes.value, maximumOutputBytes.value <= workerBytes.value else {
             throw LensWorksManagedError.resourceLimit("Decode requires finite positive caps within the worker allowance.")
         }
         let created = try await LWManagedTransport.request("decode_full", LWDecodeArguments(session: handle, catalog: catalog, export_job: exportJob, sequence: sequence, limits: limits, worker_bytes: workerBytes, max_output_bytes: maximumOutputBytes), as: LWCreatedJob.self)
+        return LWManagedJob(handle: created.job)
+    }
+    func documentSourceRevision(original: LWCatalogNativePath, maximumEncodedBytes: LWCatalogU64) async throws -> LWDocumentSourceRevision {
+        try admitted()
+        let created = try await LWManagedTransport.request("document_source_revision", LWDocumentSourceArguments(session:handle, original:original, max_encoded_bytes:maximumEncodedBytes), as:LWCreatedJob.self)
+        let job = LWManagedJob(handle:created.job)
+        do {
+            let result = try await job.wait(); defer { result.buffer.release() }
+            let revision = try await result.decode(LWDocumentSourceRevision.self)
+            try await job.close(); return revision
+        } catch { try? await job.close(); throw error }
+    }
+    func developDocumentSource(_ source: LWDocumentSourceDevelopment, limits: LWApplicationExportsDtoDecodeLimits,
+        workerBytes: LWCatalogU64, maximumOutputBytes: LWCatalogU64, tile: LWSourceTileRect? = nil) async throws -> LWManagedJob {
+        try admitted()
+        let caps = [limits.max_encoded_bytes.value, limits.max_intermediate_pixels.value, limits.max_allocation_bytes.value, workerBytes.value, maximumOutputBytes.value]
+        guard caps.allSatisfy({ $0 > 0 && $0 < UInt64.max }), limits.max_allocation_bytes.value <= workerBytes.value,
+            maximumOutputBytes.value <= workerBytes.value else { throw LensWorksManagedError.resourceLimit("Finite document decode ceilings required.") }
+        try tile?.validate(maximumBytes: maximumOutputBytes.value)
+        let created = try await LWManagedTransport.request("develop_document_source", LWDocumentDevelopArguments(session:handle,
+            source:source, tile:tile, limits:limits, worker_bytes:workerBytes, max_output_bytes:maximumOutputBytes), as:LWCreatedJob.self)
+        return LWManagedJob(handle:created.job)
+    }
+    /// Decodes once into an immutable unlinked worker spool. Its buffer owns the
+    /// file after the child is reaped; only bounded admitted range jobs can read it.
+    func openDocumentSourcePlane(_ source: LWDocumentSourceDevelopment,
+        limits: LWApplicationExportsDtoDecodeLimits, workerBytes: LWCatalogU64) async throws -> LWManagedJob {
+        try admitted()
+        guard limits.max_encoded_bytes.value > 0, limits.max_intermediate_pixels.value > 0,
+            limits.max_allocation_bytes.value > 0, limits.max_allocation_bytes.value <= workerBytes.value,
+            workerBytes.value > 0, workerBytes.value < UInt64.max else { throw LensWorksManagedError.resourceLimit("Finite source plane decode ceilings required.") }
+        let created = try await LWManagedTransport.request("open_document_source_plane",
+            LWDocumentPlaneArguments(session: handle, source: source, limits: limits, worker_bytes: workerBytes), as: LWCreatedJob.self)
+        return LWManagedJob(handle: created.job)
+    }
+    func documentSourcePlaneTile(_ plane: LWManagedBuffer, range: LWSourceTileRect,
+        maximumOutputBytes: LWCatalogU64) async throws -> LWManagedJob {
+        try admitted(); try range.validate(maximumBytes: maximumOutputBytes.value)
+        let created = try await LWManagedTransport.request("document_source_plane_tile",
+            LWDocumentPlaneTileArguments(session: handle, plane: plane.handle, tile: range, max_output_bytes: maximumOutputBytes), as: LWCreatedJob.self)
         return LWManagedJob(handle: created.job)
     }
     func subscribe(_ completion: @escaping @Sendable (LWCatalogSessionHandle, LWCatalogJobHandle) -> Void) async throws -> LWManagedSubscription {

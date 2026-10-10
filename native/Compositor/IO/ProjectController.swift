@@ -9,6 +9,8 @@ final class ProjectController {
     weak var workspace: ProjectWorkspace?
     var workingVersion: LensWorksWorkingVersion?
     private var saveGeneration = 0
+    private(set) var sourceCloseRequested = false
+    private var standaloneCloseConfirmed = false
     /// Keeps the document in step with its package when something else writes it. See ProjectController+ExternalChanges.
     let externalChanges = ExternalChangeState()
     var canStart: Bool {
@@ -48,7 +50,7 @@ final class ProjectController {
                     defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
                     externalChanges.saving = true
                     defer { externalChanges.saving = false }
-                    let quickLook = await ImageExporter.shared.quickLookImages(saved.snapshot)
+                    let quickLook = try await ImageExporter.shared.quickLookImages(saved.snapshot)
                     try await ProjectStore.shared.save(saved.snapshot, to: destination, quickLook: quickLook, workingVersion: saved.workingVersion, recovery: saved.destination == nil)
                     if saved.destination == nil { commandRecoveryURL = destination }
                     if session.document?.id == saved.snapshot.manifest.documentID, session.projectURL == saved.destination {
@@ -168,8 +170,9 @@ final class ProjectController {
         }
         guard let options, let snapshot = session.projectSnapshot() else { return }
         do {
+            let admission=try session.captureDocumentEditAdmission()
             let resized = try await CanvasResizer.shared.resize(snapshot, to: options)
-            session.applyDocumentSize(resized, actionName: "Canvas Size")
+            try session.applyDocumentSize(resized,actionName:"Canvas Size",admission:admission)
         } catch { await showError("Couldn’t change canvas size", error: error) }
     }
 
@@ -190,8 +193,9 @@ final class ProjectController {
         }
         guard let options, let snapshot = session.projectSnapshot() else { return }
         do {
+            let admission=try session.captureDocumentEditAdmission()
             let resized = try await ImageResizer.shared.resize(snapshot, to: options)
-            session.applyImageSize(resized)
+            try session.applyDocumentSize(resized,actionName:"Image Size",admission:admission)
         } catch { await showError("Couldn’t resize the image", error: error) }
     }
 
@@ -212,10 +216,11 @@ final class ProjectController {
         }
         guard let options, let snapshot = session.projectSnapshot() else { return }
         do {
+            let admission=try session.captureDocumentEditAdmission()
             guard let resized = try await ImageTrim.trim(snapshot, options: options) else {
                 return
             }
-            session.applyDocumentSize(resized, actionName: "Trim")
+            try session.applyDocumentSize(resized,actionName:"Trim",admission:admission)
         } catch { await showError("Couldn’t trim image", error: error) }
     }
 
@@ -253,7 +258,7 @@ final class ProjectController {
         guard let snapshot = session.projectSnapshot() else { return }
         do {
             let raster = try await ImageExporter.shared.render(snapshot)
-            let data: Data? = await withCheckedContinuation { continuation in
+            let data: JPEGFileResult? = await withCheckedContinuation { continuation in
                 let sheet = NSWindow()
                 sheet.styleMask = [.titled, .fullSizeContentView]
                 sheet.title = "Export JPEG"
@@ -267,6 +272,7 @@ final class ProjectController {
                 window.beginSheet(sheet)
             }
             guard let data else { return }
+            try data.check()
             let panel = NSSavePanel()
             panel.allowedContentTypes = [.jpeg]
             panel.canCreateDirectories = true
@@ -276,7 +282,8 @@ final class ProjectController {
             guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            try await ImageExporter.shared.write(data, to: url, workingVersion: workingVersion)
+            try data.check()
+            try await ImageExporter.shared.write(data.file,to:url,workingVersion:workingVersion)
         } catch { await showError("Couldn’t export JPEG", error: error) }
     }
 
@@ -320,7 +327,7 @@ final class ProjectController {
             externalChanges.saving = true
             defer { externalChanges.saving = false }
             do {
-                let quickLook = await ImageExporter.shared.quickLookImages(snapshot)
+                let quickLook = try await ImageExporter.shared.quickLookImages(snapshot)
                 try await ProjectStore.shared.save(snapshot, to: destination, quickLook: quickLook, workingVersion: savedVersion)
                 if var version = savedVersion {
                     version.projectPath = destination.path
@@ -408,25 +415,51 @@ final class ProjectController {
 
     func newCanvas() async {
         if let workspace { workspace.newCanvas(); return }
-        guard begin() else { return }
-        let proceed = await confirmReplacement()
-        session.isProjectBusy = false
-        if proceed { session.clearProject(); workingVersion = nil; stopWatchingProject() }
+        guard await closeStandaloneSourceProject() else { return }
+        do { try session.resumeAfterCheckedSourceClose(); sourceCloseRequested = false; standaloneCloseConfirmed = false }
+        catch { session.commandRefusal = error.localizedDescription }
     }
 
     func close(_ window: NSWindow) async {
         if let workspace, let tab = workspace.tabs.first(where: { $0.controller === self }) {
             await workspace.close(tab.id); return
         }
-        guard begin() else { return }
-        let proceed = await confirmReplacement()
-        session.isProjectBusy = false
-        if proceed {
-            session.clearProject()
-            workingVersion = nil
-            stopWatchingProject()
-            window.close()
+        guard await closeStandaloneSourceProject() else { return }
+        window.close()
+    }
+    private func closeStandaloneSourceProject() async -> Bool {
+        if !standaloneCloseConfirmed {
+            guard begin() else { return false }
+            let proceed = await confirmReplacement()
+            session.isProjectBusy = false
+            guard proceed else { return false }
+            standaloneCloseConfirmed = true
         }
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(30000))
+        do {
+            try await releaseConfirmedSourceProject(deadline: deadline)
+            try session.finishConfirmedSourceRetirement(protectedOwners: [], deadline: deadline)
+            try await LWSourceDeveloper.shared.drainRetainedSessions(deadline: deadline)
+            return true
+        } catch { session.commandRefusal = "Source Close failed; retry Close: " + error.localizedDescription; return false }
+    }
+
+    /// Only a confirmed Close may discard retained failed autosave snapshots.
+    /// No new writes/watch callbacks may retain a project while source owners drain.
+    func releaseConfirmedSourceProject(deadline: ContinuousClock.Instant) async throws {
+        await finishWriting()
+        guard writing == nil, commandWriting == nil else { throw ProjectError.invalid }
+        try session.beginConfirmedSourceClose()
+        sourceCloseRequested = true
+        pendingCommandSave = nil; failedCommandSave = nil
+        stopWatchingProject()
+        while externalChanges.checkTask != nil || externalChanges.checking {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw LWSourceCleanupFailure(operation:nil,cleanup:"Project reload is still draining; retry Close.") }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        try await session.releaseConfirmedSourceProject(deadline: deadline)
+        workingVersion = nil
     }
 
     func confirmQuit() async -> Bool {

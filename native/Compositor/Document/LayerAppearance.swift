@@ -125,7 +125,7 @@ extension EditorSession {
         blendPreview = nil
         guard canEditAppearance, let index = document?.layers.firstIndex(where: { $0.id == activeLayerID }) else { return }
         finishOpacityEdit()
-        beginEdit("Layer Blend Mode")
+        guard beginEdit("Layer Blend Mode") else { return }
         document?.layers[index].blendMode = mode
         endEdit()
     }

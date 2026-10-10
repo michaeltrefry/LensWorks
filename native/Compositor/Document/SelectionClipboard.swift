@@ -187,7 +187,7 @@ extension EditorSession {
     func duplicateLayers(_ ids: [UUID], editName: String = "Duplicate Layer") {
         guard canEditLayers, !ids.isEmpty else { return }
         let active = activeLayerID
-        beginEdit(editName)
+        guard beginEdit(editName) else { return }
         var copiesOf: [UUID: UUID] = [:]
         for id in ids { if let copy = insertCopy(of: id) { copiesOf[id] = copy } }
         guard !copiesOf.isEmpty else { endEdit(); return }
@@ -238,7 +238,7 @@ extension EditorSession {
     func duplicateLayer(_ id: UUID, in parent: UUID?, above target: UUID? = nil, atBottom: Bool = false) -> Bool {
         guard canEditLayers,
               canPlaceLayer(id, in: parent) else { return false }
-        beginEdit("Duplicate Layer")
+        guard beginEdit("Duplicate Layer") else { return false }
         defer { endEdit() }
         selectLayer(id)
         duplicateActiveLayer()
@@ -257,7 +257,7 @@ extension EditorSession {
         layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
         let index = document.layers.firstIndex { $0.id == activeLayerID }.map { $0 + 1 } ?? document.layers.count
         finishOpacityEdit()
-        beginEdit(editName)
+        guard beginEdit(editName) else { return }
         self.document?.layers.insert(layer, at: index)
         if dropsSelection { self.document?.selection = nil }
         activeLayerID = layer.id

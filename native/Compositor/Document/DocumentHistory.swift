@@ -20,19 +20,28 @@ final class DocumentHistory {
     private var revision = UUID()
     private var savedRevision: UUID?
     private var pending: Snapshot?
+    @ObservationIgnored private(set) var pendingAfterMetadataStorage:LWSourceMetadataStorage?
     private var pendingName = "Edit"
     private var depth = 0
     private var interactionToken: UUID?
-    struct Archive { let past: [Entry]; let future: [Entry]; let revision: UUID }
-    var archive: Archive { .init(past: past, future: future, revision: revision) }
-    func restoreArchive(_ archive: Archive, saved: Bool = true) {
-        past = archive.past; future = archive.future; revision = archive.revision
-        savedRevision = saved ? revision : nil; pending = nil; depth = 0; interactionToken = nil
+    @ObservationIgnored private var loadedMetadataStorage:[LWSourceMetadataStorage] = []
+    struct Archive { let past:[Entry];let future:[Entry];let revision:UUID;var metadataStorage:[LWSourceMetadataStorage] = [] }
+    var archive: Archive { .init(past:past,future:future,revision:revision,metadataStorage:loadedMetadataStorage) }
+    /// Visit immutable owners in-place; Close must include a pending history
+    /// snapshot without allocating another archive or transferring edit authority.
+    func forEachRetainedDocument(_ visit: (CanvasDocument?) throws -> Void) rethrows {
+        try visit(pending?.document)
+        for entry in past { try visit(entry.before.document); try visit(entry.after.document) }
+        for entry in future { try visit(entry.before.document); try visit(entry.after.document) }
     }
-    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?) -> UUID? {
+    func restoreArchive(_ archive: Archive, saved: Bool = true) {
+        past = archive.past; future = archive.future; revision = archive.revision;loadedMetadataStorage=archive.metadataStorage
+        savedRevision = saved ? revision : nil; pending = nil;pendingAfterMetadataStorage=nil; depth = 0; interactionToken = nil
+    }
+    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil) -> UUID? {
         guard depth == 0 else { return nil }
         let token = UUID(); interactionToken = token
-        begin(name, document: document, selection: selection); return token
+        begin(name,document:document,selection:selection,afterMetadataStorage:afterMetadataStorage); return token
     }
     func endInteraction(_ token: UUID, document: CanvasDocument?, selection: UUID?) -> Bool {
         guard interactionToken == token, depth == 1 else { return false }
@@ -40,7 +49,7 @@ final class DocumentHistory {
     }
     func cancelInteraction(_ token: UUID) -> Snapshot? {
         guard interactionToken == token, depth == 1, let starting = pending else { return nil }
-        interactionToken = nil; pending = nil; depth = 0; return starting
+        interactionToken = nil; pending = nil;pendingAfterMetadataStorage=nil; depth = 0; return starting
     }
     let entryLimit: Int
     let retainedByteLimit: Int
@@ -65,16 +74,17 @@ final class DocumentHistory {
     func markSaved(_ saved: UUID) { savedRevision = saved }
     func reset() {
         past.removeAll()
-        future.removeAll()
-        pending = nil
+        future.removeAll();loadedMetadataStorage.removeAll()
+        pending = nil;pendingAfterMetadataStorage=nil
         depth = 0
         interactionToken = nil
         revision = UUID()
         savedRevision = revision
     }
 
-    func begin(_ name: String, document: CanvasDocument?, selection: UUID?) {
+    func begin(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil) {
         if depth == 0 {
+            pendingAfterMetadataStorage=afterMetadataStorage
             pending = Snapshot(document: document, activeLayerID: selection, revision: revision)
             pendingName = name
         }
@@ -85,7 +95,7 @@ final class DocumentHistory {
         guard depth > 0 else { return }
         depth -= 1
         guard depth == 0, let before = pending else { return }
-        pending = nil
+        pending = nil;pendingAfterMetadataStorage=nil
         // Selecting, navigating, and no-op edits must preserve redo history.
         guard before.document != document else { return }
         revision = UUID()
@@ -113,26 +123,148 @@ final class DocumentHistory {
 
     /// Bytes retained only by history, excluding images in the live document.
     func retainedBytes(current: CanvasDocument?) -> Int {
-        var seen = Set<ObjectIdentifier>()
-        for layer in current?.layers ?? [] {
-            for asset in [layer.asset, layer.mask?.asset].compactMap({ $0 }) {
-                seen.insert(ObjectIdentifier(asset.image))
-                seen.insert(ObjectIdentifier(asset.thumbnail))
+        // Pre-admit transient identity sets before they can grow. Walk source
+        // and history containers in-place: no past+future/compactMap projections
+        // are allocated merely to decide whether retained history must be trimmed.
+        var identifiers=0,overflowed=false
+        func add(_ n:Int) {
+            let value=identifiers.addingReportingOverflow(n)
+            if n<0 || value.overflow { overflowed=true } else { identifiers=value.partialValue }
+        }
+        func count(_ document:CanvasDocument?) {
+            if let owner=document?.metadataStorage { add(1);add(owner.payloadOwnerCount) }
+            for layer in document?.layers ?? [] {
+                if layer.asset != nil { add(2) };if layer.mask?.asset != nil { add(2) }
+                if let node=layer.liveSource { add(1);add(node.sampleComposites.count) }
             }
         }
-        var bytes = 0
-        for entry in past + future {
-            for snapshot in [entry.before, entry.after] {
-                for layer in snapshot.document?.layers ?? [] {
-                    for asset in [layer.asset, layer.mask?.asset].compactMap({ $0 }) {
-                        for image in [asset.image, asset.thumbnail] where seen.insert(ObjectIdentifier(image)).inserted {
-                            bytes += image.bytesPerRow * image.height
-                        }
-                    }
+        count(current)
+        for entry in past { count(entry.before.document);count(entry.after.document) }
+        for entry in future { count(entry.before.document);count(entry.after.document) }
+        guard !overflowed else { return Int.max }
+        let set=current?.metadataStorage?.workingSet ?? loadedMetadataStorage.first?.workingSet ?? .sourceGraphs
+        guard let allowance=try? LWSourceMetadataStorage.collectionBytes(count:identifiers,stride:MemoryLayout<ObjectIdentifier>.stride*3),
+            let observing=try? set.reserve(allowance) else { return exactRetainedBytesWithoutSets(current:current) }
+        defer { withExtendedLifetime(observing) {} }
+        var seen=Set<ObjectIdentifier>(),sourceOwners=Set<ObjectIdentifier>(),topologyOwners=Set<ObjectIdentifier>()
+        func assetIDs(_ asset:ImportedImage?) {
+            guard let asset else { return }
+            seen.insert(ObjectIdentifier(asset.image));seen.insert(ObjectIdentifier(asset.thumbnail))
+        }
+        func visitSourceOwners(_ node:LWLiveSourceNode?,_ visit:(LWSourceMetadataStorage)->Void) {
+            guard let node else { return }
+            if let owner=node.metadataStorage { visit(owner) }
+            for composite in node.sampleComposites { if let owner=composite.metadataStorage { visit(owner) } }
+        }
+        for layer in current?.layers ?? [] {
+            assetIDs(layer.asset);assetIDs(layer.mask?.asset)
+            visitSourceOwners(layer.liveSource) { sourceOwners.insert(ObjectIdentifier($0)) }
+        }
+        if let owner=current?.metadataStorage {
+            topologyOwners.insert(ObjectIdentifier(owner))
+            owner.forEachPayloadOwner { topologyOwners.insert(ObjectIdentifier($0)) }
+        }
+        var bytes=0
+        func charge(_ amount:Int) { let value=bytes.addingReportingOverflow(amount);bytes=value.overflow ? Int.max:value.partialValue }
+        func retainedAsset(_ asset:ImportedImage?) {
+            guard let asset else { return }
+            if seen.insert(ObjectIdentifier(asset.image)).inserted {
+                if let plane=asset.linearPlane { charge(plane.retainedMetadataBytes) }
+                else {
+                    let stored=asset.image.bytesPerRow.multipliedReportingOverflow(by:asset.image.height)
+                    charge(stored.overflow ? Int.max:stored.partialValue)
+                    if let linear=asset.linear { charge(linear.byteLength) }
                 }
             }
+            if seen.insert(ObjectIdentifier(asset.thumbnail)).inserted {
+                let stored=asset.thumbnail.bytesPerRow.multipliedReportingOverflow(by:asset.thumbnail.height)
+                charge(stored.overflow ? Int.max:stored.partialValue)
+            }
         }
+        func retainedDocument(_ document:CanvasDocument?) {
+            if let owner=document?.metadataStorage {
+                if topologyOwners.insert(ObjectIdentifier(owner)).inserted { charge(owner.capacity) }
+                owner.forEachPayloadOwner { root in
+                    if topologyOwners.insert(ObjectIdentifier(root)).inserted { charge(root.capacity) }
+                }
+            }
+            for layer in document?.layers ?? [] {
+                visitSourceOwners(layer.liveSource) { owner in
+                    if sourceOwners.insert(ObjectIdentifier(owner)).inserted { charge(owner.capacity) }
+                }
+                retainedAsset(layer.asset);retainedAsset(layer.mask?.asset)
+            }
+        }
+        for entry in past { retainedDocument(entry.before.document);retainedDocument(entry.after.document) }
+        for entry in future { retainedDocument(entry.before.document);retainedDocument(entry.after.document) }
         return bytes
+    }
+
+    /// A bookkeeping reservation refusal is not evidence that Undo exceeds its
+    /// retention cap. Under pressure use exact in-place prefix comparisons. This
+    /// allocates no identity set or history projection and never changes history.
+    /// The normal admitted path is linear; this bounded fallback is quadratic in
+    /// the retained reference count and needs actual performance qualification.
+    private func exactRetainedBytesWithoutSets(current:CanvasDocument?)->Int {
+        func appeared(kind:Int,id:ObjectIdentifier,before:Int)->Bool {
+            var found=false
+            _=forEachAccountingReference(current) { k,identity,_ in
+                if k==kind && identity==id { found=true;return false };return true
+            }
+            if found { return true }
+            var position=0
+            _=forEachHistoricalReference { k,identity,_ in
+                guard position<before else { return false };position+=1
+                if k==kind && identity==id { found=true;return false };return true
+            }
+            return found
+        }
+        var position=0,total=0
+        _=forEachHistoricalReference { kind,id,amount in
+            if !appeared(kind:kind,id:id,before:position) {
+                let sum=total.addingReportingOverflow(amount);total=sum.overflow ? Int.max:sum.partialValue
+            }
+            position+=1;return true
+        }
+        return total
+    }
+    private func forEachHistoricalReference(_ visit:(Int,ObjectIdentifier,Int)->Bool)->Bool {
+        for entry in past {
+            if !forEachAccountingReference(entry.before.document,visit) || !forEachAccountingReference(entry.after.document,visit) { return false }
+        }
+        for entry in future {
+            if !forEachAccountingReference(entry.before.document,visit) || !forEachAccountingReference(entry.after.document,visit) { return false }
+        }
+        return true
+    }
+    private func forEachAccountingReference(_ document:CanvasDocument?,_ visit:(Int,ObjectIdentifier,Int)->Bool)->Bool {
+        if let owner=document?.metadataStorage {
+            if !visit(2,ObjectIdentifier(owner),owner.capacity) { return false }
+            var continuing=true
+            owner.forEachPayloadOwner { payload in
+                if continuing { continuing=visit(2,ObjectIdentifier(payload),payload.capacity) }
+            }
+            if !continuing { return false }
+        }
+        func asset(_ value:ImportedImage?)->Bool {
+            guard let value else { return true }
+            let pixels=value.image.bytesPerRow.multipliedReportingOverflow(by:value.image.height)
+            let linear=(pixels.overflow ? Int.max:pixels.partialValue).addingReportingOverflow(value.linear?.byteLength ?? 0)
+            let amount=value.linearPlane?.retainedMetadataBytes ?? (linear.overflow ? Int.max:linear.partialValue)
+            if !visit(0,ObjectIdentifier(value.image),amount) { return false }
+            let thumbnail=value.thumbnail.bytesPerRow.multipliedReportingOverflow(by:value.thumbnail.height)
+            return visit(0,ObjectIdentifier(value.thumbnail),thumbnail.overflow ? Int.max:thumbnail.partialValue)
+        }
+        for layer in document?.layers ?? [] {
+            if let node=layer.liveSource {
+                if let owner=node.metadataStorage, !visit(1,ObjectIdentifier(owner),owner.capacity) { return false }
+                for composite in node.sampleComposites {
+                    if let owner=composite.metadataStorage, !visit(1,ObjectIdentifier(owner),owner.capacity) { return false }
+                }
+            }
+            if !asset(layer.asset) || !asset(layer.mask?.asset) { return false }
+        }
+        return true
     }
 
     private func trim(current: CanvasDocument?) {

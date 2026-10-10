@@ -143,7 +143,9 @@ extension EditorSession {
         default: name = LensWorksCommandRegistry.descriptor(admission.command.id).label
         }
         let ownsEdit = commandInteraction == nil && admission.command.id != .beginRename
-        if ownsEdit { beginEdit(name) }
+        var stringBytes=0
+        if case .rename(_,let value)=admission.command { stringBytes=try LWSourceMetadataStorage.product(value.utf8.count,2) }
+        if ownsEdit { guard beginEdit(name,additionalMetadataBytes:stringBytes) else { throw ProjectError.tooLarge } }
         switch admission.command {
         case .visibility(let ids, let value):
             for index in document!.layers.indices where ids.contains(document!.layers[index].id) {
@@ -168,7 +170,9 @@ extension EditorSession {
     @discardableResult func beginCommandInteraction(_ command: LensWorksLayerCommand) throws -> UUID {
         guard commandInteraction == nil, command.id == .opacity || command.id == .visibility else { throw LensWorksCommandRefusal(reason: "This command cannot begin another layer interaction.") }
         let admission = try admitCommand(command)
-        guard let token = history.beginInteraction(command.id == .visibility ? (command == .visibility(command.targets, false) ? "Hide Layer" : "Show Layer") : LensWorksCommandRegistry.descriptor(command.id).label, document: document, selection: activeLayerID) else { throw LensWorksCommandRefusal(reason: "Finish the current history transaction first.") }
+        let admittedDocument=try document?.admittingMetadataMutation()
+        guard let token = history.beginInteraction(command.id == .visibility ? (command == .visibility(command.targets, false) ? "Hide Layer" : "Show Layer") : LensWorksCommandRegistry.descriptor(command.id).label, document:document,selection:activeLayerID,afterMetadataStorage:admittedDocument?.metadataStorage) else { throw LensWorksCommandRefusal(reason:"Finish the current history transaction first.") }
+        document=admittedDocument
         commandInteraction = .init(token: token, commandID: command.id, starting: admission, expected: admission.document)
         return token
     }

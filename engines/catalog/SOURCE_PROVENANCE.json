@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "7afb00a2f1920046271d679c125de30d8fbfb6c4055b7343995ad024d633cecc",
+  "source_digest": "eb91671f30773cb475bff152d6b52709e948e5e4d5fa47fcb25e2e2ef76502bc",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -187,8 +187,8 @@
     {
       "path": "build.rs",
       "mode": "100644",
-      "bytes": 6073,
-      "sha256": "b39853419f8eabbbb47e46f8fe5cd45eff5a4e1035c27bbc9aee049aee0098dc"
+      "bytes": 8005,
+      "sha256": "0ef8843a8113dbaa08da6bd1f281431b7470fe5ab9740b7c5a4ee654a871b2a2"
     },
     {
       "path": "desktop/.gitignore",
@@ -1333,20 +1333,44 @@
     {
       "path": "native/decode.cpp",
       "mode": "100644",
-      "bytes": 14268,
-      "sha256": "86d7229c94bca251ce96e0987bac6407291cf38aaecd57c6281049f9acf23c74"
+      "bytes": 22676,
+      "sha256": "2b13d28f29a6d45c1ab18af30279b1eb2671f72ab5b7700380823b7ee5284153"
     },
     {
       "path": "native/decode.h",
       "mode": "100644",
-      "bytes": 666,
-      "sha256": "b24a7103adbcd80d14df949914ee3ce9268246a6f523b5189ac7c7cfe2205fd9"
+      "bytes": 1699,
+      "sha256": "03bcb46a0f36c63a4331aa5069591664e4dd448ca65133e0e8eef5c6b62c515d"
     },
     {
       "path": "native/dng.cpp",
       "mode": "100644",
-      "bytes": 12381,
-      "sha256": "48a38c981a05050623d293578c2cc1e97fcfe7640d68d942650a826e84fb7519"
+      "bytes": 14937,
+      "sha256": "fcca9cb7b6ce31a84b8499b3f69dffa07c0ca947f40ba5276d3e97c030b1ae89"
+    },
+    {
+      "path": "native/dng_stage_plane.h",
+      "mode": "100644",
+      "bytes": 7120,
+      "sha256": "24fd28971a1dac8eb8040c8e646e8c399aef719dde1614ec6d2d86479a1ac5bb"
+    },
+    {
+      "path": "native/dng_stage_plane_tests.cpp",
+      "mode": "100644",
+      "bytes": 4771,
+      "sha256": "622a2567df11811251acac4755fdb83349374ef556996681873e3061d8920c5b"
+    },
+    {
+      "path": "native/pc_dng_allocation.h",
+      "mode": "100644",
+      "bytes": 3714,
+      "sha256": "1d1d33a307fa2ce442425250cf50d86b87d2c983c8c5c1c2c477092a7484ffa9"
+    },
+    {
+      "path": "native/pc_private_file.h",
+      "mode": "100644",
+      "bytes": 8440,
+      "sha256": "5333fd0c93a8f3024fdfc21db00cbbea6fd23b5490b0fc42fb5b23a2ffd2b9ec"
     },
     {
       "path": "native/preview.cpp",
@@ -2977,8 +3001,8 @@
     {
       "path": "src/edit/mod.rs",
       "mode": "100644",
-      "bytes": 4434,
-      "sha256": "5b2dd2a4bc75b3c6179bd3b7b47aa335065948e3efd32f47530ac84c3239fe9c"
+      "bytes": 4509,
+      "sha256": "2590087bb6cdbbf07dbe896333e10bc104372457c65aefd064325ab7dd85a04c"
     },
     {
       "path": "src/edit/prepared.rs",
@@ -2995,8 +3019,8 @@
     {
       "path": "src/edit/render.rs",
       "mode": "100644",
-      "bytes": 29187,
-      "sha256": "e5f0396c0019acd14a9e6d627385e03ca9ab6428e4e83b4b65c813e695102baf"
+      "bytes": 35662,
+      "sha256": "4d02c21cdaa953d5dd5611e0b09905ef3890f9c26fe23579a09a1c85e7e4e660"
     },
     {
       "path": "src/export_service.rs",
@@ -3775,14 +3799,14 @@
     {
       "path": "src/media.rs",
       "mode": "100644",
-      "bytes": 10575,
-      "sha256": "abac91e21a68d6856a27fc2116a19b174c28b6eea89083bb6021553a987a11b0"
+      "bytes": 10772,
+      "sha256": "f317bb186ff611a7c4c0063bdb0e381b38b4ab4c5bc6138f948c7ead2bb86313"
     },
     {
       "path": "src/media/full.rs",
       "mode": "100644",
-      "bytes": 34040,
-      "sha256": "7645d7e594481f5e5813aa59e66ed815c2a790aed09118f4ecf203ef11315fee"
+      "bytes": 108633,
+      "sha256": "ad416b65f0b3b81a83029eb16bce97924d7eee7d86b9f1ef6580c5b4ee663a3b"
     },
     {
       "path": "src/media/psd.rs",

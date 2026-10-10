@@ -14,6 +14,7 @@ struct CameraRawControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             histogram
+            if session.filterEdit?.liveSource != nil { sourceWhiteBalance }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(Section.allCases) { section in
@@ -27,6 +28,35 @@ struct CameraRawControls: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear { installOptionMonitor() }
         .onDisappear { removeOptionMonitor() }
+    }
+
+    private var sourceWhiteBalance: some View {
+        VStack(alignment:.leading,spacing:6) {
+            Text("RAW Source White Balance").font(.headline)
+            Picker("Source white balance",selection:Binding(get:{
+                if let balance=session.filterEdit?.sourceWhiteBalance,case .asShot = balance { return true }; return false
+            },set:{ shot in
+                guard let edit=session.filterEdit else { return }
+                edit.sourceWhiteBalance = shot ? .asShot : .temperatureTint(kelvin:6500,tint:0)
+                session.updateFilter(edit.settings,preview:edit.preview)
+            })) {
+                Text("As Shot").tag(true);Text("Temperature / Tint").tag(false)
+            }
+            if let balance=session.filterEdit?.sourceWhiteBalance,case .temperatureTint(let kelvin,let tint) = balance {
+                HStack {
+                    TextField("Kelvin",value:Binding(get:{Double(kelvin)},set:{ value in
+                        guard value.isFinite,(2000...50000).contains(value),let edit=session.filterEdit else { return }
+                        edit.sourceWhiteBalance = .temperatureTint(kelvin:UInt32(value.rounded()),tint:tint)
+                        session.updateFilter(edit.settings,preview:edit.preview)
+                    }),format:.number)
+                    TextField("Source tint",value:Binding(get:{Double(tint)},set:{ value in
+                        guard value.isFinite,(-150...150).contains(value),let edit=session.filterEdit else { return }
+                        edit.sourceWhiteBalance = .temperatureTint(kelvin:kelvin,tint:Float(value))
+                        session.updateFilter(edit.settings,preview:edit.preview)
+                    }),format:.number)
+                }
+            }
+        }
     }
 
     private var histogram: some View {
