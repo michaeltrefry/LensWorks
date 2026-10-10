@@ -157,7 +157,7 @@ extension EditorSession {
         case .beginRename(let id): commandRenameAdmission = admission; renamingLayerID = id
         }
         if commandInteraction != nil { commandInteraction!.expected = document! }
-        if ownsEdit { endEdit(); requestCommandPersistence() }
+        if ownsEdit { endEdit() }
         commandRefusal = nil
         return document != admission.document
     }
@@ -177,7 +177,7 @@ extension EditorSession {
               interaction.expected == document, interaction.starting.document.id == document?.id,
               interaction.starting.selection == activeLayerID, interaction.starting.selected == selectedLayerIDs, interaction.starting.epoch == commandContextEpoch,
               history.endInteraction(token, document: document, selection: activeLayerID) else { throw LensWorksCommandRefusal(reason: "The layer interaction no longer owns this document transaction.") }
-        commandInteraction = nil; commandContextEpoch &+= 1; requestCommandPersistence()
+        commandInteraction = nil; commandContextEpoch &+= 1
     }
     /// Retire the exact current transaction while its starting selection/epoch still owns it.
     /// A late UI end/cancel carrying the retired token remains refused.
@@ -195,10 +195,6 @@ extension EditorSession {
         commandInteraction = nil; opacityEditLayerID = nil
         document = snapshot.document; activeLayerID = snapshot.activeLayerID
         selectedLayerIDs = interaction.starting.selected; commandContextEpoch &+= 1
-    }
-    func requestCommandPersistence() {
-        guard let snapshot = projectSnapshot() else { return }
-        commandPersistence?(snapshot, history.currentRevision)
     }
 }
 

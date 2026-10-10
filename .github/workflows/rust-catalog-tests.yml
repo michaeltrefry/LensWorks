@@ -1,0 +1,22 @@
+name: Rust catalog engine and adapter tests
+on: [push, pull_request]
+permissions: {contents: read}
+jobs:
+  cargo-test:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.build/rust-tests
+      CARGO_BUILD_JOBS: 4
+      MACOSX_DEPLOYMENT_TARGET: "26.2"
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - name: Fetch the pinned DNG SDK
+        run: |
+          python3 engines/catalog/scripts/fetch_dng_sdk.py --destination .build/deps
+          echo "PHOTOCATALOG_DNG_SDK=$PWD/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1" >> "$GITHUB_ENV"
+      - name: Engine tests
+        run: cargo test --manifest-path engines/catalog/Cargo.toml --locked
+      - name: Adapter tests (shared global state, so serial)
+        run: cargo test --manifest-path adapters/catalog/Cargo.toml --locked -- --test-threads=1

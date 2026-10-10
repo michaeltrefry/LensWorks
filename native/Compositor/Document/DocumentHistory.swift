@@ -10,7 +10,7 @@ final class DocumentHistory {
         let activeLayerID: UUID?
         let revision: UUID
     }
-    struct Entry {
+    private struct Entry {
         let name: String
         let before: Snapshot
         let after: Snapshot
@@ -23,12 +23,6 @@ final class DocumentHistory {
     private var pendingName = "Edit"
     private var depth = 0
     private var interactionToken: UUID?
-    struct Archive { let past: [Entry]; let future: [Entry]; let revision: UUID }
-    var archive: Archive { .init(past: past, future: future, revision: revision) }
-    func restoreArchive(_ archive: Archive, saved: Bool = true) {
-        past = archive.past; future = archive.future; revision = archive.revision
-        savedRevision = saved ? revision : nil; pending = nil; depth = 0; interactionToken = nil
-    }
     func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?) -> UUID? {
         guard depth == 0 else { return nil }
         let token = UUID(); interactionToken = token
@@ -58,7 +52,6 @@ final class DocumentHistory {
     var isModified: Bool { revision != savedRevision }
     var undoCount: Int { past.count }
     func markSaved() { savedRevision = revision }
-    func markUnsaved() { savedRevision = nil }
     /// The document as it stands, for a save that captures it now and finishes later.
     var currentRevision: UUID { revision }
     /// A save of `saved` finished. Edits made while it was writing leave the document modified; undoing back to it doesn't.

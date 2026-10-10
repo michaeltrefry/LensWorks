@@ -585,7 +585,6 @@ final class EditorSession {
     var commandRefusal: String?
     var commandContextEpoch: UInt64 = 0
     var commandRenameAdmission: LensWorksLayerAdmission?
-    @ObservationIgnored var commandPersistence: ((ProjectSnapshot, UUID) -> Void)?
     var blendPreview: (layerID: UUID, mode: LayerBlendMode)?
     @ObservationIgnored var refreshCanvasPreview: (() -> Void)?
     var isMaskSelected = false { didSet { if !isMaskSelected { viewsMaskAlone = false } } }
@@ -624,13 +623,11 @@ final class EditorSession {
         guard canUndo, let snapshot = history.undo() else { return }
         restore(snapshot)
         commandContextEpoch &+= 1
-        requestCommandPersistence()
     }
     func redo() {
         guard canRedo, let snapshot = history.redo() else { return }
         restore(snapshot)
         commandContextEpoch &+= 1
-        requestCommandPersistence()
     }
 
     private func restore(_ snapshot: DocumentHistory.Snapshot) {

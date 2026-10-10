@@ -56,11 +56,15 @@ class ProceduralS47FixtureTests(unittest.TestCase):
             self.assertEqual(one["parameters"], two["parameters"])
             self.assertEqual(len(one["photos"]), 8)
 
-    def test_different_seed_changes_at_least_one_photo_without_changing_the_contract_shape(self):
+    def test_different_seed_changes_every_photo_without_changing_the_contract_shape(self):
         with tempfile.TemporaryDirectory() as parent:
             first, second = Path(parent) / "first", Path(parent) / "second"
             one, two = s47.generate(first, 25317), s47.generate(second, 25318)
-            self.assertNotEqual(file_hashes(first), file_hashes(second))
+            a, b = file_hashes(first), file_hashes(second)
+            self.assertEqual(a.keys(), b.keys())
+            self.assertEqual(len(a), 8)
+            for name in a:
+                self.assertNotEqual(a[name], b[name], name)
             self.assertEqual([entry["kind"] for entry in one["photos"]], [entry["kind"] for entry in two["photos"]])
 
     def test_manifest_declares_license_free_bracket_panorama_and_optional_catalog_launch_target(self):

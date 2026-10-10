@@ -324,12 +324,8 @@ extension CompositorUITests {
     private struct S38Package {
         let manifest: NSDictionary
         let source: NSDictionary
-        let history: NSDictionary
-        let stateRecords: NSDictionary
         let imageHashes: [String: String]
         var layerID: String { manifest["activeLayerID"] as! String }
-        var past: [[String: Any]] { history["past"] as! [[String: Any]] }
-        var future: [[String: Any]] { history["future"] as! [[String: Any]] }
         var layer: [String: Any] { (manifest["layers"] as! [[String: Any]]).first { $0["id"] as? String == layerID }! }
         var opacity: Double { (layer["opacity"] as? NSNumber)?.doubleValue ?? 1 }
         var visible: Bool { (layer["isVisible"] as! NSNumber).boolValue }
@@ -352,64 +348,29 @@ extension CompositorUITests {
     private func s38ReadPackage(_ url: URL) throws -> S38Package {
         let manifest = try s38Object(url.appendingPathComponent("manifest.json"))
         let source = try s38Object(url.appendingPathComponent("LensWorks.json"))
-        let historyRoot = url.appendingPathComponent("History")
-        let history = try s38Object(historyRoot.appendingPathComponent("index.json"))
-        guard (manifest["version"] as? NSNumber)?.intValue == 13,
+        guard (manifest["version"] as? NSNumber)?.intValue == 12,
               let document = manifest["documentID"] as? String, UUID(uuidString: document) != nil,
               let active = manifest["activeLayerID"] as? String, UUID(uuidString: active) != nil,
               let layers = manifest["layers"] as? [[String: Any]], layers.count == 1,
               layers[0]["id"] as? String == active, layers[0]["isVisible"] is NSNumber,
-              let working = manifest["workingVersionID"] as? String, working == source["id"] as? String,
-              (history["version"] as? NSNumber)?.intValue == 1,
-              let revision = history["revision"] as? String, UUID(uuidString: revision) != nil,
-              let past = history["past"] as? [[String: Any]], let future = history["future"] as? [[String: Any]],
-              (past + future).allSatisfy({ $0["name"] is String && $0["before"] is NSNumber && $0["after"] is NSNumber }),
-              let states = history["states"] as? [String] else { throw NSError(domain: "LensWorks.S38", code: 2) }
-        let stateRecords = NSMutableDictionary()
-        for name in states {
-            guard URL(fileURLWithPath: name).lastPathComponent == name, name.hasSuffix(".json") else { throw NSError(domain: "LensWorks.S38", code: 3) }
-            stateRecords[name] = try s38Object(historyRoot.appendingPathComponent("states").appendingPathComponent(name))
-        }
-        guard let declaredAssets = history["assets"] as? [String],
-              Set(declaredAssets).count == declaredAssets.count,
-              declaredAssets.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && URL(fileURLWithPath: $0).lastPathComponent == $0 }) else { throw NSError(domain: "LensWorks.S38", code: 4) }
+              let working = manifest["workingVersionID"] as? String, working == source["id"] as? String else { throw NSError(domain: "LensWorks.S38", code: 2) }
         var images: [String: String] = [:]
         let imagesRoot = url.appendingPathComponent("images")
-        let assetsRoot = historyRoot.appendingPathComponent("assets")
-        var folders = [imagesRoot]
-        if FileManager.default.fileExists(atPath: assetsRoot.path) { folders.append(assetsRoot) }
-        else if !declaredAssets.isEmpty { throw NSError(domain: "LensWorks.S38", code: 4) }
-        for folder in folders {
-            for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey]) {
-                guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw NSError(domain: "LensWorks.S38", code: 4) }
-                images[folder.lastPathComponent + "/" + file.lastPathComponent] = try s47SHA256(file)
-            }
+        for file in try FileManager.default.contentsOfDirectory(at: imagesRoot, includingPropertiesForKeys: [.isRegularFileKey]) {
+            guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw NSError(domain: "LensWorks.S38", code: 4) }
+            images["images/" + file.lastPathComponent] = try s47SHA256(file)
         }
-        guard Set(images.keys.filter { $0.hasPrefix("assets/") }.map { String($0.dropFirst(7)) }) == Set(declaredAssets) else { throw NSError(domain: "LensWorks.S38", code: 4) }
-        var available = Set(declaredAssets)
-        for layer in layers {
-            let id = try XCTUnwrap(layer["id"] as? String)
-            for (field, prefix) in [("imageFile", "current-image:"), ("maskFile", "current-mask:")] {
-                if let name = layer[field] as? String {
-                    guard !name.isEmpty, name != ".", name != "..", URL(fileURLWithPath: name).lastPathComponent == name,
-                          images["images/" + name] != nil else { throw NSError(domain: "LensWorks.S38", code: 4) }
-                    available.insert(prefix + id)
-                }
-            }
-        }
-        var referenced = Set<String>()
-        for name in states {
-            let record = try XCTUnwrap(stateRecords[name] as? NSDictionary)
-            for field in ["images", "masks"] {
-                guard let refs = record[field] as? [String], refs.count.isMultiple(of: 2) else { throw NSError(domain: "LensWorks.S38", code: 4) }
-                for index in stride(from: 0, to: refs.count, by: 2) {
-                    guard UUID(uuidString: refs[index]) != nil, available.contains(refs[index + 1]) else { throw NSError(domain: "LensWorks.S38", code: 4) }
-                    referenced.insert(refs[index + 1])
-                }
-            }
-        }
-        guard Set(declaredAssets).isSubset(of: referenced) else { throw NSError(domain: "LensWorks.S38", code: 4) }
-        return S38Package(manifest: manifest, source: source, history: history, stateRecords: stateRecords, imageHashes: images)
+        return S38Package(manifest: manifest, source: source, imageHashes: images)
+    }
+    /// The enabled Undo/Redo item titles of the public Edit menu: the observable session history.
+    @MainActor
+    private func s38History(_ context: S38UIContext) -> [String] {
+        let edit = context.app.menuBars.menuBarItems["Edit"]
+        XCTAssertTrue(edit.exists); edit.click()
+        let items = edit.menuItems.matching(NSPredicate(format: "title BEGINSWITH 'Undo' OR title BEGINSWITH 'Redo'"))
+        let titles = (0..<items.count).map { items.element(boundBy: $0) }.filter(\.isEnabled).map(\.title)
+        context.app.typeKey(.escape, modifierFlags: [])
+        return titles
     }
     @MainActor
     private func s38Open(run: Int) throws -> S38UIContext {
@@ -493,7 +454,7 @@ extension CompositorUITests {
         }
         XCTAssertEqual(after.manifest, expected, "Only the admitted field of the same native layer may change")
         XCTAssertEqual(after.source, before.source, "Full working-version source, native path, VariantKey and identity must remain unchanged")
-        XCTAssertEqual(after.imageHashes, before.imageHashes, "Every native current/history image backing must retain whole bytes")
+        XCTAssertEqual(after.imageHashes, before.imageHashes, "Every native image backing must retain whole bytes")
     }
     @MainActor
     private func s38Finish(_ context: S38UIContext, expected: S38Package) throws {
@@ -502,11 +463,10 @@ extension CompositorUITests {
         context.app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(context.app.wait(for: .notRunning, timeout: 15))
         let terminal = try s38ReadPackage(context.project)
-        XCTAssertEqual(terminal.manifest, expected.manifest); XCTAssertEqual(terminal.history, expected.history)
-        XCTAssertEqual(terminal.stateRecords, expected.stateRecords); XCTAssertEqual(terminal.source, expected.source)
+        XCTAssertEqual(terminal.manifest, expected.manifest); XCTAssertEqual(terminal.source, expected.source)
         XCTAssertEqual(terminal.imageHashes, expected.imageHashes)
         XCTAssertEqual(try s47FixtureHashes(context.fixture), context.originals)
-        let evidence: [String: Any] = ["schema": "lensworks.s38.native-ui-package.v1", "project": context.project.path, "manifest": terminal.manifest, "workingSource": terminal.source, "history": terminal.history, "historyStates": terminal.stateRecords, "wholeImageHashes": terminal.imageHashes, "originalHashes": context.originals]
+        let evidence: [String: Any] = ["schema": "lensworks.s38.native-ui-package.v2", "project": context.project.path, "manifest": terminal.manifest, "workingSource": terminal.source, "wholeImageHashes": terminal.imageHashes, "originalHashes": context.originals]
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
         attachment.name = "S38 native terminal package " + context.project.lastPathComponent
         attachment.lifetime = .keepAlways; add(attachment)
@@ -555,20 +515,21 @@ extension CompositorUITests {
         layerMenu.click()
         let hide = layerMenu.menuItems["Hide Layer"]
         XCTAssertTrue(hide.exists && hide.isEnabled); XCTAssertEqual(hide.title, "Hide Layer"); hide.click()
-        let hidden = try s38Saved(context) { !$0.visible && $0.past.count == baseline.past.count + 1 }
+        let hidden = try s38Saved(context) { !$0.visible }
         s38Conserved(baseline, hidden, field: "isVisible", value: false)
-        XCTAssertEqual(hidden.past.last?["name"] as? String, "Hide Layer")
+        XCTAssertTrue(s38History(context).contains("Undo Hide Layer"))
         s38Choose("Undo Hide Layer", menu: "Edit", in: context)
-        let undone = try s38Saved(context) { $0.visible && $0.past.count == baseline.past.count }
-        s38Conserved(baseline, undone); XCTAssertEqual(undone.future.last?["name"] as? String, "Hide Layer")
+        let undone = try s38Saved(context) { $0.visible }
+        s38Conserved(baseline, undone); XCTAssertTrue(s38History(context).contains("Redo Hide Layer"))
         context.editor.buttons["fitCanvas"].click()
         try s38TypeShortcut(chord, on: context.app)
-        let shortcutHidden = try s38Saved(context) { !$0.visible && $0.past.count == baseline.past.count + 1 }
+        let shortcutHidden = try s38Saved(context) { !$0.visible }
         s38Conserved(baseline, shortcutHidden, field: "isVisible", value: false)
-        XCTAssertEqual(shortcutHidden.past.last?["name"] as? String, "Hide Layer")
-        XCTAssertEqual(shortcutHidden.future.count, 0)
+        let afterShortcut = s38History(context)
+        XCTAssertTrue(afterShortcut.contains("Undo Hide Layer"))
+        XCTAssertFalse(afterShortcut.contains { $0.hasPrefix("Redo") }, "The shortcut records a new step, replacing the redo")
         s38Choose("Undo Hide Layer", menu: "Edit", in: context)
-        let final = try s38Saved(context) { $0.visible && $0.past.count == baseline.past.count }
+        let final = try s38Saved(context) { $0.visible }
         s38Conserved(baseline, final); try s38Finish(context, expected: final)
     }
     @MainActor
@@ -579,29 +540,33 @@ extension CompositorUITests {
         XCTAssertTrue(percent.exists && percent.isEnabled); percent.click()
         for value in ["99", "98", "97"] { percent.typeKey(.downArrow, modifierFlags: []); XCTAssertEqual(percent.value as? String, value) }
         percent.typeKey(.return, modifierFlags: [])
-        let burst = try s38Saved(context) { $0.opacity == 0.97 && $0.past.count == baseline.past.count + 1 }
+        let burst = try s38Saved(context) { $0.opacity == 0.97 }
         s38Conserved(baseline, burst, field: "opacity", value: 0.97)
-        XCTAssertEqual(burst.past.last?["name"] as? String, "Layer Opacity")
+        XCTAssertTrue(s38History(context).contains("Undo Layer Opacity"))
+        // One Undo reverts the whole burst to its starting value.
         s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
-        let starting = try s38Saved(context) { $0.opacity == 1 && $0.past.count == baseline.past.count }
-        s38Conserved(baseline, starting); XCTAssertEqual(starting.future.last?["name"] as? String, "Layer Opacity")
+        let starting = try s38Saved(context) { $0.opacity == 1 }
+        s38Conserved(baseline, starting)
+        let startingHistory = s38History(context)
+        XCTAssertTrue(startingHistory.contains("Redo Layer Opacity"))
         percent.click()
         for value in ["99", "98", "97"] { percent.typeKey(.downArrow, modifierFlags: []); XCTAssertEqual(percent.value as? String, value) }
         percent.typeKey(.escape, modifierFlags: []); XCTAssertEqual(percent.value as? String, "100")
-        let cancelled = try s38Saved(context) { $0.opacity == 1 && $0.history.isEqual(starting.history) }
-        s38Conserved(starting, cancelled); XCTAssertEqual(cancelled.history, starting.history)
-        XCTAssertEqual(cancelled.stateRecords, starting.stateRecords)
+        // Cancel restores the starting value and records nothing: the redo step survives.
+        let cancelled = try s38Saved(context) { $0.opacity == 1 }
+        s38Conserved(starting, cancelled); XCTAssertEqual(s38History(context), startingHistory)
         s38Choose("Redo Layer Opacity", menu: "Edit", in: context)
-        let redone = try s38Saved(context) { $0.opacity == 0.97 && $0.past.count == baseline.past.count + 1 }
+        let redone = try s38Saved(context) { $0.opacity == 0.97 }
         s38Conserved(baseline, redone, field: "opacity", value: 0.97)
         s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
-        let final = try s38Saved(context) { $0.opacity == 1 && $0.past.count == baseline.past.count }
+        let final = try s38Saved(context) { $0.opacity == 1 }
         s38Conserved(baseline, final); try s38Finish(context, expected: final)
     }
     @MainActor
     func testS38DisabledRegisteredLayerMenuDisplaysTransformReason() throws {
         let context = try s38Open(run: 3)
         let baseline = try s38Saved(context) { $0.visible && $0.opacity == 1 }
+        let baselineHistory = s38History(context)
         s38Choose("Transform Layer", menu: "Layer", in: context)
         XCTAssertTrue(context.editor.buttons["Apply"].waitForExistence(timeout: 10))
         let layerMenu = context.app.menuBars.menuBarItems["Layer"]
@@ -617,9 +582,9 @@ extension CompositorUITests {
         let restored = layerMenu.menuItems["Hide Layer"]
         XCTAssertTrue(restored.exists && restored.isEnabled); XCTAssertEqual(restored.title, "Hide Layer")
         context.app.typeKey(.escape, modifierFlags: [])
-        let final = try s38Saved(context) { $0.history.isEqual(baseline.history) }
-        s38Conserved(baseline, final); XCTAssertEqual(final.history, baseline.history)
-        XCTAssertEqual(final.stateRecords, baseline.stateRecords); try s38Finish(context, expected: final)
+        let final = try s38Saved(context) { $0.visible && $0.opacity == 1 }
+        s38Conserved(baseline, final); XCTAssertEqual(s38History(context), baselineHistory)
+        try s38Finish(context, expected: final)
     }
 
     @MainActor

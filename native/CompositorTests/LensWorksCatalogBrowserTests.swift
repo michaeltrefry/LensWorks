@@ -1579,6 +1579,98 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
+    /// S04 AC3: on a 100,000-photo catalog, scrolling, selection (including shift-range
+    /// across pages) and the catalog -> editor/filmstrip transition only ever hold one
+    /// bounded page of rows; nothing materializes the whole catalog.
+    @Test func largeSyntheticCatalogNavigationSelectionAndEditorTransitionStayWindowed() async throws {
+        let photos = 100_000, pageRows = 100
+        let fixture = try Fixture(images: 1)
+        try fixture.prepareSyntheticCatalog(count: photos)
+        try await fixture.run(create: false) { model in
+            @MainActor func checkWindow() {
+                #expect(model.assets.count <= pageRows)
+                #expect(Set(model.assets.map(\.id)).count == model.assets.count)
+                #expect(model.selection.count <= pageRows)
+                #expect(model.cursorHistoryCount <= LensWorksCursorWindow.capacity)
+            }
+            #expect(model.assets.count == pageRows && model.hasMore)
+            checkWindow()
+
+            // Scroll 150 pages (15,000 photos) deep. Every page is a fresh bounded fetch
+            // that continues strictly after the previous one.
+            var firstIDs: [Int64: String] = [0: try #require(model.assets.first?.id)]
+            var lastSequence = try #require(model.assets.last?.sequence)
+            let started = ContinuousClock.now
+            for page in 1...150 {
+                #expect(await model.nextPage())
+                checkWindow()
+                #expect(model.assets.count == pageRows)
+                let first = try #require(model.assets.first)
+                #expect(first.sequence > lastSequence)
+                lastSequence = try #require(model.assets.last?.sequence)
+                firstIDs[Int64(page)] = first.id
+            }
+            let deepScroll = ContinuousClock.now - started
+            #expect(deepScroll < .seconds(120), "150 windowed pages took \(deepScroll)")
+            // Scrolling back re-fetches exactly the earlier windows.
+            for page in stride(from: 149, through: 140, by: -1) {
+                #expect(await model.previousPage())
+                checkWindow()
+                #expect(model.assets.first?.id == firstIDs[Int64(page)])
+            }
+
+            // Shift-range selection spanning four pages stays disk-backed; only the
+            // visible page is projected into memory.
+            let anchor = model.assets[10]
+            await model.select(anchor)
+            #expect(model.selectionCount == 1)
+            for _ in 0..<3 { #expect(await model.nextPage()) }
+            await model.select(model.assets[20], range: true)
+            #expect(model.error == nil)
+            #expect(model.selectionCount == Int64((pageRows - 10) + 2 * pageRows + 21))
+            #expect(model.selection.count == 21)
+            checkWindow()
+            await model.clearSelection()
+            #expect(model.selectionCount == 0)
+
+            // Keyboard navigation across a page boundary fetches only the next window.
+            await model.select(try #require(model.assets.last))
+            let beforeBoundary = model.pageAuthority.ordinal
+            await model.moveSelection(1, range: false)
+            #expect(model.pageAuthority.ordinal == beforeBoundary + 1)
+            #expect(model.selectedPhotoID == model.assets.first?.id)
+            checkWindow()
+
+            // Catalog -> editor transition on the one real photo (newest sequence) keeps the
+            // grid/filmstrip window unchanged and never re-fetches or widens it.
+            try await fixture.importPhotos(model)
+            await model.setBrowseOrder(sort: .Sequence, direction: .Descending)
+            let real = try #require(model.assets.first)
+            #expect(real.filename.hasSuffix("Photo-0000.png"))
+            checkWindow()
+            await model.select(real)
+            let output = fixture.root.appendingPathComponent("Versions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            let page = model.pageAuthority, rows = model.assets.map(\.id)
+            let workspace = ProjectWorkspace()
+            await model.createWorkingVersion(workspace: workspace)
+            #expect(model.error == nil && !model.showingCatalog)
+            #expect(workspace.current.session.document != nil)
+            #expect(model.pageAuthority == page && model.assets.map(\.id) == rows)
+            // Filmstrip selection inside the editor moves within the same window.
+            await model.moveSelection(1, range: false)
+            #expect(model.selectedPhotoID == rows[1] && model.pageAuthority == page)
+            model.showingCatalog = true
+            #expect(model.pageAuthority == page && model.assets.map(\.id) == rows)
+            checkWindow()
+
+            #expect(model.rowsHighWater <= pageRows)
+            let previews = await model.service.previewMetrics()
+            #expect(previews.cacheEntriesHighWater <= LensWorksPreviewStore.maximumEntries)
+        }
+    }
+
     @Test func indexedVersionsAndSelectionRemainPagedAndRecoverCorruptRecord() async throws {
         let fixture = try Fixture(images: 1)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -1742,9 +1834,25 @@ struct LensWorksCatalogBrowserTests {
             guard CGImageDestinationFinalize(destination) else { throw LensWorksCatalogError.message("Fixture PNG encoding failed.") }
             return data as Data
         }
-        func run(catalogService: LensWorksCatalogService? = nil, _ body: (LensWorksCatalog) async throws -> Void) async throws {
+        /// Seeds `catalog` with the engine's official synthetic organization fixture
+        /// (organization_probe prepare): normalized catalog rows, no image files.
+        func prepareSyntheticCatalog(count: Int) throws {
+            let environment = ProcessInfo.processInfo.environment
+            let worker = try #require(environment["LW_CATALOG_TEST_WORKER"])
+            let probe = environment["LW_CATALOG_TEST_ORGANIZATION_PROBE"]
+                ?? URL(fileURLWithPath: worker).deletingLastPathComponent().appendingPathComponent("organization_probe").path
+            guard FileManager.default.isExecutableFile(atPath: probe) else {
+                throw LensWorksCatalogError.message("organization_probe is required next to LW_CATALOG_TEST_WORKER or via LW_CATALOG_TEST_ORGANIZATION_PROBE: \(probe)")
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: probe)
+            process.arguments = ["--catalog", catalog.path, "--output", root.appendingPathComponent("synthetic-prepare.json").path, "prepare", "--count", String(count)]
+            try process.run(); process.waitUntilExit()
+            guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("organization_probe prepare exited \(process.terminationStatus)") }
+        }
+        func run(create: Bool = true, catalogService: LensWorksCatalogService? = nil, _ body: (LensWorksCatalog) async throws -> Void) async throws {
             let model = LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false, catalogService: catalogService)
-            await model.connect(catalog.path, create: true)
+            await model.connect(catalog.path, create: create)
             do {
                 if let error = model.error { throw LensWorksCatalogError.message(error) }
                 try await body(model)

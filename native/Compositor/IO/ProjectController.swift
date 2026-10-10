@@ -14,91 +14,7 @@ final class ProjectController {
     var canStart: Bool {
         session.canStartProjectOperation && workspace?.isManaging != true
     }
-    init(session: EditorSession) {
-        self.session = session
-        session.commandPersistence = { [weak self] snapshot, revision in self?.enqueueCommandSave(snapshot, revision: revision) }
-    }
-    private struct CommandSave {
-        let snapshot: ProjectSnapshot
-        let revision: UUID
-        let destination: URL?
-        let workingVersion: LensWorksWorkingVersion?
-    }
-    private var pendingCommandSave: CommandSave?
-    private var commandWriting: Task<Bool, Never>?
-    private var failedCommandSave: CommandSave?
-    private(set) var commandRecoveryURL: URL?
-    /// One current write and one coalesced immutable snapshot; no unbounded task queue.
-    private func enqueueCommandSave(_ snapshot: ProjectSnapshot, revision: UUID) {
-        pendingCommandSave = .init(snapshot: snapshot, revision: revision, destination: session.projectURL, workingVersion: workingVersion)
-        guard commandWriting == nil else { return }
-        commandWriting = Task { @MainActor [self] in
-            var successful = true
-            while let saved = pendingCommandSave {
-                pendingCommandSave = nil
-                if let writing { _ = await writing.value }
-                do {
-                    let destination: URL
-                    if let existing = saved.destination { destination = existing }
-                    else {
-                        let drafts = try Self.commandRecoveryDirectory(create: true)
-                        destination = drafts.appendingPathComponent(saved.snapshot.manifest.documentID.uuidString + ".comp")
-                    }
-                    let scoped = destination.startAccessingSecurityScopedResource()
-                    defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
-                    externalChanges.saving = true
-                    defer { externalChanges.saving = false }
-                    let quickLook = await ImageExporter.shared.quickLookImages(saved.snapshot)
-                    try await ProjectStore.shared.save(saved.snapshot, to: destination, quickLook: quickLook, workingVersion: saved.workingVersion, recovery: saved.destination == nil)
-                    if saved.destination == nil { commandRecoveryURL = destination }
-                    if session.document?.id == saved.snapshot.manifest.documentID, session.projectURL == saved.destination {
-                        if saved.destination != nil {
-                            session.history.markSaved(saved.revision)
-                            await rememberProjectDigest(for: destination)
-                            watchProject(at: destination)
-                            if saved.workingVersion != nil { _ = try await LensWorksCatalogIndex.shared.register(destination) }
-                        }
-                        session.commandRefusal = nil
-                    }
-                    failedCommandSave = nil
-                } catch {
-                    failedCommandSave = saved; successful = false
-                    session.commandRefusal = "Command autosave failed: " + error.localizedDescription
-                }
-            }
-            commandWriting = nil
-            return successful
-        }
-    }
-    /// Retry the retained failed snapshot only when the caller explicitly requests it.
-    func retryCommandSave() {
-        guard let saved = failedCommandSave, session.document?.id == saved.snapshot.manifest.documentID,
-              session.projectURL == saved.destination, session.history.currentRevision == saved.revision,
-              workingVersion?.id == saved.workingVersion?.id else { return }
-        enqueueCommandSave(saved.snapshot, revision: saved.revision)
-    }
-
-    private static func commandRecoveryDirectory(create: Bool) throws -> URL {
-        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: create)
-        let directory = base.appendingPathComponent("LensWorks/RecoverableDrafts", isDirectory: true).standardizedFileURL
-        guard directory.resolvingSymlinksInPath().path == directory.path else { throw ProjectError.invalid }
-        if create { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
-        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard values.isDirectory == true, values.isSymbolicLink != true,
-              directory.resolvingSymlinksInPath().path == directory.path else { throw ProjectError.invalid }
-        return directory
-    }
-    /// Both the validated package identity and the managed physical recovery root are required.
-    static func isCommandRecovery(_ snapshot: ProjectSnapshot, source: URL) throws -> Bool {
-        guard let identity = snapshot.manifest.recoveryDocumentID else { return false }
-        let canonical = source.standardizedFileURL, directory = try commandRecoveryDirectory(create: false)
-        let values = try canonical.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard identity == snapshot.manifest.documentID, snapshot.workingVersion == nil,
-              canonical.path == canonical.resolvingSymlinksInPath().path, values.isDirectory == true, values.isSymbolicLink != true,
-              canonical.deletingLastPathComponent().path == directory.path,
-              canonical.lastPathComponent == identity.uuidString + ".comp" else { throw ProjectError.invalid }
-        return true
-    }
+    init(session: EditorSession) { self.session = session }
 
     private func begin() -> Bool {
         guard session.canStartProjectOperation else { return false }
@@ -124,10 +40,7 @@ final class ProjectController {
 
     /// The save still writing, if any. Close, quit and replacing the document wait for it.
     private var writing: Task<Bool, Never>?
-    func finishWriting() async {
-        if let commandWriting { _ = await commandWriting.value }
-        if let writing { _ = await writing.value }
-    }
+    func finishWriting() async { if let writing { _ = await writing.value } }
 
     func exportPNG() async {
         guard session.document != nil, begin() else { return }
@@ -328,7 +241,6 @@ final class ProjectController {
                     UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion")
                 }
                 session.projectURL = destination
-                commandRecoveryURL = nil
                 session.history.markSaved(revision)
                 saveGeneration += 1
                 RecentProjects.shared.note(destination)
@@ -381,7 +293,6 @@ final class ProjectController {
         do {
             // Validate first. A corrupt project never discards the live document.
             var snapshot = try await ProjectStore.shared.load(from: source)
-            _ = try Self.isCommandRecovery(snapshot, source: source)
             let previousSave = saveGeneration
             guard await confirmReplacement() else { return false }
             // Saving in the confirmation can replace the very file being opened.
@@ -389,16 +300,11 @@ final class ProjectController {
                session.projectURL?.resolvingSymlinksInPath() == source.resolvingSymlinksInPath() {
                 snapshot = try await ProjectStore.shared.load(from: source)
             }
-            let recovery = try Self.isCommandRecovery(snapshot, source: source)
             session.installProject(snapshot, from: source)
             workingVersion = snapshot.workingVersion
-            commandRecoveryURL = recovery ? source : nil
-            if recovery { stopWatchingProject() }
-            else {
-                RecentProjects.shared.note(source)
-                await rememberProjectDigest(for: source)
-                watchProject(at: source)
-            }
+            RecentProjects.shared.note(source)
+            await rememberProjectDigest(for: source)
+            watchProject(at: source)
             return true
         } catch {
             await showError("Couldn’t open the project", error: error)
