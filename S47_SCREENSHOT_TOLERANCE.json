@@ -11,35 +11,29 @@
   "result": {
     "calibration": {
       "actual_independent_review": {
-        "path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-actual-independent-r7/review.json",
         "sha256": "8fda5223da190fccddac1dc4da10d94ed551a82376c65b6664e3ebcc901b282a"
       },
       "observedPairs": 1,
       "publication": {
-        "path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-root-r7/report-publication.json",
         "sha256": "0f27463fa828bde1f3f656a4c6e02696978e26876c2968340c4a74bf96315708"
       },
       "raw_status": "MEASURED_NOT_ACCEPTED",
       "report": {
-        "path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-report-r7/calibration-report.json",
         "sha256": "ff31edd7ee7fe1f4ecdacffbc884203844e59c1e8e8020ab221ffb42e2931d91"
       },
       "runs": [
         {
-          "domain_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/BA3EBCAA-3935-4B81-B6E5-8D65300D2671.json",
           "domain_sha256": "6ffbbdcb5b05f03e6f2052cba4be41723fd86c0c14d67a9a6738dd466f1bf13f",
-          "png_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/D55A6C04-895A-423A-99D3-86AF6F11A451.png",
           "png_sha256": "92d09948c2974e8634e496301e39108209bc606e768746fa69b152f255aeb848",
           "root_visual_review": "LensWorks editor visibly present; harbor canvas/layer/catalog/filmstrip and correct run-specific Demo catalog visible"
         },
         {
-          "domain_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/D5F13A4B-02FC-4779-8A5A-A62CAD7F371C.json",
           "domain_sha256": "40e96ff2630b5d885571fa3027cdd31b718952c85725239f395c4d5616892684",
-          "png_path": "/Users/michael/Repos/LensWorks/.build/catalog-v11-s47-ui-calibration-attachments-r7/5E5363E9-ED8A-4A72-96AA-8170A99D182F.png",
           "png_sha256": "8232b32b59e05bf6b11c5eb995dd133122066cc3c9e6f4f3e05a99d1dbc5f936",
           "root_visual_review": "LensWorks editor visibly present; harbor canvas/layer/catalog/filmstrip and correct run-specific Demo catalog visible"
         }
-      ]
+      ],
+      "evidence_location": "Calibration files were host-local build outputs and are not in the repository; only their SHA-256 digests are retained as provenance."
     },
     "derivation": {
       "changedPixels": 665,
@@ -47,7 +41,8 @@
       "maximumChangedPixelFraction": "Exact665/1729728 changed-pixel ratio, no rounding increase or added margin",
       "maximumChannelDelta": "Exact observed maximum, no added margin",
       "totalPixels": 1729728,
-      "width": 1728
+      "width": 1728,
+      "changedPixelLocation": "All 665 changed pixels lay in the window's top-left chrome (x 81-292, y 15-133 of 1728x1001): the project tab title, which showed each run's UUID-named working version, and the sidebar catalog name, which differed per run (Demo-1/Demo-2). The current tour saves the working version as single-harbor and names both catalogs Demo.catalog, launches with fixed scrollers, no caret blink and no window animations, and captures only after two identical consecutive frames. These limits predate that change and must be re-measured with two fresh tours before they are tightened."
     },
     "maximumChangedPixelFraction": 0.0003844535094535095,
     "maximumChannelDelta": 191,

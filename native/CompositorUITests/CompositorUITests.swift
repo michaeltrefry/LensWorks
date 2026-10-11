@@ -201,6 +201,20 @@ extension CompositorUITests {
         return hashes
     }
 
+    /// Captures the window only once two consecutive frames are identical, so a press, hover
+    /// or scroller transition still in flight is never frozen into the comparison.
+    @MainActor
+    private func s47QuiescentScreenshot(_ window: XCUIElement) throws -> XCUIScreenshot {
+        var previous = window.screenshot()
+        for _ in 0..<20 {
+            Thread.sleep(forTimeInterval: 0.25)
+            let next = window.screenshot()
+            if try S47ScreenshotComparator.normalizedRGBA8(next).bytes == S47ScreenshotComparator.normalizedRGBA8(previous).bytes { return next }
+            previous = next
+        }
+        throw NSError(domain: "LensWorks.S47", code: 16, userInfo: [NSLocalizedDescriptionKey: "The editor window never settled on a stable frame to capture."])
+    }
+
     @MainActor
     private func runS47Tour(run: Int, fixture: URL, worker: String, decode: String, configuration: String) throws -> S47TourCapture {
         let before = try s47FixtureHashes(fixture)
@@ -223,6 +237,10 @@ extension CompositorUITests {
         app.launchEnvironment["LW_CATALOG_TEST_WORKER"] = worker
         app.launchEnvironment["LW_CATALOG_TEST_DECODE_WORKER"] = decode
         app.launchArguments = ["--lensworks-catalog", catalog.path, "--lensworks-create-catalog", "--lensworks-import", fixture.appendingPathComponent("photos").path, "--lensworks-output", output.path]
+            // Freeze the time-dependent chrome both tours would otherwise capture at different
+            // phases: overlay scrollers that fade out, a blinking insertion point and window animations.
+            + ["-AppleShowScrollBars", "Always", "-NSTextInsertionPointBlinkPeriodOn", "1000000000", "-NSTextInsertionPointBlinkPeriodOff", "0",
+               "-NSAutomaticWindowAnimationsEnabled", "NO"]
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30), "tour \(run) must activate its owned UI window")
@@ -297,7 +315,7 @@ extension CompositorUITests {
         XCTAssertTrue(fit.waitForExistence(timeout: 10) && fit.isEnabled, "tour \(run) must reach an enabled editor state")
         fit.click()
         let frame = editorWindow.frame
-        let screenshot = editorWindow.screenshot()
+        let screenshot = try s47QuiescentScreenshot(editorWindow)
         let image = try S47ScreenshotComparator.normalizedRGBA8(screenshot)
         try S47ScreenshotComparator.requireWindowGeometry(pixelWidth: image.width, pixelHeight: image.height, frame: frame)
         XCTAssertEqual(editorWindow.frame, frame, "tour \(run) must retain the capture receiver's window geometry")
