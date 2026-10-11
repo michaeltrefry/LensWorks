@@ -80,6 +80,7 @@ struct ExternalChangeTests {
         let native = try LWCatalogNativePath(fileURL: relinked)
         controller.relinkOriginal(path: relinked.path, native: native)
         #expect(controller.workingVersion?.id == version.id && controller.workingVersion?.originalPath == relinked.path)
+        #expect(controller.workingVersion?.originalNativePath == native)
         try await renameFirstLayerOnDisk(url, to: "Renamed elsewhere")
         #expect(await eventually { controller.externalChanges.reloadCount == 1 })
         #expect(controller.session.document?.layers.first?.name == "Renamed elsewhere")

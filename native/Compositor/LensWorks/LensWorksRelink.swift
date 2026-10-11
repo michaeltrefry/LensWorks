@@ -25,7 +25,8 @@ nonisolated enum LensWorksOriginalAvailability {
     /// The explanation shown on every control that needs the full-resolution original.
     static func reason(_ status: LWCatalogStorageStorageStatus) -> String? {
         guard !isAvailable(status) else { return nil }
-        return headline(status) + ": " + status.detail + ". Browsing and organizing use retained previews; reconnect the drive or use Locate Original… to relink it."
+        let detail = status.detail.hasSuffix(".") ? String(status.detail.dropLast()) : status.detail
+        return headline(status) + ": " + detail + ". Browsing and organizing use retained previews; reconnect the drive or use Locate Original… to relink it."
     }
 }
 
