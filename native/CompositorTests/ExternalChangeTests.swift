@@ -42,7 +42,8 @@ struct ExternalChangeTests {
             effects: layer.effects, text: layer.text)
         snapshot = ProjectSnapshot(manifest: ProjectManifest(resolution: snapshot.manifest.resolution, documentID: snapshot.manifest.documentID,
             width: snapshot.manifest.width, height: snapshot.manifest.height, activeLayerID: snapshot.manifest.activeLayerID,
-            layers: [layer] + snapshot.manifest.layers.dropFirst(), guides: snapshot.manifest.guides), images: snapshot.images, masks: snapshot.masks)
+            layers: [layer] + snapshot.manifest.layers.dropFirst(), guides: snapshot.manifest.guides), images: snapshot.images, masks: snapshot.masks,
+            workingVersion: snapshot.workingVersion)
         try await ProjectStore.shared.save(snapshot, to: url)
     }
 
@@ -58,6 +59,35 @@ struct ExternalChangeTests {
     }
 
     private func settle() async { try? await Task.sleep(for: .milliseconds(900)) }
+
+    /// A catalog relink re-points an open working version at its original's new location. A reload of
+    /// the package written elsewhere (still recording the old location) keeps the relinked location,
+    /// so the Save As/export guard keeps protecting the original where it now is.
+    @Test func relinkedOriginalSurvivesReloadOfPackageWrittenElsewhere() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = EditorSession()
+        await session.importImages([try ImageImportTests().fixture(.png)])
+        let url = root.appendingPathComponent("Version.comp")
+        let relinked = root.appendingPathComponent("New Drive/photo.png")
+        try FileManager.default.createDirectory(at: relinked.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: try ImageImportTests().fixture(.png), to: relinked)
+        let version = LensWorksWorkingVersion(id: UUID(), photoID: "photo", catalogPath: root.appendingPathComponent("Demo.catalog").path,
+            originalPath: root.appendingPathComponent("Old Drive/photo.png").path, projectPath: url.path, name: "Version")
+        try await ProjectStore.shared.save(try #require(session.projectSnapshot()), to: url, workingVersion: version)
+        let controller = try await opened(url)
+        #expect(controller.workingVersion?.id == version.id)
+        let native = try LWCatalogNativePath(fileURL: relinked)
+        controller.relinkOriginal(path: relinked.path, native: native)
+        #expect(controller.workingVersion?.id == version.id && controller.workingVersion?.originalPath == relinked.path)
+        #expect(controller.workingVersion?.originalNativePath == native)
+        try await renameFirstLayerOnDisk(url, to: "Renamed elsewhere")
+        #expect(await eventually { controller.externalChanges.reloadCount == 1 })
+        #expect(controller.session.document?.layers.first?.name == "Renamed elsewhere")
+        let reloaded = try #require(controller.workingVersion)
+        #expect(reloaded.id == version.id && reloaded.originalPath == relinked.path && reloaded.originalNativePath == native)
+        #expect(throws: (any Error).self) { try reloaded.validateDestination(relinked) }
+    }
 
     @Test func digestFollowsContentNotMetadata() async throws {
         let root = try temporaryFolder()

@@ -7,7 +7,10 @@ final class ProjectController {
     let session: EditorSession
     weak var window: NSWindow?
     weak var workspace: ProjectWorkspace?
-    var workingVersion: LensWorksWorkingVersion?
+    var workingVersion: LensWorksWorkingVersion? { didSet { if workingVersion?.id != relinkedOriginal?.version { relinkedOriginal = nil } } }
+    /// The original location a catalog relink assigned to the open working version this session.
+    /// It is recorded by the next save and survives reloads of a package written elsewhere.
+    var relinkedOriginal: (version: UUID, path: String, native: LWCatalogNativePath?)?
     private var saveGeneration = 0
     /// Keeps the document in step with its package when something else writes it. See ProjectController+ExternalChanges.
     let externalChanges = ExternalChangeState()
@@ -36,6 +39,14 @@ final class ProjectController {
         session.isProjectBusy = false
         guard let prepared else { return false }
         return await write(prepared.snapshot, to: prepared.destination, revision: prepared.revision, workingVersion: prepared.workingVersion)
+    }
+
+    /// Points the open working version at its original's current (relinked) location. Identity,
+    /// photo, copy and project are unchanged; Save As and export guards use the new location.
+    func relinkOriginal(path: String, native: LWCatalogNativePath?) {
+        guard let version = workingVersion, version.originalPath != path || version.originalNativePath != native else { return }
+        workingVersion = version.relinked(originalPath: path, native: native)
+        relinkedOriginal = (version.id, path, native)
     }
 
     /// The save still writing, if any. Close, quit and replacing the document wait for it.

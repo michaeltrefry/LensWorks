@@ -82,7 +82,10 @@ extension ProjectController {
         guard let snapshot = try? await ProjectStore.shared.load(from: url) else { return }
         guard session.projectURL == url, session.document != nil else { return }
         session.reloadProject(snapshot)
-        workingVersion = snapshot.workingVersion
+        // A relink applied in this session outranks the location recorded in the package on disk.
+        if let relinked = relinkedOriginal, let loaded = snapshot.workingVersion, loaded.id == relinked.version {
+            workingVersion = loaded.relinked(originalPath: relinked.path, native: relinked.native)
+        } else { workingVersion = snapshot.workingVersion }
         // Remember the package as loaded, not as first seen: it may have changed again while a sheet was up.
         await rememberProjectDigest(for: url)
         externalChanges.reloadCount += 1

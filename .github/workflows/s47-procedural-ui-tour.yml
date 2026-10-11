@@ -34,7 +34,7 @@ jobs:
           test -x .build/rust-catalog/release/lensworks-decode-worker
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
-      - name: Run the 100k-photo, organization, command registry and S38 native tests
+      - name: Run the 100k-photo, organization, offline relink, command registry and S38 native tests
         timeout-minutes: 30
         env:
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
@@ -47,6 +47,20 @@ jobs:
           PHOTOCATALOG_DNG_SDK="$PWD/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1" CARGO_TARGET_DIR="$PWD/.build/rust-catalog" CARGO_BUILD_JOBS=4 MACOSX_DEPLOYMENT_TARGET=26.2 \
             cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin organization_probe
           test -x "$TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE"
+          # The S06 UI test opens a catalog whose source folder was disconnected (moved) after import;
+          # the sandboxed UI runner cannot move files, so the fixture owner prepares it here.
+          s06="$TEST_RUNNER_LW_S38_FIXTURE_ROOT/S06"
+          mkdir -p "$s06" && mkdir -m 700 "$s06/WorkingVersions"
+          cp -R "$TEST_RUNNER_LW_S38_FIXTURE_ROOT/photos" "$s06/Photos"
+          # Catalog preferences (last catalog, import checkpoint) go to a throwaway suite and the pinned window frame
+          # disables frame autosave, so this launch writes nothing to the app's own defaults domain.
+          suite="net.trefry.lensworks.ci-s06-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'defaults delete "$suite" >/dev/null 2>&1 || true; rm -f "$HOME/Library/Preferences/$suite.plist"' EXIT
+          .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/MacOS/LensWorks --lensworks-catalog "$s06/Demo.catalog" --lensworks-create-catalog \
+            --lensworks-import "$s06/Photos" --lensworks-evidence "$s06/import-evidence.json" --lensworks-defaults-suite "$suite" --lensworks-quit -ApplePersistenceIgnoreState YES \
+            -LensWorksPinnedWindowFrame '{{0, 0}, {1280, 800}}'
+          python3 -c 'import json, sys; e = json.load(open(sys.argv[1])); assert e["assetCount"] == 8 and not e["error"], e' "$s06/import-evidence.json"
+          mv "$s06/Photos" "$s06/Moved Photos"
           # Swift Testing results do not appear in XCTest's "Executed N tests"
           # line; the wrapper checks the bundle and fails unless every filter
           # below matched tests that passed, or on a refused UI automation mode.
@@ -56,11 +70,13 @@ jobs:
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationControlsApplyToSingleAndSelectedPhotosUndoAndPersistAcrossRestart()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationUndoIsExactSkipsLaterChangesAndRestoresPositions()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/keywordRenameMoveDeleteAndSynonymsFollowNestedKeywordsAndUndo()' \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/offlineSourceBrowsesOrganizesAndRelinksWithoutChangingIdentity()' \
             -only-testing:CompositorTests/CommandRegistryTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
             -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
-            -only-testing:CompositorUITests/CompositorUITests/testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo
+            -only-testing:CompositorUITests/CompositorUITests/testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo \
+            -only-testing:CompositorUITests/CompositorUITests/testS06OfflineSourceOrganizesAndFolderRelinkAppliesAndUndoes
       - name: Deliver the source-declared measured screenshot tolerance
         run: |
           python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance

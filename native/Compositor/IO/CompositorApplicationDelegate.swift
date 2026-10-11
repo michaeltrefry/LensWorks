@@ -10,7 +10,14 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     var session: EditorSession { workspace.current.session }
     var projects: ProjectController { workspace.current.controller }
     var showEditor: (() -> Void)?
-    let catalog = LensWorksCatalog()
+    let catalog = LensWorksCatalog(defaults: CompositorApplicationDelegate.catalogDefaults())
+    /// Automation (for example a CI fixture import) can keep catalog preferences out of the
+    /// app's own domain with `--lensworks-defaults-suite <name>`.
+    static func catalogDefaults(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> UserDefaults {
+        guard let index = arguments.firstIndex(of: "--lensworks-defaults-suite"), index + 1 < arguments.count,
+              !arguments[index + 1].isEmpty, let suite = UserDefaults(suiteName: arguments[index + 1]) else { return .standard }
+        return suite
+    }
     override init() {
         super.init()
         LensWorksLaunchTrace.record("delegate.initialized")

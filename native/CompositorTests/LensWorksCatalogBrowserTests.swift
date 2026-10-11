@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Darwin
 import CoreGraphics
 import ImageIO
@@ -93,6 +94,8 @@ struct LensWorksCatalogBrowserTests {
             try await fixture.importPhotos(model)
             let first = try #require(model.assets.first), second = try #require(model.assets.last)
             await model.select(first); try await model.loadCatalogVariants()
+            // Full-resolution commands are admitted only after the original is observed readable.
+            await model.observeSelectedOriginal()
             let before = try #require(model.currentCatalogVariant), key = before.key
             let held = try model.admitCommand(.recipe(.exposure(1)), expected: before)
             #expect(held.id == .exposure)
@@ -353,7 +356,7 @@ struct LensWorksCatalogBrowserTests {
             try await fixture.importPhotos(model)
             let first = try #require(model.assets.first), second = try #require(model.assets.last)
             let firstKey = try #require(first.key), secondKey = try #require(second.key)
-            await model.select(first); try await model.loadCatalogVariants()
+            await model.select(first); try await model.loadCatalogVariants(); await model.observeSelectedOriginal()
             let firstRecipe = try #require(model.currentCatalogVariant), secondRecipe = try await model.service.variant(secondKey)
             guard case .Identity(let firstIdentity) = try await model.service.organization(.Identity(key: firstKey)),
                   case .Identity(let secondIdentity) = try await model.service.organization(.Identity(key: secondKey)) else { throw LensWorksManagedError.protocolViolation("Expected two actual click target identities.") }
@@ -380,7 +383,7 @@ struct LensWorksCatalogBrowserTests {
         try await fixture.run { model in
             try await fixture.importPhotos(model)
             let first = try #require(model.assets.first), key = try #require(first.key)
-            await model.select(first); try await model.loadCatalogVariants()
+            await model.select(first); try await model.loadCatalogVariants(); await model.observeSelectedOriginal()
             let before = try #require(model.currentCatalogVariant)
             guard case .Identity(let metadata) = try await model.service.organization(.Identity(key: key)) else { throw LensWorksManagedError.protocolViolation("Expected actual click target metadata.") }
             let admission = try model.captureCatalogControl(rating ? .rating(3) : .recipe(.exposure(1)), expected: before)
@@ -2495,6 +2498,262 @@ struct LensWorksCatalogBrowserTests {
             try record.encoded().write(to: project.appendingPathComponent("LensWorks.json"))
             try JSONEncoder().encode(["workingVersionID": record.id.uuidString]).write(to: project.appendingPathComponent("manifest.json"))
             return project
+        }
+    }
+}
+
+// MARK: S06 offline originals and relinking
+extension LensWorksCatalogBrowserTests {
+    /// Every file under `root`, keyed by relative path, with its bytes.
+    private static func tree(_ root: URL) throws -> [String: Data] {
+        var result: [String: Data] = [:]
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return result }
+        for case let url as URL in walker where (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
+            result[String(url.path.dropFirst(root.path.count))] = try Data(contentsOf: url)
+        }
+        return result
+    }
+    @MainActor private static func path(_ url: URL) throws -> LWCatalogNativePath { try LWCatalogNativePath(fileURL: url) }
+    @MainActor private static func status(_ model: LensWorksCatalog, _ asset: LensWorksCatalogAsset) async throws -> LWCatalogStorageStorageStatus {
+        try #require(asset.key)
+        await model.select(asset)
+        await model.observeSelectedOriginal()
+        return try #require(model.originalStatus(asset), "original status for \(asset.filename)")
+    }
+
+    /// S06 AC1: with the source folder gone (unmount-like rename), browsing still decodes retained
+    /// previews, organization still writes, an existing working version still opens, and every
+    /// operation needing the full-resolution original is refused with its explanation.
+    /// AC2/AC3: relink reviews show match, mismatch and ambiguity; a mixed review is refused as a
+    /// whole; confirmed folder (recursive) and single-file relinks publish atomically and Undo in
+    /// one step; photo, copy, metadata and working-version identities survive; no file moves.
+    @Test func offlineSourceBrowsesOrganizesAndRelinksWithoutChangingIdentity() async throws {
+        let fixture = try Fixture(images: 4)
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            let masters = model.assets.filter { $0.key?.variant_id == "master" }
+            #expect(masters.count == 4)
+            let ids = masters.map(\.id).sorted()
+            @MainActor func row(_ id: String) throws -> LensWorksCatalogAsset { try #require(model.assets.first { $0.id == id && $0.key?.variant_id == "master" }) }
+            // A master recipe with both an Undo and a Redo step, to check both are gated offline.
+            await model.select(try row(ids[0]))
+            try await model.loadCatalogVariants()
+            _ = try await model.changeCatalogRecipe(.exposure(1))
+            _ = try await model.changeCatalogRecipe(.exposure(2))
+            _ = try await model.changeCatalogRecipe(.undo)
+            // Retained previews and full-resolution work exist while the source is online.
+            var retained: [String: Data] = [:]
+            for asset in masters { retained[asset.id] = try await model.thumbnail(asset).data }
+            let first = try row(ids[0])
+            #expect(LensWorksOriginalAvailability.isAvailable(try await Self.status(model, first)))
+            let output = fixture.root.appendingPathComponent("Versions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            let workspace = ProjectWorkspace()
+            await model.select(first)
+            await model.createWorkingVersion(workspace: workspace)
+            let version = try #require(workspace.current.controller.workingVersion)
+            #expect(model.error == nil)
+            // Saves register with the app's shared index; this fixture's private index discovers the folder.
+            await model.reconcileWorkingVersions()
+            await model.select(first)
+            #expect(model.selectedVersions.map(\.id) == [version.id])
+            try await model.loadCatalogVariants()
+            let copy = try await model.changeCatalogRecipe(.copy("Offline Copy"))
+            await model.select(try row(ids[0]))
+            #expect(LensWorksOriginalAvailability.isAvailable(try #require(model.originalStatus(try row(ids[0])))))
+
+            // Disconnect: the whole source tree disappears from its recorded location.
+            let online = try Self.tree(fixture.photos)
+            let moved = fixture.root.appendingPathComponent("Moved Photos")
+            try FileManager.default.moveItem(at: fixture.photos, to: moved)
+            defer { if !FileManager.default.fileExists(atPath: fixture.photos.path) { try? FileManager.default.moveItem(at: moved, to: fixture.photos) } }
+            // The cached observation still says "available"; Create Working Version observes afresh and refuses.
+            let tabsBefore = workspace.tabs.count
+            await model.createWorkingVersion(workspace: workspace)
+            #expect(model.error?.contains("Locate Original") == true && workspace.tabs.count == tabsBefore)
+            #expect(model.originalStatus(try row(ids[0])).map(LensWorksOriginalAvailability.isAvailable) == false)
+            model.error = nil
+            await model.refresh()
+            #expect(model.error == nil)
+            // Refresh forgets every cached observation: availability is unknown, so gated work is refused.
+            #expect(model.originalStatus(try row(ids[0])) == nil)
+            #expect(model.selectedOriginalUnavailableReason == LensWorksOriginalAvailability.checking)
+            // An observation that fails leaves availability unknown-with-error, never available.
+            await model.service.setOriginalObservationFixture { _ in throw LensWorksCatalogError.message("injected observation failure") }
+            await model.observeSelectedOriginal()
+            await model.service.setOriginalObservationFixture(nil)
+            #expect(model.originalStatus(try row(ids[0])) == nil)
+            let failed = try #require(model.selectedOriginalUnavailableReason)
+            #expect(failed.contains("could not be checked") && failed.contains("injected observation failure"))
+            try await model.loadCatalogVariants()
+            let unknownVariant = try #require(model.currentCatalogVariant)
+            #expect(model.catalogCommandAvailability(.recipe(.exposure(1)), expected: unknownVariant) == failed)
+            #expect(model.catalogCommandAvailability(.rating(3), expected: unknownVariant) == nil)
+            #expect(Set(model.assets.filter { $0.key?.variant_id == "master" }.map(\.id)) == Set(ids))
+            for id in ids { #expect(try await model.thumbnail(try row(id)).data == retained[id]) }
+
+            // Full-resolution work is refused with an explanation.
+            let offline = try await Self.status(model, try row(ids[0]))
+            #expect(!LensWorksOriginalAvailability.isAvailable(offline))
+            let reason = try #require(model.selectedOriginalUnavailableReason)
+            #expect(reason.contains("Locate Original"))
+            try await model.loadCatalogVariants()
+            let variant = try #require(model.currentCatalogVariant)
+            #expect(variant.can_undo && variant.can_redo)
+            #expect(model.catalogCommandAvailability(.recipe(.exposure(1)), expected: variant) == reason)
+            #expect(model.catalogCommandAvailability(.recipe(.undo), expected: variant) == reason)
+            #expect(model.catalogCommandAvailability(.recipe(.redo), expected: variant) == reason)
+            #expect(model.catalogCommandAvailability(.rating(3), expected: variant) == nil)
+            await #expect(throws: (any Error).self) { try await model.changeCatalogRecipe(.undo) }
+            await #expect(throws: (any Error).self) { try await model.changeCatalogRecipe(.redo) }
+            let unchangedRecipe = try await model.service.variant(variant.key)
+            #expect(unchangedRecipe.revision == variant.revision && unchangedRecipe.recipe_digest == variant.recipe_digest)
+            // A volume mount/unmount/rename forgets cached availability, so it is observed again.
+            #expect(model.originalStatus(try row(ids[0])) != nil)
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didUnmountNotification, object: NSWorkspace.shared)
+            for _ in 0..<200 where model.originalStatus(try row(ids[0])) != nil { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(model.originalStatus(try row(ids[0])) == nil)
+            #expect(model.selectedOriginalUnavailableReason == LensWorksOriginalAvailability.checking)
+            _ = try await Self.status(model, try row(ids[0]))
+            let tabs = workspace.tabs.count
+            await model.createWorkingVersion(workspace: workspace)
+            #expect(model.error == reason && workspace.tabs.count == tabs)
+            model.error = nil
+
+            // Organization keeps working offline.
+            try await model.organize(.rating(5))
+            try await model.createKeyword("Offline")
+            let keyword = try #require(model.keywords.first { $0.name == "Offline" })
+            try await model.organize(.addKeyword(keyword.path))
+            try await model.createGroup("Offline Picks")
+            try await model.setSelectedMembership(try model.group(named: "Offline Picks"))
+            try await model.organize(.flag(.Pick))
+            #expect(try row(ids[0]).rating == 5 && row(ids[0]).flag == "pick")
+            // A document carrying its own full-resolution layers still opens offline.
+            let reopened = ProjectWorkspace()
+            await model.select(try row(ids[0]))
+            await model.openVersion(version, workspace: reopened)
+            #expect(model.error == nil && reopened.current.controller.workingVersion?.id == version.id && reopened.current.session.document != nil)
+            // Document export uses the document's own layers, so PNG and JPEG export work offline.
+            let exportSnapshot = try #require(reopened.current.session.projectSnapshot())
+            let offlineVersion = reopened.current.controller.workingVersion
+            let png = fixture.root.appendingPathComponent("Offline Export.png"), jpeg = fixture.root.appendingPathComponent("Offline Export.jpg")
+            try await ImageExporter.shared.exportPNG(exportSnapshot, to: png, workingVersion: offlineVersion)
+            let raster = try await ImageExporter.shared.render(exportSnapshot)
+            try await ImageExporter.shared.write(try await ImageExporter.shared.jpeg(raster, options: JPEGOptions()).data, to: jpeg, workingVersion: offlineVersion)
+            for url in [png, jpeg] {
+                let image = try #require(CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+                #expect(image.width == exportSnapshot.manifest.width && image.height == exportSnapshot.manifest.height)
+            }
+            let review = model.relink
+
+            // Wrong bytes under the same names: every row is a mismatch and Apply is refused.
+            let wrong = fixture.root.appendingPathComponent("Wrong")
+            for (relative, data) in online {
+                let url = wrong.appendingPathComponent(relative)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try (data + Data("different".utf8)).write(to: url)
+            }
+            try await review.beginFolder(from: .Native(try Self.path(fixture.photos)), destinations: [try Self.path(wrong)])
+            #expect(review.plan?.state == "ready" && review.plan?.total.value == 4 && review.plan?.matched.value == 0)
+            #expect(review.items.count == 4 && review.items.allSatisfy { $0.status == "mismatch" })
+            #expect(review.applyUnavailableReason?.contains("no verified match") == true)
+            await #expect(throws: (any Error).self) { try await review.apply() }
+
+            // Two destinations holding the same bytes: each row is ambiguous until chosen explicitly.
+            let duplicate = fixture.root.appendingPathComponent("Duplicate")
+            try FileManager.default.copyItem(at: moved, to: duplicate)
+            try await review.beginFolder(from: .Native(try Self.path(fixture.photos)), destinations: [try Self.path(moved), try Self.path(duplicate)])
+            #expect(review.items.count == 4 && review.items.allSatisfy { $0.status == "ambiguous" && $0.candidates.filter { $0.status == .Matched }.count == 2 })
+            // Listed candidates are chosen per original and submitted together as one revision.
+            for ambiguous in review.items.prefix(2) {
+                let choice = try #require(ambiguous.candidates.first { LensWorksRelinkPaths.label($0.path).hasPrefix(moved.path) })
+                review.choose(assetID: ambiguous.asset_id, candidate: choice.path)
+            }
+            #expect(review.chosenCandidates.count == 2)
+            let ambiguousPlan = review.plan?.id
+            try await review.reviseChosen()
+            #expect(review.plan?.id != ambiguousPlan && review.chosenCandidates.isEmpty)
+            #expect(review.plan?.state == "ready" && review.plan?.matched.value == 2 && review.plan?.unresolved.value == 2)
+
+            // One wrong file among correct ones: the review is refused as a whole; nothing changes.
+            let mixed = fixture.root.appendingPathComponent("Mixed")
+            try FileManager.default.copyItem(at: moved, to: mixed)
+            let poisoned = try #require(online.keys.sorted().first)
+            try Data("not the original".utf8).write(to: mixed.appendingPathComponent(poisoned))
+            try await review.beginFolder(from: .Native(try Self.path(fixture.photos)), destinations: [try Self.path(mixed)])
+            #expect(review.plan?.matched.value == 3 && review.plan?.unresolved.value == 1)
+            await #expect(throws: (any Error).self) { try await review.apply() }
+            await model.relinkChanged()
+            for id in ids { #expect(!LensWorksOriginalAvailability.isAvailable(try await Self.status(model, try row(id)))) }
+
+            // The recursive folder relink: all four (two nested levels) match and apply atomically.
+            try await review.beginFolder(from: .Native(try Self.path(fixture.photos)), destinations: [try Self.path(moved)])
+            #expect(review.plan?.matched.value == 4 && review.plan?.unresolved.value == 0 && review.applyUnavailableReason == nil)
+            #expect(review.items.allSatisfy { $0.status == "matched" && $0.destination.map { LensWorksRelinkPaths.label($0).hasPrefix(moved.path) } == true })
+            #expect(reopened.current.controller.workingVersion?.originalPath == version.originalPath)
+            try await review.apply()
+            #expect(review.plan?.state == "applied" && review.lastApplied?.id == review.plan?.id)
+            // The already-open working version follows the relink without changing identity, and its
+            // Save As/export guard protects the relinked original.
+            let followed = try #require(reopened.current.controller.workingVersion)
+            #expect(followed.id == version.id && followed.photoID == version.photoID && followed.originalPath.hasPrefix(moved.path))
+            #expect(throws: (any Error).self) { try followed.validateDestination(URL(fileURLWithPath: followed.originalPath)) }
+            // Saving records the relinked location in the package's source record.
+            #expect(await reopened.current.controller.save())
+            let persisted = try #require(try LensWorksWorkingVersion.read(from: URL(fileURLWithPath: version.projectPath)))
+            #expect(persisted.id == version.id && persisted.photoID == version.photoID && persisted.originalPath == followed.originalPath)
+            #expect(Set(model.assets.filter { $0.key?.variant_id == "master" }.map(\.id)) == Set(ids))
+            for id in ids { #expect(LensWorksOriginalAvailability.isAvailable(try await Self.status(model, try row(id)))) }
+            // Identity, copies, organization and working versions survive the relink.
+            await model.select(try row(ids[0]))
+            #expect(try row(ids[0]).rating == 5 && row(ids[0]).flag == "pick")
+            let relinkedCopy = try await model.service.variant(copy.key)
+            #expect(relinkedCopy.label == copy.label && relinkedCopy.recipe_digest == copy.recipe_digest && relinkedCopy.revision == copy.revision)
+            try await model.setFilters(keyword: .some(try #require(model.keywords.first { $0.name == "Offline" })))
+            #expect(model.assets.filter { $0.key?.variant_id == "master" }.map(\.id) == [ids[0]])
+            try await model.clearFilters()
+            try await model.browse(collection: try model.group(named: "Offline Picks").id)
+            #expect(model.assets.map(\.id) == [ids[0]])
+            try await model.browse()
+            await model.select(try row(ids[0]))
+            #expect(model.selectedVersions.map(\.id) == [version.id])
+            let afterRelink = ProjectWorkspace()
+            await model.openVersion(version, workspace: afterRelink)
+            let relinkedVersion = try #require(afterRelink.current.controller.workingVersion)
+            #expect(model.error == nil && relinkedVersion.id == version.id && relinkedVersion.photoID == version.photoID)
+            #expect(relinkedVersion.originalPath.hasPrefix(moved.path))
+            try await model.loadCatalogVariants()
+            #expect(model.catalogCommandAvailability(.recipe(.exposure(1)), expected: try #require(model.currentCatalogVariant)) == nil)
+            // No source moved or changed, and nothing reappeared at the old location.
+            #expect(try Self.tree(moved) == online && !FileManager.default.fileExists(atPath: fixture.photos.path))
+            #expect(try Self.tree(duplicate) == online)
+
+            // One Undo step restores every previous association.
+            try await review.undo()
+            #expect(review.plan?.state != "applied" && review.lastApplied == nil)
+            #expect(reopened.current.controller.workingVersion?.originalPath == version.originalPath)
+            for id in ids { #expect(!LensWorksOriginalAvailability.isAvailable(try await Self.status(model, try row(id)))) }
+            #expect(try row(ids[0]).rating == 5)
+
+            // Individual relink: a wrong file is a mismatch; the right one relinks only that photo.
+            let single = try row(ids[1])
+            let relative = try #require(online.keys.first { $0.hasSuffix("/" + single.filename) })
+            try await review.beginOriginal(assetID: single.id, destinations: [try Self.path(wrong.appendingPathComponent(relative))])
+            #expect(review.items.map(\.status) == ["mismatch"] && review.applyUnavailableReason != nil)
+            try await review.beginOriginal(assetID: single.id, destinations: [try Self.path(moved.appendingPathComponent(relative))])
+            #expect(review.items.map(\.status) == ["matched"])
+            try await review.apply()
+            #expect(LensWorksOriginalAvailability.isAvailable(try await Self.status(model, try row(ids[1]))))
+            #expect(!LensWorksOriginalAvailability.isAvailable(try await Self.status(model, try row(ids[2]))))
+            try await review.loadPlans()
+            #expect(review.plans.count >= 6)
+            try await review.undo()
+            #expect(!LensWorksOriginalAvailability.isAvailable(try await Self.status(model, try row(ids[1]))))
+            #expect(try Self.tree(moved) == online)
+            #expect(try Self.tree(wrong).count == online.count)
+            try FileManager.default.moveItem(at: moved, to: fixture.photos)
         }
     }
 }
