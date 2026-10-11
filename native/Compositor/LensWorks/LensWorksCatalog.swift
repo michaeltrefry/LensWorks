@@ -817,6 +817,8 @@ final class LensWorksCatalog {
     private(set) var activeFolder: LWApplicationDtoFolder?
     private(set) var selectionCount: Int64 = 0
     private(set) var versionNext: String?
+    /// Only the latest working-version listing publishes; an earlier one finishing later would show a stale list.
+    @ObservationIgnored private var versionRefreshGeneration: UInt64 = 0
     private(set) var versionDiscoveryPending = false
     private(set) var versionsHighWater = 0
     private(set) var versionDiscoveryScanned = 0
@@ -2622,7 +2624,8 @@ final class LensWorksCatalog {
 
     func refreshVersions(after: String? = nil) async {
         guard !closingRequested else { return }
-        let epoch = catalogEpoch, selected = selectedAsset, output = outputDirectory, catalog = catalogPath
+        versionRefreshGeneration &+= 1
+        let epoch = catalogEpoch, selected = selectedAsset, output = outputDirectory, catalog = catalogPath, generation = versionRefreshGeneration
         do {
             if let output {
                 let discovery = try await index.discover(output)
@@ -2633,7 +2636,7 @@ final class LensWorksCatalog {
             guard catalogEpoch == epoch, outputDirectory == output, selectedAsset?.id == selected?.id else { return }
             guard let catalog, let selected else { versions = []; versionNext = nil; return }
             let page = try await index.versions(catalog: catalog, photo: selected.photoID, variant: selected.key?.variant_id ?? "master", after: after)
-            guard catalogEpoch == epoch, outputDirectory == output, selectedAsset?.id == selected.id else { return }
+            guard catalogEpoch == epoch, outputDirectory == output, selectedAsset?.id == selected.id, versionRefreshGeneration == generation else { return }
             versions = page.versions; versionNext = page.next; versionsHighWater = max(versionsHighWater, versions.count)
             if !page.errors.isEmpty { error = "Some working versions could not be read. Their files remain unchanged.\n" + page.errors.joined(separator: "\n") }
         } catch {

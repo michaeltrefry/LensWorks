@@ -82,7 +82,9 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
                     backdrop.ignoresMouseEvents = true
                     backdrop.setAccessibilityElement(false)
                     backdrop.setFrame(frame, display: false)
-                    backdrop.order(.below, relativeTo: window.windowNumber)
+                    // A child window stays right below the editor whenever the editor is ordered front again. Merely
+                    // ordered below once, another app's window coming forward could end up between the two.
+                    window.addChildWindow(backdrop, ordered: .below)
                     self.pinnedWindowBackdrop = backdrop
                 }
             }

@@ -258,16 +258,20 @@ final class ProjectController {
                     workingVersion = version
                     UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion")
                 }
+                // Register before publishing the URL: the catalog lists working versions again when the project URL
+                // changes, and a listing that reached the index before this registration would miss the saved version.
+                var registrationError: Error?
+                if savedVersion != nil {
+                    do { guard try await LensWorksCatalogIndex.shared.register(destination) else { throw LensWorksCatalogError.message("The saved package no longer contains its LensWorks source record.") } }
+                    catch { registrationError = error }
+                }
                 session.projectURL = destination
                 session.history.markSaved(revision)
                 saveGeneration += 1
                 RecentProjects.shared.note(destination)
                 await rememberProjectDigest(for: destination)
                 watchProject(at: destination)
-                if savedVersion != nil {
-                    do { guard try await LensWorksCatalogIndex.shared.register(destination) else { throw LensWorksCatalogError.message("The saved package no longer contains its LensWorks source record.") } }
-                    catch { await showError("The project was saved; its catalog registration needs reconciliation", error: error) }
-                }
+                if let registrationError { await showError("The project was saved; its catalog registration needs reconciliation", error: registrationError) }
                 return true
             } catch {
                 await showError("Couldn’t save the project", error: error)

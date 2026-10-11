@@ -150,6 +150,24 @@ struct ExternalChangeTests {
         #expect(controller.session.document?.layers.first?.name == "Renamed again")
     }
 
+    /// The watch re-arms by path for a while after every event. A change that lands while a re-arm is already
+    /// queued behind a busy main thread must still be reported, not dropped with the source it arrived on.
+    @Test func aChangeArrivingWhileTheWatchReArmsIsStillSeen() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try await savedProject(in: root)
+        let controller = try await opened(url)
+        try await renameFirstLayerOnDisk(url, to: "Renamed elsewhere")
+        #expect(await eventually { controller.externalChanges.reloadCount == 1 })
+        // Hold the main thread past a re-arm tick so it is queued first, then change the package before yielding.
+        Thread.sleep(forTimeInterval: 0.25)
+        let manifest = url.appendingPathComponent("manifest.json")
+        let text = try String(contentsOf: manifest, encoding: .utf8).replacingOccurrences(of: "Renamed elsewhere", with: "Renamed again")
+        try text.write(to: manifest, atomically: true, encoding: .utf8)
+        #expect(await eventually { controller.externalChanges.reloadCount == 2 })
+        #expect(controller.session.document?.layers.first?.name == "Renamed again")
+    }
+
     @Test func ourOwnSaveAndMetadataTouchesDoNotReload() async throws {
         let root = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: root) }

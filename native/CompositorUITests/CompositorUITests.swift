@@ -245,6 +245,18 @@ extension CompositorUITests {
         throw NSError(domain: "LensWorks.S47", code: 16, userInfo: [NSLocalizedDescriptionKey: "The editor window never settled on a stable frame to capture."])
     }
 
+    /// Types `text` over the field's contents, retyping while the field does not hold exactly that text. Synthesized
+    /// keystrokes on a shared host can be dropped, or interleaved with another source's; the field is read back,
+    /// never assumed, so a corrupted name or path cannot silently send the tour to the wrong destination.
+    @MainActor
+    private func s47Replace(_ field: XCUIElement, with text: String) {
+        for _ in 0..<3 {
+            field.typeKey("a", modifierFlags: .command)
+            field.typeText(text)
+            if field.value as? String == text { return }
+        }
+    }
+
     @MainActor
     private func runS47Tour(run: Int, fixture: URL, worker: String, decode: String, configuration: String) throws -> S47TourCapture {
         let before = try s47FixtureHashes(fixture)
@@ -327,8 +339,7 @@ extension CompositorUITests {
         XCTAssertTrue(goToSheet.waitForExistence(timeout: 10), "tour \(run) must admit the public Go to Folder sheet")
         let pathField = goToSheet.textFields["PathTextField"]
         XCTAssertTrue(pathField.exists && pathField.isEnabled)
-        pathField.typeKey("a", modifierFlags: .command)
-        pathField.typeText(output.path)
+        s47Replace(pathField, with: output.path)
         XCTAssertEqual(pathField.value as? String, output.path, "Go to Folder must contain this tour's exact owned destination")
         pathField.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(goToSheet.waitForNonExistence(timeout: 10), "tour \(run) must complete folder navigation before accessing Save As")
@@ -336,8 +347,8 @@ extension CompositorUITests {
         XCTAssertTrue(nameField.waitForExistence(timeout: 10))
         XCTAssertEqual(nameField.value as? String, createdProject.lastPathComponent, "Save As must name the current working project")
         nameField.click()
-        nameField.typeKey("a", modifierFlags: .command)
-        nameField.typeText(namedProject.lastPathComponent)
+        s47Replace(nameField, with: namedProject.lastPathComponent)
+        XCTAssertEqual(nameField.value as? String, namedProject.lastPathComponent, "Save As must contain the exact new working version name")
         saveSheet.buttons["Save"].click()
         let savedEditor = editorWindows.matching(NSPredicate(format: "title == %@", namedProject.deletingPathExtension().lastPathComponent)).firstMatch
         XCTAssertTrue(savedEditor.waitForExistence(timeout: 20), "tour \(run) must publish the exact saved editor title before capture")
@@ -363,6 +374,12 @@ extension CompositorUITests {
         let fit = editorWindow.buttons["fitCanvas"]
         XCTAssertTrue(fit.waitForExistence(timeout: 10) && fit.isEnabled, "tour \(run) must reach an enabled editor state")
         fit.click()
+        // Park the pointer off the window, where launch put it. Left on Fit, its delayed tooltip and hover highlight
+        // reach the window in one tour's capture and not the other's, depending only on how long the tour took.
+        let display = NSScreen.screens[0].frame, pinned = s47Placement.accessibilityFrame
+        let park = CGPoint(x: display.width - 2, y: display.height - 2)
+        XCTAssertFalse(pinned.contains(park), "tour \(run) needs primary-display room outside the pinned window to park the pointer")
+        editorWindow.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: park.x - pinned.minX, dy: park.y - pinned.minY)).hover()
         let frame = editorWindow.frame
         XCTAssertEqual(frame, s47Placement.accessibilityFrame, "tour \(run) must capture the editor window at its pinned primary-display frame")
         guard frame == s47Placement.accessibilityFrame else {

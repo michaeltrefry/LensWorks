@@ -26,7 +26,7 @@ struct TransformInspector: View {
                 // Shift flips the lock while dragging a handle, and the button shows it flipped.
                 Toggle(isOn: Binding(get: { session.locksTransformRatio != held.contains(.shift) },
                                      set: { session.locksTransformRatio = $0 != held.contains(.shift) })) { Image(systemName: "link") }
-                    .toggleStyle(.button).help("Lock aspect ratio. Hold Shift while dragging a handle to turn it the other way.")
+                    .toggleStyle(.button).frame(height: 24, alignment: .top).help("Lock aspect ratio. Hold Shift while dragging a handle to turn it the other way.")
                 TransformValueField(label: "Scale", suffix: "%", value: value.scalePercent(pixelSize: pixelSize), range: 0.1...30_000, finish: finish) { number in
                     change { value in
                         guard number > 0 else { return }
@@ -45,7 +45,9 @@ struct TransformInspector: View {
             // Numbers describe an ordinary transform; while distorted, the handles are the controls.
             }.disabled((!session.canTransform && session.transformEdit == nil) || session.transformEdit?.corners != nil)
                 .padding(.horizontal, 18)
-          }.scrollIndicators(.hidden)
+          // `.never`, not `.hidden`: with a mouse attached macOS shows a `.hidden` indicator anyway, and that scroller
+          // retiles the bar under the fields after they are laid out, leaving them at a layout-history-dependent offset.
+          }.scrollIndicators(.never)
           // Only an edit that waits for them — typed values, ⌘T, a distortion — has anything to cancel or apply. A
           // handle drag applies itself on release, and ghosted buttons after it read as the pixels being resampled,
           // which they never are. Left in place unseen, so Escape and Return still reach a drag in progress.
