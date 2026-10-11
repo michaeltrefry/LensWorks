@@ -129,7 +129,7 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
         let admittedRoot = try workingSet.reserve(2048), creationID = UUID()
         rootLease = admittedRoot; cleanupID = creationID
         self.workingSet = workingSet
-        let parent = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard let parent = FileManager.default.temporaryDirectory.physicalFileURL else { throw ProjectError.invalid }
         let parentChain = try LWFloatDirectoryChain(parent)
         try parentChain.check()
         let name = "LensWorks-Float-" + UUID().uuidString.lowercased()
@@ -327,7 +327,7 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
     }
     private func childKey(_ child: URL) throws -> String {
         guard !retired, child.deletingLastPathComponent() == directory,
-            child.standardizedFileURL == child, child.resolvingSymlinksInPath() == child,
+            child.hasNormalizedPath, child.isUnaliasedFilePath,
             let expected = children[child.lastPathComponent] else { throw ProjectError.invalid }
         try chain.check()
         var info = stat()

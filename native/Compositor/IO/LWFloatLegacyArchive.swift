@@ -8,7 +8,7 @@ import Darwin
 nonisolated enum LWFloatLegacyArchive {
     static func read(from file:URL,maximumFileBytes:Int,workspace:LWFloatWorkspace,
         makeBuilder:((Int,Int)throws->LWFloatPlane.Builder)? = nil)throws->LWFloatPlane {
-        guard file.isFileURL,file.standardizedFileURL == file,file.resolvingSymlinksInPath() == file,
+        guard file.isFileURL,file.hasNormalizedPath,file.isUnaliasedFilePath,
             maximumFileBytes > 24,maximumFileBytes <= LWSourceDeveloper.maximumResultBytes else { throw ProjectError.invalid }
         let parent=try LWFloatDirectoryChain(file.deletingLastPathComponent())
         let fd=openat(parent.fd,file.lastPathComponent,O_RDONLY|O_NOFOLLOW|O_CLOEXEC)

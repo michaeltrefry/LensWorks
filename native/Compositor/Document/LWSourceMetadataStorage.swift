@@ -123,7 +123,7 @@ nonisolated final class LWSourceOwnedData: @unchecked Sendable {
         return LWSourceOwnedData(data:data,owner:owner)
     }
     static func read(_ url:URL,maximumBytes:Int,workingSet:LWFloatWorkingSet = .sourceGraphs) throws -> LWSourceOwnedData {
-        guard url.isFileURL,url.standardizedFileURL==url,url.resolvingSymlinksInPath()==url,
+        guard url.isFileURL,url.hasNormalizedPath,url.isUnaliasedFilePath,
             maximumBytes>=0,maximumBytes<=LWFloatWorkingSet.maximumBytes else { throw ProjectError.invalid }
         let parent=try LWFloatDirectoryChain(url.deletingLastPathComponent())
         let fd=openat(parent.fd,url.lastPathComponent,O_RDONLY|O_NOFOLLOW|O_CLOEXEC)

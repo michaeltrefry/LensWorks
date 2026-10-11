@@ -402,7 +402,7 @@ nonisolated struct LWFloatPlane: Sendable {
                 guard fstat(chain.fd, &identity) == 0 else { throw ProjectError.invalid }
                 let key = "\(identity.st_dev):\(identity.st_ino)"
                 if let existing = registry.values[key]?.value {
-                    guard !requireEmpty, existing.directory == directory,
+                    guard !requireEmpty, existing.directory.physicalFileURL?.path == directory.physicalFileURL?.path,
                         workspace == nil || existing.workspace === workspace else { throw ProjectError.invalid }
                     try existing.checkDirectory(); try chain.check()
                     return existing
@@ -433,8 +433,8 @@ nonisolated struct LWFloatPlane: Sendable {
         func owned(by owner: LWFloatWorkspace) -> Bool { workspace === owner && !retired }
         func markRetired() { retired = true }
         private init(directory: URL, requireEmpty: Bool, workspace: LWFloatWorkspace? = nil) throws {
-            guard directory.isFileURL, directory.standardizedFileURL == directory,
-                directory.resolvingSymlinksInPath() == directory else { throw ProjectError.invalid }
+            guard directory.isFileURL, directory.hasNormalizedPath,
+                directory.isUnaliasedFilePath else { throw ProjectError.invalid }
             self.directory = directory
             self.workspace = workspace
             lifetime = try workspace?.retainChild(directory)
@@ -460,7 +460,7 @@ nonisolated struct LWFloatPlane: Sendable {
                 named.st_dev == held.st_dev, named.st_ino == held.st_ino,
                 (named.st_mode & S_IFMT) == S_IFDIR, named.st_uid == getuid(),
                 (named.st_mode & 0o777) == 0o700,
-                directory.resolvingSymlinksInPath() == directory else { throw ProjectError.invalid }
+                directory.isUnaliasedFilePath else { throw ProjectError.invalid }
         }
         func validateMembers(_ entries: [Entry]) throws {
             memberLock.lock(); defer { memberLock.unlock() }
@@ -542,6 +542,37 @@ nonisolated struct LWFloatPlane: Sendable {
     }
 }
 
+nonisolated extension URL {
+    /// The physical path, including the /private firmlink prefix Foundation's
+    /// resolvingSymlinksInPath drops. The managed decoder admits only physical originals.
+    var physicalFileURL: URL? {
+        guard isFileURL, let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return URL(fileURLWithPath: String(cString: resolved))
+    }
+    /// An absolute path without "." or ".." components (standardizedFileURL would
+    /// also drop the /private firmlink prefix, so it cannot be compared directly).
+    var hasNormalizedPath: Bool {
+        isFileURL && path.hasPrefix("/") && !path.split(separator: "/", omittingEmptySubsequences: false).dropFirst().contains { $0 == "." || $0 == ".." || $0.isEmpty }
+    }
+    /// No symbolic link anywhere in the path, other than the system /private
+    /// firmlink prefix (Foundation reports /var and /tmp without it). A missing
+    /// leaf is judged by its deepest existing ancestor.
+    var isUnaliasedFilePath: Bool {
+        guard isFileURL, path.hasPrefix("/") else { return false }
+        var existing = self, suffix: [String] = []
+        var physical = existing.physicalFileURL
+        while physical == nil {
+            guard errno == ENOENT, existing.path != "/" else { return false }
+            suffix.insert(existing.lastPathComponent, at: 0); existing.deleteLastPathComponent()
+            physical = existing.physicalFileURL
+        }
+        guard let physical else { return false }
+        let resolved = ([physical.path == "/" ? "" : physical.path] + suffix).joined(separator: "/")
+        return resolved == path || resolved == "/private" + path
+    }
+}
+
 /// Held real parent chain. Renaming a parent or substituting a link is detected,
 /// rather than trusting string canonicalization alone after the directory was opened.
 nonisolated final class LWFloatDirectoryChain: @unchecked Sendable {
@@ -551,7 +582,7 @@ nonisolated final class LWFloatDirectoryChain: @unchecked Sendable {
     var fd: Int32 { descriptors.last! }
     init(_ url: URL) throws {
         guard url.isFileURL, url.path.utf8.count < Int(PATH_MAX), url.path.hasPrefix("/"),
-            url.standardizedFileURL == url, url.resolvingSymlinksInPath() == url,
+            url.hasNormalizedPath, url.isUnaliasedFilePath,
             let physical = realpath(url.path, nil) else { throw ProjectError.invalid }
         let physicalPath = String(cString: physical); free(physical)
         // Foundation reports /var, /tmp and /etc without their /private firmlink
@@ -592,10 +623,22 @@ nonisolated final class LWFloatDirectoryChain: @unchecked Sendable {
         var held = stat()
         guard fstat(fd, &held) == 0, held.st_dev == identities.last!.st_dev,
             held.st_ino == identities.last!.st_ino, (held.st_mode & S_IFMT) == S_IFDIR else { throw ProjectError.invalid }
-        guard held.st_nlink == 0 else { return false }
         var named = stat(); errno = 0
-        guard fstatat(descriptors[descriptors.count - 2], names.last!, &named, AT_SYMLINK_NOFOLLOW) != 0,
-            errno == ENOENT else { throw ProjectError.invalid }
+        if fstatat(descriptors[descriptors.count - 2], names.last!, &named, AT_SYMLINK_NOFOLLOW) == 0 {
+            guard held.st_nlink != 0 else { throw ProjectError.invalid }
+            return false
+        }
+        guard errno == ENOENT else { throw ProjectError.invalid }
+        if held.st_nlink == 0 { return true }
+        // APFS keeps a removed directory's link count on its held descriptor, so
+        // ask the held inode itself: a deleted directory refuses new entries with
+        // ENOENT, while one merely renamed elsewhere stays uncertain.
+        let probe = ".lw-unlink-probe-" + UUID().uuidString.lowercased()
+        if mkdirat(fd, probe, 0o700) == 0 {
+            guard unlinkat(fd, probe, AT_REMOVEDIR) == 0 else { throw ProjectError.invalid }
+            return false
+        }
+        guard errno == ENOENT else { throw ProjectError.invalid }
         return true
     }
 

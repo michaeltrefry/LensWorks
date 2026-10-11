@@ -954,11 +954,18 @@ final class EditorSession {
                     return total + image.width * image.height
                 } ?? 0
                 if RawImporter.matches(url) {
-                    guard let size = RawImporter.pixelSize(url) else { throw ImageImportError.unreadable }
-                    guard size.width <= DocumentLimits.maxSide, size.height <= DocumentLimits.maxSide,
-                          size.width * size.height <= DocumentLimits.documentPixelBudget - usedPixels else { throw ImageImportError.tooLarge }
-                    let source = try LWCatalogNativePath(fileURL:url.resolvingSymlinksInPath())
+                    // ImageIO cannot size every RAW the managed decoder develops (floating-point
+                    // LinearRaw DNG, for one), so its answer is only an early refusal; the decoded
+                    // extent is checked against the same limits.
+                    func admit(_ width: Int, _ height: Int) throws {
+                        guard width <= DocumentLimits.maxSide, height <= DocumentLimits.maxSide,
+                              width * height <= DocumentLimits.documentPixelBudget - usedPixels else { throw ImageImportError.tooLarge }
+                    }
+                    if let size = RawImporter.pixelSize(url) { try admit(size.width, size.height) }
+                    guard let physical = url.physicalFileURL else { throw ImageImportError.unreadable }
+                    let source = try LWCatalogNativePath(fileURL:physical)
                     let (node, plane) = try await LWSourceDeveloper.shared.createPlane(original:source,rawHint:true)
+                    try admit(plane.width, plane.height)
                     try Task.checkCancellation()
                     let asset = try ImportedImage(plane:plane,name:url.deletingPathExtension().lastPathComponent)
                     insert(asset, centeredAt:point, liveSource:node)

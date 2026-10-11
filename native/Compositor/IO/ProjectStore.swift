@@ -130,7 +130,7 @@ actor ProjectStore {
                     reference == (try LWFloatPlaneArchive.reference(plane)) else { throw ProjectError.invalid }
                 try asset.validatePlaneRead()
                 let placeholder = FileWrapper(directoryWithFileWrappers: [:])
-                placeholder.fileAttributes = [FileAttributeKey.posixPermissions.rawValue: 0o700]
+                placeholder.fileAttributes = [FileAttributeKey.type.rawValue: FileAttributeType.typeDirectory.rawValue, FileAttributeKey.posixPermissions.rawValue: 0o700]
                 images[filename] = placeholder; planeAssets["images/" + filename] = plane
                 planeReferences["images/" + filename] = isMask ? layer.maskPlaneArchiveReference : layer.planeArchiveReference
                 continue
@@ -172,7 +172,7 @@ actor ProjectStore {
             var sources = sourceProjection.assets.mapValues { FileWrapper(regularFileWithContents: $0) }
             for (name, asset) in sourceProjection.planes {
                 guard let plane = asset.plane else { throw ProjectError.missingImage }
-                let placeholder = FileWrapper(directoryWithFileWrappers: [:]); placeholder.fileAttributes = [FileAttributeKey.posixPermissions.rawValue: 0o700]
+                let placeholder = FileWrapper(directoryWithFileWrappers: [:]); placeholder.fileAttributes = [FileAttributeKey.type.rawValue: FileAttributeType.typeDirectory.rawValue, FileAttributeKey.posixPermissions.rawValue: 0o700]
                 sources[name] = placeholder; planeAssets["Sources/" + name] = plane; planeReferences["Sources/" + name] = asset.reference
             }
             contents["Sources"] = FileWrapper(directoryWithFileWrappers: sources)
@@ -198,7 +198,7 @@ actor ProjectStore {
                     let staged = parent.appendingPathComponent(".LensWorks-" + UUID().uuidString + ".comp", isDirectory: true)
                     guard !FileManager.default.fileExists(atPath: staged.path) else { throw ProjectError.invalid }
                     defer { if FileManager.default.fileExists(atPath: staged.path) { try? FileManager.default.removeItem(at: staged) } }
-                    package.fileAttributes = [FileAttributeKey.posixPermissions.rawValue: 0o700]
+                    package.fileAttributes = [FileAttributeKey.type.rawValue: FileAttributeType.typeDirectory.rawValue, FileAttributeKey.posixPermissions.rawValue: 0o700]
                     try package.write(to: staged, options: .atomic, originalContentsURL: nil)
                     for filename in planeAssets.keys.sorted() {
                         let plane = planeAssets[filename]!

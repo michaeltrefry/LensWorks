@@ -456,7 +456,7 @@ final class FilterEdit {
 
     /// What the filter and its preview read: the full-size grid, and a copy no larger than `previewLimit` for
     /// everything but the filters that must be made at full size.
-    fileprivate static func prepared(kind: FilterKind, from source: CGImage, placed: LayerTransform) throws
+    static func prepared(kind: FilterKind, from source: CGImage, placed: LayerTransform) throws
         -> (mapping: CGAffineTransform, previewSource: CGImage, previewScale: CGFloat, previewMapping: CGAffineTransform) {
         let mapping = BrushRaster.pixelToDocument(placed, width: source.width, height: source.height)
         // Noise, grain and dither preview at full size: made on a smaller copy they would look coarser once enlarged.

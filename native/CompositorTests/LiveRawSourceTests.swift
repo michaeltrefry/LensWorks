@@ -88,7 +88,7 @@ import UniformTypeIdentifiers
         var source=try node(original:URL(fileURLWithPath:"/mathematical-reference.dng"),width:2,height:1)
         let coverage=try surface([SIMD4(0,0,0,0.25),SIMD4(0,0,0,0.75)]).packageData(maximumFileBytes:1024)
         source.selectedDevelopments=[.init(settings:CameraRawSettings(),whiteBalance:.asShot,seed:17,sourceCoverage:coverage)]
-        let original=manifest(source),packed=try LWSourcePackageArchive.externalize(original,maximumBytes:4096)
+        let original=manifest(source),packed=try LWSourcePackageArchive.externalize(original,maximumBytes:65536)
         #expect(packed.manifest.layers[0].liveSource == nil)
         #expect(packed.assets.values.contains(coverage))
         let hydrated=try LWSourcePackageArchive.hydrate(packed.manifest) { name,maximum in
@@ -101,7 +101,7 @@ import UniformTypeIdentifiers
         var source=try node(original:URL(fileURLWithPath:"/mathematical-reference.dng"),width:2,height:1)
         source.selectedDevelopments=[.init(settings:CameraRawSettings(),whiteBalance:.asShot,seed:0,
             sourceCoverage:try surface([SIMD4(0,0,0,1),SIMD4.zero]).packageData(maximumFileBytes:1024))]
-        let packed=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:4096)
+        let packed=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:65536)
         for target in packed.assets.keys {
             #expect(throws:Error.self) { try LWSourcePackageArchive.hydrate(packed.manifest) { name,_ in
                 var bytes=try #require(packed.assets[name]);if name == target { bytes[bytes.count-1] ^= 1 };return bytes
@@ -110,9 +110,9 @@ import UniformTypeIdentifiers
     }
     @Test func historySourceReferenceChangesWhenSemanticBackingChanges() throws {
         var source=try node(original:URL(fileURLWithPath:"/mathematical-reference.dng"),width:2,height:1)
-        let before=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:4096)
+        let before=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:65536)
         source.grainSeed=1 // Keep node UUID/revision deliberately unchanged: semantic corruption must still differ.
-        let after=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:4096)
+        let after=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:65536)
         #expect(before.manifest.layers[0].liveSourceFile != after.manifest.layers[0].liveSourceFile)
     }
     @Test func regularMappingAbsenceIsNotAnInvalidTransform() throws {
@@ -154,7 +154,7 @@ import UniformTypeIdentifiers
         // First RGB word: quiet NaN; header and byte extent remain otherwise valid.
         coverage.replaceSubrange(24..<28,with:[0,0,192,127])
         source.selectedDevelopments=[.init(settings:CameraRawSettings(),whiteBalance:.asShot,seed:0,sourceCoverage:coverage)]
-        #expect(throws:Error.self) { try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:4096) }
+        #expect(throws:Error.self) { try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:65536) }
     }
     private func temporaryProjectFolder() throws -> URL {
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent("LWLiveSourceTests-\(UUID())")

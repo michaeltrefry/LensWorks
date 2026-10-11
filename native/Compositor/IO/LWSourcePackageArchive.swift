@@ -94,6 +94,7 @@ nonisolated enum LWSourcePackageArchive {
             }
             for i in node.selectedDevelopments.indices {
                 let step=node.selectedDevelopments[i]
+                if step.sourceCoveragePlaneID == nil { _=try LWLinearSurface.packageExtent(step.sourceCoverage,maximumFileBytes:maximumBytes) }
                 selected.append(step.sourceCoveragePlaneID == nil ? try insert(step.sourceCoverage,suffix:".data") : nil)
                 node.selectedDevelopments[i] = .init(settings:step.settings,whiteBalance:step.whiteBalance,seed:step.seed,
                     sourceCoverage:Data(),sourceCoveragePlaneID:step.sourceCoveragePlaneID,coverageFrame:step.coverageFrame)

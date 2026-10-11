@@ -173,6 +173,12 @@ nonisolated extension LWLinearSurface {
         let width=Int(word(8,4)),height=Int(word(12,4))
         let count=try extent(width:width,height:height,maximumBytes:maximumFileBytes-24)
         guard word(16,8) == UInt64(count*16),data.count-24 == count*16 else { throw ProjectError.invalid }
+        // Every packaged sample is finite straight RGBA with alpha in 0...1.
+        for offset in stride(from:24,to:data.count,by:16) {
+            let pixel=SIMD4(Float(bitPattern:UInt32(word(offset,4))),Float(bitPattern:UInt32(word(offset+4,4))),
+                Float(bitPattern:UInt32(word(offset+8,4))),Float(bitPattern:UInt32(word(offset+12,4))))
+            guard pixel.x.isFinite,pixel.y.isFinite,pixel.z.isFinite,pixel.w.isFinite,(0...1).contains(pixel.w) else { throw ProjectError.invalid }
+        }
         return (width,height)
     }
 }

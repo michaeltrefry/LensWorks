@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "per_channel_max_abs": 0.001,
+  "compared": "Camera Raw preview of a live RAW layer vs. the full-resolution export development reduced to the same preview size; extended linear sRGB float RGBA, per channel",
+  "test": "native/CompositorTests/LiveRawAcceptanceTests.swift previewAndFullResolutionAgreeAndExportIsNotTheBrowsePreview"
+}

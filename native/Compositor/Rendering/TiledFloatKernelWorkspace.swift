@@ -170,8 +170,8 @@ nonisolated final class LWFloatDoubleRows {
         guard fileOwner == nil || fileOwner!.workingSet === workingSet else { throw ProjectError.invalid }
         let ownedLifetime = try fileOwner?.retainChild(directory)
         try LWFloatPlane.validateExtent(width: width, height: height)
-        guard directory.isFileURL, directory.standardizedFileURL == directory,
-            directory.resolvingSymlinksInPath() == directory else { throw ProjectError.invalid }
+        guard directory.isFileURL, directory.hasNormalizedPath,
+            directory.isUnaliasedFilePath else { throw ProjectError.invalid }
         let (bytes, overflow) = height.multipliedReportingOverflow(by: MemoryLayout<Identity>.stride)
         guard !overflow else { throw ProjectError.tooLarge }
         identityLease = try workingSet.reserve(bytes)
@@ -245,7 +245,7 @@ nonisolated final class LWFloatDoubleRows {
             named.st_dev == held.st_dev, named.st_ino == held.st_ino,
             named.st_uid == getuid(), (named.st_mode & S_IFMT) == S_IFDIR,
             (named.st_mode & 0o777) == 0o700,
-            directory.resolvingSymlinksInPath() == directory else { throw ProjectError.invalid }
+            directory.isUnaliasedFilePath else { throw ProjectError.invalid }
     }
     private static func digest(_ data: Data) -> SIMD4<UInt64> {
         let bytes = Array(SHA256.hash(data: data))
