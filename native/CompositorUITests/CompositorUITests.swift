@@ -626,6 +626,7 @@ extension CompositorUITests {
         expectSummary("★★★ · Pick")
         let undo = app.buttons["LensWorks.undoOrganization"], redo = app.buttons["LensWorks.redoOrganization"]
         undo.click(); expectSummary("★★★")
+        // An explicit 0 rating reads "Rating 0", so "" proves the rating is absent again.
         undo.click(); expectSummary("")
         XCTAssertFalse(undo.isEnabled)
         redo.click(); expectSummary("★★★")

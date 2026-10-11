@@ -48,12 +48,14 @@ jobs:
             cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin organization_probe
           test -x "$TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE"
           # Swift Testing results do not appear in XCTest's "Executed N tests"
-          # line; the wrapper counts the bundle and fails on zero executed tests
-          # or a refused UI automation mode.
+          # line; the wrapper checks the bundle and fails unless every filter
+          # below matched tests that passed, or on a refused UI automation mode.
           ./scripts/ci/xcodebuild_test.sh NativeTests.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/largeSyntheticCatalogNavigationSelectionAndEditorTransitionStayWindowed()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/largeSyntheticCatalogMetadataFilterKeywordAndCollectionQueriesStayWindowed()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationControlsApplyToSingleAndSelectedPhotosUndoAndPersistAcrossRestart()' \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationUndoIsExactSkipsLaterChangesAndRestoresPositions()' \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/keywordRenameMoveDeleteAndSynonymsFollowNestedKeywordsAndUndo()' \
             -only-testing:CompositorTests/CommandRegistryTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \

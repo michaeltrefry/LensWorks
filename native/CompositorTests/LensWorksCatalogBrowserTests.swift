@@ -1784,6 +1784,215 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
+    /// S05 AC1/AC3: undo restores the exact prior state. An unrated photo returns to no
+    /// rating (it never matches the "Unrated (0)" filter), a Lightroom reject (`-1`)
+    /// stays a reject, an absent label stays absent, a photo changed after the step is
+    /// skipped and reported instead of overwritten, a removed ordered membership returns
+    /// at its position, and a step finishing after the catalog closed is dropped.
+    @Test func organizationUndoIsExactSkipsLaterChangesAndRestoresPositions() async throws {
+        let fixture = try Fixture(images: 4)
+        let reject = #"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="-1"/></rdf:RDF></x:xmpmeta>"#
+        try Data(reject.utf8).write(to: fixture.photos.appendingPathComponent("Photo-0001.xmp"))
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            @MainActor func row(_ id: String) throws -> LensWorksCatalogAsset { try #require(model.assets.first { $0.id == id }) }
+            @MainActor func state(_ id: String, collection: String? = nil) async throws -> LWApplicationOrganizationImageState {
+                let key = try #require(try row(id).key)
+                let states = try await model.service.organizationStates([key], collection: collection)
+                return try #require(states.first)
+            }
+            let byName = Dictionary(uniqueKeysWithValues: model.assets.map { ($0.filename, $0.id) })
+            let unrated = try #require(byName["Photo-0000.png"]), rejected = try #require(byName["Photo-0001.png"])
+            let others = [try #require(byName["Photo-0002.png"]), try #require(byName["Photo-0003.png"])]
+            #expect(try row(unrated).rating == nil && row(rejected).rating == -1 && row(rejected).flag == "reject")
+
+            // Rating: absent stays absent and -1 stays -1 (so the derived reject flag survives).
+            await model.select(try row(unrated)); await model.select(try row(rejected), extending: true)
+            try await model.organize(.rating(3))
+            #expect(try row(unrated).rating == 3 && row(rejected).rating == 3 && row(rejected).flag == "unflagged")
+            try await model.undoOrganization()
+            #expect(try await state(unrated).rating == nil)
+            let restored = try await state(rejected)
+            #expect(restored.rating == "-1" && restored.flag == nil && restored.effective_flag == .Reject)
+            #expect(try row(unrated).rating == nil && row(rejected).rating == -1 && row(rejected).flag == "reject")
+            try await model.setFilters(rating: .some(0))
+            #expect(!model.assets.contains { $0.id == unrated }, "An undone rating must not become an explicit 0.")
+            try await model.clearFilters()
+            // Label: absent stays absent; the "None" label removes the property.
+            await model.select(try row(unrated))
+            try await model.organize(.label("Blue"))
+            #expect(try await state(unrated).label == "Blue")
+            try await model.undoOrganization()
+            #expect(try await state(unrated).label == nil)
+            try await model.redoOrganization()
+            try await model.organize(.label(""))
+            #expect(try await state(unrated).label == nil)
+
+            // A photo changed after the step (a later metadata edit) is skipped and reported.
+            await model.select(try row(others[0])); await model.select(try row(others[1]), extending: true)
+            try await model.organize(.flag(.Pick))
+            #expect(try others.allSatisfy { try row($0).flag == "pick" })
+            let later = try await state(others[1])
+            guard case .Changed = try await model.service.organization(.Apply(key: later.identity.key, expected_revision: later.identity.metadata_revision, operation: .Flag(value: .Reject))) else {
+                throw LensWorksCatalogError.message("Expected the later edit to commit.")
+            }
+            try await model.undoOrganization()
+            let reverted = try await state(others[0])
+            #expect(reverted.flag == nil && reverted.effective_flag == .Unflagged)
+            #expect(try await state(others[1]).effective_flag == .Reject, "The later change must not be overwritten.")
+            #expect(model.organizationSkipped == [others[1]] && model.organizationSkippedCount == 1)
+            #expect(model.status.contains("left unchanged"))
+            try await model.redoOrganization()
+            let redone = (try await state(others[0]), try await state(others[1]))
+            #expect(redone.0.effective_flag == .Pick && redone.1.effective_flag == .Reject)
+            #expect(model.organizationSkipped == [others[1]])
+
+            // Removing a photo from an ordered virtual folder undoes to the same position.
+            try await model.createGroup("Ordered")
+            let ordered = try model.group(named: "Ordered")
+            let member = try await state(others[0])
+            guard case .Changed = try await model.service.organization(.SetMember(identity: member.identity, collection: ordered.id, position: LWCatalogI64(7))) else {
+                throw LensWorksCatalogError.message("Expected an ordered membership.")
+            }
+            await model.select(try row(others[0]))
+            try await model.setSelectedMembership(model.group(named: "Ordered"), remove: true)
+            #expect(try await state(others[0], collection: ordered.id).member == false)
+            try await model.undoOrganization()
+            let back = try await state(others[0], collection: ordered.id)
+            #expect(back.member == true && back.position?.value == 7)
+
+            // A step still in flight when the catalog closes (its write already sent) is
+            // dropped, not appended to the history the close reset.
+            let gate = ContinuationGate()
+            model.continuationFixture = { point in if point == .organizationApplied { await gate.hold() } }
+            let watchdog = Task.detached { do { try await Task.sleep(for: .seconds(90)); await gate.release() } catch { } }
+            defer { model.continuationFixture = nil; Task { await gate.release() }; watchdog.cancel() }
+            await model.select(try row(unrated))
+            let inFlight = Task { try await model.organize(.rating(5)) }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            while !(await gate.entered) {
+                guard ContinuousClock.now < deadline else { throw LensWorksCatalogError.message("The organization change never reached its write.") }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try await model.close()
+            await gate.release()
+            _ = try? await inFlight.value
+            #expect(model.organizationUndo.isEmpty && model.organizationRedo.isEmpty)
+            await model.connect(fixture.catalog.path)
+            #expect(model.error == nil && model.organizationUndo.isEmpty)
+            #expect(try row(unrated).rating == 5, "The write landed before the close; only its history was dropped.")
+        }
+    }
+
+    /// S05 AC1/AC3: nested-keyword rename, move (re-parent) and delete carry every nested
+    /// keyword, synonym and photo with them, keep descendant filters working, and are
+    /// each one undoable step; synonyms and flat keywords are undoable too.
+    @Test func keywordRenameMoveDeleteAndSynonymsFollowNestedKeywordsAndUndo() async throws {
+        let fixture = try Fixture(images: 3)
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            let ids = model.assets.map(\.id)
+            @MainActor func row(_ id: String) throws -> LensWorksCatalogAsset { try #require(model.assets.first { $0.id == id }) }
+            @MainActor func find(_ path: [String], kind: LWOrganizationKeywordKind = .Hierarchical) async throws -> LWApplicationOrganizationKeyword? {
+                guard case .Keyword(let found) = try await model.service.organization(.FindKeyword(kind: kind, path: path)) else { throw LensWorksCatalogError.message("Expected a keyword lookup.") }
+                return found
+            }
+            @MainActor func keyword(_ path: [String], kind: LWOrganizationKeywordKind = .Hierarchical) async throws -> LWApplicationOrganizationKeyword {
+                try #require(try await find(path, kind: kind), "\(path)")
+            }
+            @MainActor func filtered(_ path: [String], kind: LWOrganizationKeywordKind = .Hierarchical) async throws -> Set<String> {
+                try await model.setFilters(keyword: .some(try await keyword(path, kind: kind)))
+                let found = Set(model.assets.map(\.id))
+                try await model.clearFilters()
+                return found
+            }
+            @MainActor func terms(_ id: String, under root: [String]) async throws -> [[String]] {
+                let key = try #require(try row(id).key)
+                let states = try await model.service.organizationStates([key], keywords: [LensWorksKeywordTarget(root)])
+                return try #require(states.first).keywords.map(\.path)
+            }
+            try await model.createKeyword("People/Ada/Kid")
+            try await model.createKeyword("Places")
+            await model.select(try row(ids[0])); try await model.organize(.addKeyword(["People", "Ada", "Kid"]))
+            await model.select(try row(ids[1])); try await model.organize(.addKeyword(["People", "Ada"]))
+            await model.select(try row(ids[2])); try await model.organize(.addKeyword(["Places"]))
+            try await model.addKeywordSynonym(try await keyword(["People"]), "Folks")
+            #expect(try await model.keywordSynonyms(try await keyword(["People"])) == ["Folks"])
+            @MainActor func expectOriginal() async throws {
+                #expect(try await filtered(["People"]) == [ids[0], ids[1]])
+                #expect(try await filtered(["People", "Ada", "Kid"]) == [ids[0]])
+                #expect(try await filtered(["Places"]) == [ids[2]])
+                #expect(try await model.keywordSynonyms(try await keyword(["People"])) == ["Folks"])
+                #expect(try await terms(ids[0], under: ["People"]) == [["People", "Ada", "Kid"]])
+            }
+            try await expectOriginal()
+
+            // Rename a parent: nested keywords, synonyms and photos follow.
+            try await model.renameKeyword(try await keyword(["People"]), to: "Humans")
+            #expect(try await find(["People"]) == nil)
+            #expect(try await find(["People", "Ada", "Kid"]) == nil)
+            #expect(try await filtered(["Humans"]) == [ids[0], ids[1]])
+            #expect(try await filtered(["Humans", "Ada", "Kid"]) == [ids[0]])
+            #expect(try await model.keywordSynonyms(try await keyword(["Humans"])) == ["Folks"])
+            #expect(try await terms(ids[0], under: ["Humans"]) == [["Humans", "Ada", "Kid"]])
+            #expect(!model.keywords.contains { $0.name == "People" } && model.keywords.contains { $0.name == "Humans" })
+            try await model.undoOrganization()
+            #expect(try await find(["Humans"]) == nil)
+            try await expectOriginal()
+
+            // Move (re-parent) a nested keyword under another parent.
+            try await model.moveKeyword(try await keyword(["People", "Ada"]), under: ["Places"])
+            #expect(try await find(["People", "Ada"]) == nil)
+            #expect(try await find(["People"]) != nil)
+            #expect(try await filtered(["Places"]) == Set(ids))
+            #expect(try await filtered(["Places", "Ada", "Kid"]) == [ids[0]])
+            #expect(try await filtered(["People"]).isEmpty)
+            try await model.undoOrganization()
+            #expect(try await find(["Places", "Ada"]) == nil)
+            try await expectOriginal()
+
+            // Delete a parent: it, its descendants and their assignments go; undo restores all.
+            try await model.deleteKeyword(try await keyword(["People"]))
+            #expect(try await find(["People"]) == nil)
+            #expect(try await find(["People", "Ada"]) == nil)
+            #expect(try await find(["People", "Ada", "Kid"]) == nil)
+            #expect(try await terms(ids[0], under: ["People"]).isEmpty)
+            #expect(try await terms(ids[1], under: ["People"]).isEmpty)
+            #expect(try await filtered(["Places"]) == [ids[2]])
+            try await model.undoOrganization()
+            try await expectOriginal()
+            try await model.redoOrganization()
+            #expect(try await find(["People"]) == nil)
+            try await model.undoOrganization()
+            try await expectOriginal()
+
+            // A synonym is its own undoable step.
+            try await model.addKeywordSynonym(try await keyword(["Places"]), "Locations")
+            try await model.undoOrganization()
+            #expect(try await model.keywordSynonyms(try await keyword(["Places"])).isEmpty)
+            try await model.redoOrganization()
+            #expect(try await model.keywordSynonyms(try await keyword(["Places"])) == ["Locations"])
+
+            // Flat keywords: create, assign, rename and delete, each undoable.
+            try await model.setKeywordKind(.Flat)
+            try await model.createKeyword("Sunset")
+            #expect(model.keywordKind == .Flat && model.keywords.map(\.name) == ["Sunset"])
+            await model.select(try row(ids[2])); try await model.organize(.addKeyword(["Sunset"], kind: .Flat))
+            #expect(try await filtered(["Sunset"], kind: .Flat) == [ids[2]])
+            try await model.renameKeyword(try await keyword(["Sunset"], kind: .Flat), to: "Dusk")
+            #expect(try await find(["Sunset"], kind: .Flat) == nil)
+            #expect(try await filtered(["Dusk"], kind: .Flat) == [ids[2]])
+            try await model.undoOrganization()
+            #expect(try await find(["Dusk"], kind: .Flat) == nil)
+            #expect(try await filtered(["Sunset"], kind: .Flat) == [ids[2]])
+            try await model.deleteKeyword(try await keyword(["Sunset"], kind: .Flat))
+            #expect(try await find(["Sunset"], kind: .Flat) == nil)
+            try await model.undoOrganization()
+            #expect(try await filtered(["Sunset"], kind: .Flat) == [ids[2]])
+            #expect(try await filtered(["Places"]) == [ids[2]], "Flat edits leave nested keywords alone.")
+        }
+    }
+
     /// S05 AC3: on a 100,000-photo catalog every metadata filter, keyword and virtual-folder
     /// query is one bounded page fetch; neither results nor keyword lists materialize the catalog.
     @Test func largeSyntheticCatalogMetadataFilterKeywordAndCollectionQueriesStayWindowed() async throws {
@@ -1863,6 +2072,38 @@ struct LensWorksCatalogBrowserTests {
             #expect(!model.assets.isEmpty && model.assets.allSatisfy { $0.flag == "reject" })
             try await browseFetch { try await model.clearFilters() }
             #expect(model.rowsHighWater <= pageRows)
+
+            // A selection spanning two pages organizes, undoes and redoes every selected photo.
+            // Each page costs one state read and one sealed batch job (begin, append, seal,
+            // run), so the request count is bounded by pages, not by photos.
+            try await model.browse()
+            await model.clearSelection()
+            await model.selectCurrentPage()
+            var keys = model.assets.compactMap(\.key)
+            #expect(await model.nextPage())
+            await model.selectCurrentPage()
+            keys += model.assets.compactMap(\.key)
+            #expect(keys.count == 2 * pageRows && model.selectionCount == Int64(2 * pageRows))
+            @MainActor func labels() async throws -> [String?] {
+                var result: [String?] = []
+                for start in stride(from: 0, to: keys.count, by: pageRows) {
+                    result += try await model.service.organizationStates(Array(keys[start..<min(start + pageRows, keys.count)])).map(\.label)
+                }
+                return result
+            }
+            let original = try await labels()
+            #expect(original.count == 2 * pageRows && original.contains { $0 != "Purple" })
+            let requests = await model.service.organizationRequests
+            try await model.organize(.label("Purple"))
+            let spent = await model.service.organizationRequests - requests
+            #expect(spent <= 2 * 5, "Organizing \(keys.count) photos took \(spent) organization requests.")
+            #expect(try await labels().allSatisfy { $0 == "Purple" })
+            #expect(model.organizationUndo.last?.photos == Int64(original.filter { $0 != "Purple" }.count))
+            try await model.undoOrganization()
+            #expect(try await labels() == original)
+            try await model.redoOrganization()
+            #expect(try await labels().allSatisfy { $0 == "Purple" })
+            checkWindow()
         }
     }
 

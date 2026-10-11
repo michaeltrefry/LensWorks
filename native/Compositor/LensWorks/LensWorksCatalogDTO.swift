@@ -7102,6 +7102,50 @@ nonisolated struct LWApplicationOrganizationCollection: Codable, Sendable {
     }
 }
 
+/// application::organization::ImageState (engines/catalog/src/application/organization.rs:146).
+nonisolated struct LWApplicationOrganizationImageState: Codable, Sendable {
+    var identity: LWApplicationOrganizationImageIdentity
+    var rating: String?
+    var label: String?
+    var flag: LWOrganizationFlag?
+    var effective_flag: LWOrganizationFlag
+    var keywords: [LWApplicationOrganizationKeywordTarget]
+    var member: Bool?
+    var position: LWCatalogI64?
+    init(identity: LWApplicationOrganizationImageIdentity, rating: String?, label: String?, flag: LWOrganizationFlag?, effective_flag: LWOrganizationFlag, keywords: [LWApplicationOrganizationKeywordTarget], member: Bool?, position: LWCatalogI64?) {
+        self.identity = identity
+        self.rating = rating
+        self.label = label
+        self.flag = flag
+        self.effective_flag = effective_flag
+        self.keywords = keywords
+        self.member = member
+        self.position = position
+    }
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: LWCatalogCodingKey.self)
+        self.identity = try container.decode(LWApplicationOrganizationImageIdentity.self, forKey: LWCatalogCodingKey("identity"))
+        self.rating = try container.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("rating"))
+        self.label = try container.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("label"))
+        self.flag = try container.decodeIfPresent(LWOrganizationFlag.self, forKey: LWCatalogCodingKey("flag"))
+        self.effective_flag = try container.decode(LWOrganizationFlag.self, forKey: LWCatalogCodingKey("effective_flag"))
+        self.keywords = try container.decode([LWApplicationOrganizationKeywordTarget].self, forKey: LWCatalogCodingKey("keywords"))
+        self.member = try container.decodeIfPresent(Bool.self, forKey: LWCatalogCodingKey("member"))
+        self.position = try container.decodeIfPresent(LWCatalogI64.self, forKey: LWCatalogCodingKey("position"))
+    }
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+        try container.encode(identity, forKey: LWCatalogCodingKey("identity"))
+        try container.encode(rating, forKey: LWCatalogCodingKey("rating"))
+        try container.encode(label, forKey: LWCatalogCodingKey("label"))
+        try container.encode(flag, forKey: LWCatalogCodingKey("flag"))
+        try container.encode(effective_flag, forKey: LWCatalogCodingKey("effective_flag"))
+        try container.encode(keywords, forKey: LWCatalogCodingKey("keywords"))
+        try container.encode(member, forKey: LWCatalogCodingKey("member"))
+        try container.encode(position, forKey: LWCatalogCodingKey("position"))
+    }
+}
+
 /// application::organization::ImageIdentity (engines/catalog/src/application/organization.rs:130).
 nonisolated struct LWApplicationOrganizationImageIdentity: Codable, Sendable {
     var image_id: String
@@ -7402,8 +7446,10 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
     case Keywords(kind: LWOrganizationKeywordKind, parent: LWCatalogI64?, after: LWCatalogI64, limit: UInt16)
     case CreateKeyword(kind: LWOrganizationKeywordKind, path: [String])
     case DeleteKeyword(id: LWCatalogI64)
+    case FindKeyword(kind: LWOrganizationKeywordKind, path: [String])
     case Synonyms(keyword: LWCatalogI64, after: String, limit: UInt16)
     case AddSynonym(keyword: LWCatalogI64, synonym: String)
+    case RemoveSynonym(keyword: LWCatalogI64, synonym: String)
     case Collections(after: String, limit: UInt16)
     case Collection(id: String)
     case CreateCollection(name: String)
@@ -7414,12 +7460,13 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
     case Members(collection: String, after: LWApplicationOrganizationMembershipCursor?, limit: UInt16)
     case Identity(key: LWCatalogEditsVariantKey)
     case SetMember(identity: LWApplicationOrganizationImageIdentity, collection: String, position: LWCatalogI64)
-    case Membership(key: LWCatalogEditsVariantKey, keyword: LWApplicationOrganizationKeywordTarget?, collection: String?)
+    case States(keys: [LWCatalogEditsVariantKey], keywords: [LWApplicationOrganizationKeywordTarget], collection: String?)
     case Apply(key: LWCatalogEditsVariantKey, expected_revision: LWCatalogI64, operation: LWOrganizationOperation)
     case Begin(operation: LWOrganizationOperation)
     case Append(job: String, items: [LWApplicationOrganizationBatchItem])
     case Seal(job: String)
     case Step(job: String)
+    case Run(job: String, limit: UInt16)
     case Cancel(job: String)
     case Job(job: String)
     case Jobs(after: String, limit: UInt16)
@@ -7447,6 +7494,12 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.lwRequireKeys(["id"])
             self = .DeleteKeyword(id: try payload.decode(LWCatalogI64.self, forKey: LWCatalogCodingKey("id")))
+        case "find_keyword":
+            try container.lwRequireKeys(["command", "args"])
+            let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
+            let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.lwRequireKeys(["kind", "path"])
+            self = .FindKeyword(kind: try payload.decode(LWOrganizationKeywordKind.self, forKey: LWCatalogCodingKey("kind")), path: try payload.decode([String].self, forKey: LWCatalogCodingKey("path")))
         case "synonyms":
             try container.lwRequireKeys(["command", "args"])
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
@@ -7459,6 +7512,12 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.lwRequireKeys(["keyword", "synonym"])
             self = .AddSynonym(keyword: try payload.decode(LWCatalogI64.self, forKey: LWCatalogCodingKey("keyword")), synonym: try payload.decode(String.self, forKey: LWCatalogCodingKey("synonym")))
+        case "remove_synonym":
+            try container.lwRequireKeys(["command", "args"])
+            let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
+            let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.lwRequireKeys(["keyword", "synonym"])
+            self = .RemoveSynonym(keyword: try payload.decode(LWCatalogI64.self, forKey: LWCatalogCodingKey("keyword")), synonym: try payload.decode(String.self, forKey: LWCatalogCodingKey("synonym")))
         case "collections":
             try container.lwRequireKeys(["command", "args"])
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
@@ -7519,12 +7578,12 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.lwRequireKeys(["identity", "collection", "position"])
             self = .SetMember(identity: try payload.decode(LWApplicationOrganizationImageIdentity.self, forKey: LWCatalogCodingKey("identity")), collection: try payload.decode(String.self, forKey: LWCatalogCodingKey("collection")), position: try payload.decode(LWCatalogI64.self, forKey: LWCatalogCodingKey("position")))
-        case "membership":
+        case "states":
             try container.lwRequireKeys(["command", "args"])
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
-            try payload.lwRequireKeys(["key", "keyword", "collection"])
-            self = .Membership(key: try payload.decode(LWCatalogEditsVariantKey.self, forKey: LWCatalogCodingKey("key")), keyword: try payload.decodeIfPresent(LWApplicationOrganizationKeywordTarget.self, forKey: LWCatalogCodingKey("keyword")), collection: try payload.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("collection")))
+            try payload.lwRequireKeys(["keys", "keywords", "collection"])
+            self = .States(keys: try payload.decode([LWCatalogEditsVariantKey].self, forKey: LWCatalogCodingKey("keys")), keywords: try payload.decode([LWApplicationOrganizationKeywordTarget].self, forKey: LWCatalogCodingKey("keywords")), collection: try payload.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("collection")))
         case "apply":
             try container.lwRequireKeys(["command", "args"])
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
@@ -7555,6 +7614,12 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.lwRequireKeys(["job"])
             self = .Step(job: try payload.decode(String.self, forKey: LWCatalogCodingKey("job")))
+        case "run":
+            try container.lwRequireKeys(["command", "args"])
+            let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
+            let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.lwRequireKeys(["job", "limit"])
+            self = .Run(job: try payload.decode(String.self, forKey: LWCatalogCodingKey("job")), limit: try payload.decode(UInt16.self, forKey: LWCatalogCodingKey("limit")))
         case "cancel":
             try container.lwRequireKeys(["command", "args"])
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
@@ -7612,6 +7677,13 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
             var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.encode(value0, forKey: LWCatalogCodingKey("id"))
+        case .FindKeyword(let value0, let value1):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("find_keyword", forKey: LWCatalogCodingKey("command"))
+            let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
+            var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.encode(value0, forKey: LWCatalogCodingKey("kind"))
+            try payload.encode(value1, forKey: LWCatalogCodingKey("path"))
         case .Synonyms(let value0, let value1, let value2):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("synonyms", forKey: LWCatalogCodingKey("command"))
@@ -7623,6 +7695,13 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
         case .AddSynonym(let value0, let value1):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("add_synonym", forKey: LWCatalogCodingKey("command"))
+            let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
+            var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.encode(value0, forKey: LWCatalogCodingKey("keyword"))
+            try payload.encode(value1, forKey: LWCatalogCodingKey("synonym"))
+        case .RemoveSynonym(let value0, let value1):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("remove_synonym", forKey: LWCatalogCodingKey("command"))
             let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
             var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.encode(value0, forKey: LWCatalogCodingKey("keyword"))
@@ -7698,13 +7777,13 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             try payload.encode(value0, forKey: LWCatalogCodingKey("identity"))
             try payload.encode(value1, forKey: LWCatalogCodingKey("collection"))
             try payload.encode(value2, forKey: LWCatalogCodingKey("position"))
-        case .Membership(let value0, let value1, let value2):
+        case .States(let value0, let value1, let value2):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
-            try container.encode("membership", forKey: LWCatalogCodingKey("command"))
+            try container.encode("states", forKey: LWCatalogCodingKey("command"))
             let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
             var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
-            try payload.encode(value0, forKey: LWCatalogCodingKey("key"))
-            try payload.encode(value1, forKey: LWCatalogCodingKey("keyword"))
+            try payload.encode(value0, forKey: LWCatalogCodingKey("keys"))
+            try payload.encode(value1, forKey: LWCatalogCodingKey("keywords"))
             try payload.encode(value2, forKey: LWCatalogCodingKey("collection"))
         case .Apply(let value0, let value1, let value2):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
@@ -7739,6 +7818,13 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
             let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
             var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.encode(value0, forKey: LWCatalogCodingKey("job"))
+        case .Run(let value0, let value1):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("run", forKey: LWCatalogCodingKey("command"))
+            let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
+            var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.encode(value0, forKey: LWCatalogCodingKey("job"))
+            try payload.encode(value1, forKey: LWCatalogCodingKey("limit"))
         case .Cancel(let value0):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("cancel", forKey: LWCatalogCodingKey("command"))
@@ -7782,6 +7868,7 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
 nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
     case Keywords(LWApplicationOrganizationPage<LWApplicationOrganizationKeyword, LWCatalogI64>)
     case KeywordCreated(id: LWCatalogI64)
+    case Keyword(LWApplicationOrganizationKeyword?)
     case Synonyms(LWApplicationOrganizationPage<LWApplicationOrganizationSynonym, String>)
     case Collections(LWApplicationOrganizationPage<LWApplicationOrganizationCollection, String>)
     case Collection(LWApplicationOrganizationCollection?)
@@ -7789,7 +7876,7 @@ nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
     case Placement(LWApplicationOrganizationPlacement)
     case Members(LWApplicationOrganizationMembershipPage)
     case Identity(LWApplicationOrganizationImageIdentity)
-    case Membership(keyword: Bool?, collection: Bool?)
+    case States([LWApplicationOrganizationImageState])
     case Changed(revision: LWCatalogI64)
     case Acknowledged
     case Job(LWApplicationOrganizationJob)
@@ -7805,6 +7892,8 @@ nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("value"))
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
             self = .KeywordCreated(id: try payload.decode(LWCatalogI64.self, forKey: LWCatalogCodingKey("id")))
+        case "keyword":
+            self = .Keyword(try container.decodeIfPresent(LWApplicationOrganizationKeyword.self, forKey: LWCatalogCodingKey("value")))
         case "synonyms":
             self = .Synonyms(try container.decode(LWApplicationOrganizationPage<LWApplicationOrganizationSynonym, String>.self, forKey: LWCatalogCodingKey("value")))
         case "collections":
@@ -7821,11 +7910,8 @@ nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
             self = .Members(try container.decode(LWApplicationOrganizationMembershipPage.self, forKey: LWCatalogCodingKey("value")))
         case "identity":
             self = .Identity(try container.decode(LWApplicationOrganizationImageIdentity.self, forKey: LWCatalogCodingKey("value")))
-        case "membership":
-            let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("value"))
-            let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
-            try payload.lwRequireKeys(["keyword", "collection"])
-            self = .Membership(keyword: try payload.decodeIfPresent(Bool.self, forKey: LWCatalogCodingKey("keyword")), collection: try payload.decodeIfPresent(Bool.self, forKey: LWCatalogCodingKey("collection")))
+        case "states":
+            self = .States(try container.decode([LWApplicationOrganizationImageState].self, forKey: LWCatalogCodingKey("value")))
         case "changed":
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("value"))
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
@@ -7853,6 +7939,10 @@ nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
             let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("value"))
             var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.encode(value0, forKey: LWCatalogCodingKey("id"))
+        case .Keyword(let value0):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("keyword", forKey: LWCatalogCodingKey("kind"))
+            try container.encode(value0, forKey: LWCatalogCodingKey("value"))
         case .Synonyms(let value0):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("synonyms", forKey: LWCatalogCodingKey("kind"))
@@ -7883,13 +7973,10 @@ nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("identity", forKey: LWCatalogCodingKey("kind"))
             try container.encode(value0, forKey: LWCatalogCodingKey("value"))
-        case .Membership(let value0, let value1):
+        case .States(let value0):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
-            try container.encode("membership", forKey: LWCatalogCodingKey("kind"))
-            let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("value"))
-            var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
-            try payload.encode(value0, forKey: LWCatalogCodingKey("keyword"))
-            try payload.encode(value1, forKey: LWCatalogCodingKey("collection"))
+            try container.encode("states", forKey: LWCatalogCodingKey("kind"))
+            try container.encode(value0, forKey: LWCatalogCodingKey("value"))
         case .Changed(let value0):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("changed", forKey: LWCatalogCodingKey("kind"))
@@ -10352,6 +10439,9 @@ nonisolated indirect enum LWOrganizationOperation: Codable, Sendable {
     case MoveKeyword(from: [String], to: [String])
     case AddCollection(collection: String)
     case RemoveCollection(collection: String)
+    case RestoreRating(value: String?)
+    case RestoreLabel(value: String?)
+    case RestoreFlag(value: LWOrganizationFlag?)
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: LWCatalogCodingKey.self)
         let discriminator = try container.decode(String.self, forKey: LWCatalogCodingKey("operation"))
@@ -10372,6 +10462,12 @@ nonisolated indirect enum LWOrganizationOperation: Codable, Sendable {
             self = .AddCollection(collection: try container.decode(String.self, forKey: LWCatalogCodingKey("collection")))
         case "remove_collection":
             self = .RemoveCollection(collection: try container.decode(String.self, forKey: LWCatalogCodingKey("collection")))
+        case "restore_rating":
+            self = .RestoreRating(value: try container.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("value")))
+        case "restore_label":
+            self = .RestoreLabel(value: try container.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("value")))
+        case "restore_flag":
+            self = .RestoreFlag(value: try container.decodeIfPresent(LWOrganizationFlag.self, forKey: LWCatalogCodingKey("value")))
         default: throw LensWorksManagedError.protocolViolation("Unknown LWOrganizationOperation variant.")
         }
     }
@@ -10412,6 +10508,18 @@ nonisolated indirect enum LWOrganizationOperation: Codable, Sendable {
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
             try container.encode("remove_collection", forKey: LWCatalogCodingKey("operation"))
             try container.encode(value0, forKey: LWCatalogCodingKey("collection"))
+        case .RestoreRating(let value0):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("restore_rating", forKey: LWCatalogCodingKey("operation"))
+            try container.encode(value0, forKey: LWCatalogCodingKey("value"))
+        case .RestoreLabel(let value0):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("restore_label", forKey: LWCatalogCodingKey("operation"))
+            try container.encode(value0, forKey: LWCatalogCodingKey("value"))
+        case .RestoreFlag(let value0):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("restore_flag", forKey: LWCatalogCodingKey("operation"))
+            try container.encode(value0, forKey: LWCatalogCodingKey("value"))
         }
     }
 }

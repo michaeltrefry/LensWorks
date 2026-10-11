@@ -1064,6 +1064,96 @@ fn managed_organization_preserves_unknown_adobe_structured_xmp_through_sidecar_o
     shutdown(&s);
 }
 
+fn organization_state(s: &str, c: &str, key: &Value) -> Value {
+    family(
+        s,
+        c,
+        "organization",
+        json!({"command":"states","args":{"keys":[key],"keywords":[],"collection":null}}),
+    )["value"][0]
+        .clone()
+}
+/// Export the photo's current catalog metadata through controlled sidecar output.
+fn exported_sidecar(
+    temp: &tempfile::TempDir,
+    s: &str,
+    c: &str,
+    key: &Value,
+    name: &str,
+) -> String {
+    let (identity, fields) = metadata_fields(s, c, key);
+    let model = fields
+        .iter()
+        .filter_map(|f| f["selected_model"].as_str())
+        .max_by_key(|v| v.parse::<i64>().unwrap())
+        .unwrap()
+        .to_owned();
+    let limits = serde_json::to_value(app::metadata_write::WriteLimits::default()).unwrap();
+    let attempts = AtomicUsize::new(1);
+    let action = |a| metadata_action(s, c, &attempts, a);
+    let sidecar = temp.path().canonicalize().unwrap().join(name);
+    let plan = action(json!({"kind":"sidecar_plan","identity":identity,"base_model":model,"destination":native(&sidecar),"limits":limits}))["value"].clone();
+    let receipt = action(
+        json!({"kind":"sidecar_apply","operation":plan["operation"],"authority_blake3":plan["authority_blake3"],"overwrite_ack":false,"limits":limits}),
+    );
+    assert_eq!(receipt["kind"], "sidecar_receipt", "{receipt}");
+    std::fs::read_to_string(&sidecar).unwrap()
+}
+
+/// S05 AC1/AC2: undoing a rating/label/flag change restores the exact prior state.
+/// An absent rating or label stays absent (no explicit `xmp:Rating="0"` or empty
+/// label in sidecar output) and a Lightroom reject (`xmp:Rating="-1"`) stays a
+/// reject rather than being clamped to 0 and silently unflagged.
+#[test]
+fn managed_organization_undo_restores_absent_and_reject_values_through_sidecar_output() {
+    let _scope = TestScope::new();
+    const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+    let (temp, s, c, key) = fixture();
+    let before = organization_state(&s, &c, &key);
+    assert!(before["rating"].is_null() && before["label"].is_null(), "{before}");
+    for operation in [
+        json!({"operation":"rating","value":3}),
+        json!({"operation":"label","value":"Blue"}),
+        json!({"operation":"flag","value":"pick"}),
+        json!({"operation":"restore_rating","value":null}),
+        json!({"operation":"restore_label","value":null}),
+        json!({"operation":"restore_flag","value":null}),
+    ] {
+        let applied = organize(&s, &c, &key, operation.clone());
+        assert_eq!(applied["status"], "ok", "{operation}: {applied}");
+    }
+    let after = organization_state(&s, &c, &key);
+    assert!(after["rating"].is_null() && after["label"].is_null(), "{after}");
+    assert!(after["flag"].is_null() && after["effective_flag"] == "unflagged", "{after}");
+    let exported = exported_sidecar(&temp, &s, &c, &key, "unrated.xmp");
+    let meta = photocatalog::xmp::parse(exported.as_bytes()).unwrap();
+    assert!(meta.property(XMP, "Rating").is_none(), "absent rating exported: {exported}");
+    assert!(meta.property(XMP, "Label").is_none(), "absent label exported: {exported}");
+    shutdown(&s);
+
+    let reject = PRESERVATION_SIDECAR.replace("xmp:Rating=\"2\"", "xmp:Rating=\"-1\"");
+    let (temp, s, c, key) = fixture_with_sidecar(Some(&reject));
+    let before = organization_state(&s, &c, &key);
+    assert_eq!((&before["rating"], &before["effective_flag"]), (&json!("-1"), &json!("reject")));
+    for operation in [
+        json!({"operation":"rating","value":3}),
+        json!({"operation":"restore_rating","value":"-1"}),
+    ] {
+        let applied = organize(&s, &c, &key, operation.clone());
+        assert_eq!(applied["status"], "ok", "{operation}: {applied}");
+    }
+    let after = organization_state(&s, &c, &key);
+    assert_eq!((&after["rating"], &after["flag"], &after["effective_flag"]), (&json!("-1"), &Value::Null, &json!("reject")), "{after}");
+    let exported = exported_sidecar(&temp, &s, &c, &key, "reject.xmp");
+    let meta = photocatalog::xmp::parse(exported.as_bytes()).unwrap();
+    assert_eq!(meta.property(XMP, "Rating").map(|v| v.value).as_deref(), Some("-1"));
+    assert_eq!(
+        meta.property("http://example.com/acme/1.0/", "Secret").map(|v| v.value).as_deref(),
+        Some("keep-me")
+    );
+    shutdown(&s);
+}
+
 /// S05 AC2: a genuine source disagreement is surfaced as a conflict; organization
 /// edits and sidecar output refuse to overwrite it, and source bytes stay intact.
 #[test]

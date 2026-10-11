@@ -1,10 +1,10 @@
 # Catalog service capability coverage
 
-LensWorks-owned catalog (upstream provenance `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`); story `sc-24658`. 249 reachable request/result/config/core types and 611 enum variants; 172 commands and 358 input enum choices. Source coverage is not native acceptance.
+LensWorks-owned catalog (upstream provenance `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`); story `sc-24658`. 250 reachable request/result/config/core types and 618 enum variants; 175 commands and 364 input enum choices. Source coverage is not native acceptance.
 
-The matrix contains 172 command rows, 186 nested input choice rows, 761 associated/struct field rows and 6 public original/render identity seams. Every row maps to a concrete fixture profile. All execution is planned/unrun unless exact evidence appears in the JSON execution ledger.
+The matrix contains 175 command rows, 189 nested input choice rows, 770 associated/struct field rows and 6 public original/render identity seams. Every row maps to a concrete fixture profile. All execution is planned/unrun unless exact evidence appears in the JSON execution ledger.
 
-The JSON contains the complete field/type/serde/import graph, all source hashes, all capability rows and 358 full Request specimens. Its 755 standalone specimens cover serialized enum variants and every nongeneric serialized struct, with populated vectors/options and concrete generic Page rows/cursors. Workbench Rows projects public lightroom::plan::Cell, retained as an explicit result root. Specimens establish serialization shape only; real session/job/guard/token/revision/digest/path values must come from preceding successful lifecycle replies, and specimen strings grant no authority.
+The JSON contains the complete field/type/serde/import graph, all source hashes, all capability rows and 364 full Request specimens. Its 763 standalone specimens cover serialized enum variants and every nongeneric serialized struct, with populated vectors/options and concrete generic Page rows/cursors. Workbench Rows projects public lightroom::plan::Cell, retained as an explicit result root. Specimens establish serialization shape only; real session/job/guard/token/revision/digest/path values must come from preceding successful lifecycle replies, and specimen strings grant no authority.
 
 ## Public request and typed result matrix
 
@@ -138,8 +138,10 @@ The JSON contains the complete field/type/serde/import graph, all source hashes,
 | `application::organization::Request::Keywords` | `application::dto::Response::{Organization}; application::organization::Response::{Keywords}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::CreateKeyword` | `application::dto::Response::{Organization}; application::organization::Response::{KeywordCreated}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::DeleteKeyword` | `application::dto::Response::{Organization}; application::organization::Response::{Acknowledged}` | `organization-revisions` | planned_unrun |
+| `application::organization::Request::FindKeyword` | `application::dto::Response::{Organization}; application::organization::Response::{Keyword}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Synonyms` | `application::dto::Response::{Organization}; application::organization::Response::{Synonyms}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::AddSynonym` | `application::dto::Response::{Organization}; application::organization::Response::{Acknowledged}` | `organization-revisions` | planned_unrun |
+| `application::organization::Request::RemoveSynonym` | `application::dto::Response::{Organization}; application::organization::Response::{Acknowledged}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Collections` | `application::dto::Response::{Organization}; application::organization::Response::{Collections}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Collection` | `application::dto::Response::{Organization}; application::organization::Response::{Collection}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::CreateCollection` | `application::dto::Response::{Organization}; application::organization::Response::{CollectionCreated}` | `organization-revisions` | planned_unrun |
@@ -150,12 +152,13 @@ The JSON contains the complete field/type/serde/import graph, all source hashes,
 | `application::organization::Request::Members` | `application::dto::Response::{Organization}; application::organization::Response::{Members}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Identity` | `application::dto::Response::{Organization}; application::organization::Response::{Identity}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::SetMember` | `application::dto::Response::{Organization}; application::organization::Response::{Changed}` | `organization-revisions` | planned_unrun |
-| `application::organization::Request::Membership` | `application::dto::Response::{Organization}; application::organization::Response::{Membership}` | `organization-revisions` | planned_unrun |
+| `application::organization::Request::States` | `application::dto::Response::{Organization}; application::organization::Response::{States}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Apply` | `application::dto::Response::{Organization}; application::organization::Response::{Changed}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Begin` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Append` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Seal` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Step` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
+| `application::organization::Request::Run` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Cancel` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Job` | `application::dto::Response::{Organization}; application::organization::Response::{Job}` | `organization-revisions` | planned_unrun |
 | `application::organization::Request::Jobs` | `application::dto::Response::{Organization}; application::organization::Response::{Jobs}` | `organization-revisions` | planned_unrun |
@@ -187,7 +190,7 @@ The JSON contains the complete field/type/serde/import graph, all source hashes,
 
 ### metadata-resolution
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Retain fixture.png with two XMP title candidates: Camera and Chosen; collect the real VariantKey and metadata revision.
 2. Read Identity, paged Fields/Candidates/Sources/Observations/Models/Packets/Decisions/FileInstances and all text/blob/import chunks with page limit 2 and chunk length 16.
@@ -205,7 +208,7 @@ Fault fixtures:
 
 ### metadata-write-recovery
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Use fixture.png plus fixture.png.xmp containing title Before; record both original hashes.
 2. Read Options; Start with InputBegin, append exact UTF8 edit document bytes, InputFinish, Prepare/Review and Commit, then SidecarPlan and SidecarApply using returned token/generation/review digest and attempt.
@@ -223,7 +226,7 @@ Fault fixtures:
 
 ### organization-revisions
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Import fixture-a.png and fixture-b.png; create flat keyword LensWorks, hierarchical keyword Travel/Paris, synonym LW and collection Picks.
 2. Apply rating4, Pick flag, Blue label, add/remove/move keywords and collection member edits using current per-image revision.
@@ -241,7 +244,7 @@ Fault fixtures:
 
 ### relink-review-identity
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Import fixture-a.png at root-A, record source hashes; copy exact bytes to root-B, then move root-A aside.
 2. Read Rules; Begin with asset scope; Prepare root-B; page Plans/Items/Sources; revise or Confirm with the returned plan revision.
@@ -259,7 +262,7 @@ Fault fixtures:
 
 ### adjustment-transfer
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Import two images and save source exposure1.25/contrast0.2; target exposure-0.5/contrast-0.1.
 2. Begin selecting only Exposure; Append target at real expected revision; Seal with exact total; Inspect and Run; read Jobs/Items.
@@ -277,7 +280,7 @@ Fault fixtures:
 
 ### preview-policy-relocation
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Read Status and SetBudgets with explicit nonzero proxy/thumbnail budgets from Options-compatible bounds.
 2. BeginOriginalRootReview with source root, step exact returned review token with directories2 to completion.
@@ -295,7 +298,7 @@ Fault fixtures:
 
 ### guarded-migration
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Create a tiny closed Lightroom SQLite fixture and use retained worker fixture documents for every Operation/InputRole.
 2. Begin with exact PartDescriptor byte lengths/digests; Upload ordered UTF8 fragments; Finish each role with computed BLAKE3; Act; poll Status and ResultPage.
@@ -313,7 +316,7 @@ Fault fixtures:
 
 ### workbench-input-review
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Use read-only Workbench on a tiny closed Lightroom SQLite fixture; Open returns real workbench/generation; read Options and Status.
 2. Exercise every Action and Query with the required returned revision/evidence; upload Inventory, SelectionRequest, Approval and ApprovalDraft via InputBegin/Append/Finish.
@@ -331,7 +334,7 @@ Fault fixtures:
 
 ### export-staging-recovery
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Import a tiny RGBA float-capable fixture, record original BLAKE3; read Options, admit an ICC Profile and release it after use.
 2. Begin; resolve Paths/Destinations/DestinationRows; Append a target with exact revision and explicit OutputSize/OutputFormat/Profile/AlphaPolicy/Metadata; Seal exact total.
@@ -349,7 +352,7 @@ Fault fixtures:
 
 ### catalog-open-close
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Create an empty catalog beneath a temporary root; read real Status.catalog token; Close and OpenExisting same root.
 2. Query Status from an independent job while another request is pending; release all returned owned buffers and jobs.
@@ -367,7 +370,7 @@ Fault fixtures:
 
 ### import-resume
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Create source root with exactly two tiny PNGs plus an unsupported text file and record every file hash.
 2. Create catalog; ImportStart; poll ImportStatus; cancel one run via returned import id; reopen and ImportResume the same source.
@@ -385,7 +388,7 @@ Fault fixtures:
 
 ### backup-restore-held-jobs
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Create catalog with two images and one pending organization/export job; record source and catalog identity.
 2. BackupCreate into new bundle; poll BackupStatus; BackupInspect verifies actual receipt; BackupRestore into new destination; open restored destination.
@@ -403,7 +406,7 @@ Fault fixtures:
 
 ### browse-edit-history
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Import two fixture images with different ratings/names; Images/Folders paginate with limit1 and returned cursors.
 2. Search each nondefault filter and Sort/Direction against known metadata; Image/Variants retain exact master/variant keys.
@@ -421,7 +424,7 @@ Fault fixtures:
 
 ### preview-generation-bytes
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Import fixture.png; request thumbnail then proxy with viewport main and increasing generations; poll PreviewStatus.
 2. Copy admitted preview bytes into owned buffer; release viewport and cancel the matching ticket; reopen offline original root after retained preview exists.
@@ -439,7 +442,7 @@ Fault fixtures:
 
 ### source-identity
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Obtain real logical/physical/edit identity through retained Catalog methods.
 2. Change recipe/metadata/source observations separately and retry stale CAS.
@@ -455,7 +458,7 @@ Fault fixtures:
 
 ### full-float-original
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. Use CPU-only native full TIFF decoder with negative/high fractional f32 pixels and known BLAKE3.
 2. Apply exact retained recipe renderer and stage to a fresh destination.
@@ -472,7 +475,7 @@ Fault fixtures:
 
 ### wire-conformance
 
-Status: **planned_unrun**. Source baseline: `aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647`.
+Status: **planned_unrun**. Source baseline: `ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914`.
 
 1. For every wire case, deserialize into exact Rust application::Request and Swift LWApplicationRequest.
 2. Serialize Swift request back and deserialize Rust again; compare typed value via JSON tree, including defaults and flattened fields.

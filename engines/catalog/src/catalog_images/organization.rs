@@ -414,6 +414,19 @@ impl Catalog {
         tx.commit()?;
         Ok(())
     }
+    /// Remove one synonym (the exact inverse of creating it).
+    pub fn remove_keyword_synonym(&mut self, keyword: i64, synonym: &str) -> Result<()> {
+        small(synonym)?;
+        let _w = self.writers.enter(Priority::Foreground)?;
+        ensure!(
+            self.db.execute(
+                "DELETE FROM organization_keyword_synonyms WHERE keyword=?1 AND synonym=?2",
+                params![keyword, synonym],
+            )? == 1,
+            "synonym not found"
+        );
+        Ok(())
+    }
     pub fn keyword_synonyms(
         &self,
         keyword: i64,

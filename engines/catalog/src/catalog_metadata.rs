@@ -1766,7 +1766,14 @@ impl Catalog {
             xmp::field_semantics(&input)?
         };
         let mut updated = xmp::project(&bytes)?;
-        for field in original.fields.keys() {
+        // A carried catalog-authored explicit removal stays an explicit removal in
+        // the superseding observation; otherwise its choice would be orphaned.
+        for field in original.fields.keys().chain(
+            carried
+                .iter()
+                .filter(|(field, value)| value.is_none() && !organization_fields.contains(field))
+                .map(|(field, _)| field),
+        ) {
             if !updated.fields.contains_key(field) {
                 updated.fields.insert(field.clone(), Value::Removed);
             }

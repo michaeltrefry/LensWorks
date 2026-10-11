@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
+  "source_digest": "ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1945,8 +1945,8 @@
     {
       "path": "src/application.rs",
       "mode": "100644",
-      "bytes": 143975,
-      "sha256": "5428be0787dcecf33de5a394a9504d2f3ac3cb48e68807d6b66318a34a107561"
+      "bytes": 144031,
+      "sha256": "aebc2c88485dafe6227a0601ca0b663df605cff5f7a804548a06d37dcd311a69"
     },
     {
       "path": "src/application/backup.rs",
@@ -2281,8 +2281,8 @@
     {
       "path": "src/application/organization.rs",
       "mode": "100644",
-      "bytes": 62720,
-      "sha256": "59591a085c03f33a8868a97a8d147e5d1fb4ff88d6528f4a19baa6651f1e5a1e"
+      "bytes": 76261,
+      "sha256": "a37719c34b4374c9e881f6a68faefea54912990663520fc9408b334227636489"
     },
     {
       "path": "src/application/owner_progress_tests.rs",
@@ -2497,8 +2497,8 @@
     {
       "path": "src/catalog_images/organization.rs",
       "mode": "100644",
-      "bytes": 24441,
-      "sha256": "83f622d76e4ef1c85e2e4df3c0d477826bd82795ae9df45998bcff66e8473a9b"
+      "bytes": 24946,
+      "sha256": "bcd052fab7d39c99726712e9064d49d140a95619eee34fcd48609abe1f3ab4ea"
     },
     {
       "path": "src/catalog_images/organization_tests.rs",
@@ -2515,8 +2515,8 @@
     {
       "path": "src/catalog_metadata.rs",
       "mode": "100644",
-      "bytes": 126718,
-      "sha256": "e94fe0202479f33dcd348fd22ffc2e2d37afae8736284b6b163385cc34439e03"
+      "bytes": 127083,
+      "sha256": "c70a37a5e8c7e5f73eab71b3364decdb0e6662968d56b03a78ff13778004b135"
     },
     {
       "path": "src/catalog_metadata/prepared_edit_tests.rs",
@@ -3817,8 +3817,8 @@
     {
       "path": "src/organization.rs",
       "mode": "100644",
-      "bytes": 55781,
-      "sha256": "b52bc838cddc9167753746e2f472c98c8a1a088a670bb39e2ca84fe4d6e9c917"
+      "bytes": 62854,
+      "sha256": "89a8b74a17d8315f860a0b1cabb08da5041d23aa6b652f17027f03247ba3edb5"
     },
     {
       "path": "src/organization_search.rs",

@@ -15,6 +15,10 @@ struct LensWorksCatalogWorkspace: View {
     @State private var largePhoto: LensWorksCatalogAsset?
     @State private var keywordName = ""
     @State private var keywordPrompt = false
+    /// The keyword a rename/move/synonym prompt edits, and which prompt is open.
+    @State private var editingKeyword: LWApplicationOrganizationKeyword?
+    @State private var keywordEdit: KeywordEdit?
+    enum KeywordEdit: String, Identifiable { case rename = "Rename Keyword", move = "Move Keyword", synonym = "Add Synonym"; var id: String { rawValue } }
     static let labels = ["Red", "Yellow", "Green", "Blue", "Purple"]
 
     var body: some View {
@@ -69,7 +73,7 @@ struct LensWorksCatalogWorkspace: View {
             LensWorksLaunchTrace.record("catalog.workspace.task.end", details: ["canceled": String(Task.isCancelled)])
         }
         .onChange(of: catalog.catalogEpoch) { _, _ in
-            showingSettings = false; movingGroup = nil; largePhoto = nil; groupPrompt = false; editingGroup = nil; keywordPrompt = false
+            showingSettings = false; movingGroup = nil; largePhoto = nil; groupPrompt = false; editingGroup = nil; keywordPrompt = false; keywordEdit = nil; editingKeyword = nil
         }
         .onChange(of: workspace.selectedID) { _, _ in
             if let version = workspace.current.controller.workingVersion, version.catalogPath == catalog.catalogPath {
@@ -91,7 +95,22 @@ struct LensWorksCatalogWorkspace: View {
             TextField("People/Ada", text: $keywordName)
             Button("Cancel", role: .cancel) { }
             Button("Create") { let text = keywordName; Task { await action { try await catalog.createKeyword(text) } } }
-        } message: { Text(catalog.keywordParent.map { "Nested under " + $0.path.joined(separator: " > ") + ". Use “/” for deeper levels." } ?? "Use “/” to nest levels, for example People/Ada.") }
+        } message: { Text(catalog.keywordKind == .Flat ? "A flat keyword has a single level." : catalog.keywordParent.map { "Nested under " + $0.path.joined(separator: " > ") + ". Use “/” for deeper levels." } ?? "Use “/” to nest levels, for example People/Ada.") }
+        .alert(keywordEdit?.rawValue ?? "", isPresented: Binding(get: { keywordEdit != nil }, set: { if !$0 { keywordEdit = nil } })) {
+            TextField(keywordEdit == .move ? "New parent, e.g. Places/Europe (empty for top level)" : "Name", text: $keywordName)
+            Button("Cancel", role: .cancel) { }
+            Button("Save") {
+                guard let keyword = editingKeyword, let edit = keywordEdit else { return }
+                let text = keywordName
+                Task { await action {
+                    switch edit {
+                    case .rename: try await catalog.renameKeyword(keyword, to: text)
+                    case .move: try await catalog.moveKeyword(keyword, under: LensWorksCatalog.keywordPath(text))
+                    case .synonym: try await catalog.addKeywordSynonym(keyword, text)
+                    }
+                } }
+            }
+        } message: { Text(editingKeyword.map { $0.path.joined(separator: " > ") + (keywordEdit == .synonym ? "" : " and everything nested under it move together; photos follow.") } ?? "") }
         .sheet(isPresented: $showingSettings, onDismiss: {
             guard let scope = settingsScope, catalog.scopeIsCurrent(scope) else { return }
             Task {
@@ -212,6 +231,11 @@ struct LensWorksCatalogWorkspace: View {
                         HStack {
                             Text("Keywords").font(.headline)
                             Spacer()
+                            Picker("Keyword kind", selection: Binding(get: { catalog.keywordKind }, set: { kind in Task { await action { try await catalog.setKeywordKind(kind) } } })) {
+                                Text("Nested").tag(LWOrganizationKeywordKind.Hierarchical)
+                                Text("Flat").tag(LWOrganizationKeywordKind.Flat)
+                            }.labelsHidden().pickerStyle(.segmented).fixedSize()
+                                .accessibilityIdentifier("LensWorks.keywordKind")
                             Button { keywordName = ""; keywordPrompt = true } label: { Image(systemName: "plus") }.help("New Keyword")
                                 .accessibilityIdentifier("LensWorks.newKeyword")
                         }
@@ -228,9 +252,18 @@ struct LensWorksCatalogWorkspace: View {
                             }.buttonStyle(.plain).padding(.vertical, 3)
                                 .accessibilityIdentifier("LensWorks.keyword." + keyword.path.joined(separator: "/"))
                                 .contextMenu {
-                                    Button("Show Nested Keywords") { Task { await action { try await catalog.enterKeyword(keyword) } } }
-                                    Button("Add to Selected Photos") { Task { await action { try await catalog.organize(.addKeyword(keyword.path)) } } }
-                                    Button("Remove from Selected Photos") { Task { await action { try await catalog.organize(.removeKeyword(keyword.path)) } } }
+                                    if keyword.kind == .Hierarchical {
+                                        Button("Show Nested Keywords") { Task { await action { try await catalog.enterKeyword(keyword) } } }
+                                    }
+                                    Button("Add to Selected Photos") { Task { await action { try await catalog.organize(.addKeyword(keyword.path, kind: keyword.kind)) } } }
+                                    Button("Remove from Selected Photos") { Task { await action { try await catalog.organize(.removeKeyword(keyword.path, kind: keyword.kind)) } } }
+                                    Divider()
+                                    Button("Rename…") { editingKeyword = keyword; keywordName = keyword.name; keywordEdit = .rename }
+                                    if keyword.kind == .Hierarchical {
+                                        Button("Move…") { editingKeyword = keyword; keywordName = keyword.path.dropLast().joined(separator: "/"); keywordEdit = .move }
+                                    }
+                                    Button("Add Synonym…") { editingKeyword = keyword; keywordName = ""; keywordEdit = .synonym }
+                                    Button("Delete Keyword", role: .destructive) { Task { await action { try await catalog.deleteKeyword(keyword) } } }
                                 }
                         }
                         if catalog.keywordNext != nil { Button("More Keywords") { Task { await action { try await catalog.nextKeywords() } } } }
@@ -417,7 +450,7 @@ private struct LensWorksGridCell: View {
             .contextMenu { Button("Open in Editor", action: openEditor) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(asset.filename)
-            .accessibilityValue(asset.organizationSummary)
+            .accessibilityValue(asset.organizationAccessibility)
             .accessibilityIdentifier("LensWorks.catalogAsset." + asset.filename)
     }
 }

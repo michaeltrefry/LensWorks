@@ -2,7 +2,7 @@ import Foundation
 
 /// Runtime authority is the LensWorks-owned catalog file-ledger digest; the upstream commit is provenance only.
 nonisolated enum LWManagedAuthority {
-    static let sourceRevision = "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647"
+    static let sourceRevision = "ce448874c1e8718c21c628270def08df978c2749ace2edf3ffc7e203c1b33914"
     static let protocolVersion: UInt32 = 2
     static func validate(sourceRevision: String, protocolVersion: UInt32 = Self.protocolVersion) throws {
         guard sourceRevision == Self.sourceRevision, protocolVersion == Self.protocolVersion else {
