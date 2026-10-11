@@ -642,11 +642,15 @@ h=json.dumps(d).encode();sys.stdout.buffer.write(b'LWFLT002'+struct.pack('<QQ',l
         let r = command("decode_full", fault_args.clone());
         let j = r["result"]["job"].as_str().unwrap();
         let until = Instant::now() + Duration::from_secs(10);
-        while !marker.exists() {
+        // The child creates the marker and then writes its pid; wait for the complete pid,
+        // not just the file, or an early read sees an empty marker.
+        let pid: libc::pid_t = loop {
+            if let Ok(pid) = std::fs::read_to_string(&marker).map(|text| text.trim().parse()) {
+                if let Ok(pid) = pid { break pid; }
+            }
             assert!(Instant::now() < until, "child didn't launch");
             std::thread::sleep(Duration::from_millis(5));
-        }
-        let pid: libc::pid_t = std::fs::read_to_string(&marker).unwrap().parse().unwrap();
+        };
         command("job_cancel", json!({"job":j}));
         let canceled = take(j);
         assert_eq!(canceled["error"]["code"], "canceled", "{canceled}");
