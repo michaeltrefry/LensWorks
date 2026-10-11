@@ -590,7 +590,7 @@ extension FloatRetouchTests {
                                                  points: [seamPoint], radius: 4, blurRadius: 2)
         let seam = try f.pixels(try f.tiledEvaluate(seamNode, surface: seamInput,
             map: try f.map(width: 257, height: 257), workspace: workspace))
-        XCTAssertEqual(seam[128 * 257 + 256], try expected(seamInput, seamPoint, radius: 2),
+        assertFloatClose(seam[128 * 257 + 256], try expected(seamInput, seamPoint, radius: 2),
                        "the affected destination across the real 256 seam gathers the retained full-coordinate Gaussian")
 
         var borderInput = try f.surface(width: 257, height: 257)
@@ -600,7 +600,7 @@ extension FloatRetouchTests {
                                                    points: [borderPoint], radius: 4, blurRadius: 2)
         let border = try f.pixels(try f.tiledEvaluate(borderNode, surface: borderInput,
             map: try f.map(width: 257, height: 257), workspace: workspace))
-        XCTAssertEqual(border[0], try expected(borderInput, borderPoint, radius: 2),
+        assertFloatClose(border[0], try expected(borderInput, borderPoint, radius: 2),
                        "the transparent captured boundary is compared at a genuinely affected border destination")
 
         var tiny = try f.surface(width: 2, height: 2)
@@ -609,7 +609,7 @@ extension FloatRetouchTests {
                                                  points: [CGPoint(x: 0.5, y: 0.5)], radius: 1, blurRadius: 0.5)
         let tinyOutput = try f.pixels(try f.tiledEvaluate(tinyNode, surface: tiny,
             map: try f.map(width: 2, height: 2), workspace: workspace))
-        XCTAssertEqual(tinyOutput[0], try expected(tiny, CGPoint(x: 0.5, y: 0.5), radius: 0.5),
+        assertFloatClose(tinyOutput[0], try expected(tiny, CGPoint(x: 0.5, y: 0.5), radius: 0.5),
                        "the retained operator, rather than a truncated kernel, defines tiny-extent output")
     }
 
@@ -834,7 +834,7 @@ extension FloatRetouchTests {
             selectionSourceCoverage: nil)
         node = try f.admitted(node) { $0.retouch = [stroke] }
         let output = try f.pixels(try f.tiledEvaluate(node, surface: sourceSurface, map: try f.map(width: 8, height: 8), workspace: workspace))
-        XCTAssertEqual(output[3 * 8 + 3], SIMD4<Float>(0,3,0,1),
+        assertFloatClose(output[3 * 8 + 3], SIMD4<Float>(0,3,0,1),
             "sample-all resolves the captured plane composite and substitutes the immutable pre-stroke source only at its source layer")
     }
 
@@ -1001,4 +1001,14 @@ extension FloatRetouchTests {
                       "only the released evaluator-owned plane is eligible for checked retirement")
         XCTAssertNil(candidate)
     }
+}
+
+/// Tiled and whole-frame float evaluation may associate sums differently; agree to a few ULPs.
+func assertFloatClose(_ a: SIMD4<Float>, _ b: @autoclosure () throws -> SIMD4<Float>, _ message: String = "",
+                      file: StaticString = #filePath, line: UInt = #line) {
+    do {
+        let expected = try b()
+        let close = (0..<4).allSatisfy { abs(a[$0] - expected[$0]) <= 1e-6 * max(1, abs(expected[$0])) }
+        XCTAssertTrue(close, "\(a) is not within tolerance of \(expected) - \(message)", file: file, line: line)
+    } catch { XCTFail("\(error)", file: file, line: line) }
 }

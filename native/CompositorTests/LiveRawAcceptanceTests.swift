@@ -298,9 +298,7 @@ struct LiveRawAcceptanceTests {
         try ProceduralDNG.write(to: rotated, width: 2100, height: 1180, orientation: 6)
         fixtures += [large, rotated]
         for url in fixtures {
-            print("AC3 import", url.lastPathComponent)
             let session = try await importedSession(url)
-            print("AC3 commit", url.lastPathComponent)
             try await commitCameraRaw(session, whiteBalance: .temperatureTint(kelvin: 5200, tint: 6)) {
                 $0.exposure = 0.4; $0.contrast = 15; $0.highlights = -20; $0.shadows = 10; $0.vibrance = 10
             }
@@ -310,9 +308,7 @@ struct LiveRawAcceptanceTests {
             // Preview: the developed layer as the Camera Raw panel shows it, reduced to the preview limit.
             let preview = try FilterEdit.prepared(kind: .cameraRaw, from: shown.image, placed: layer.transform).previewSource
             // Full resolution: the export path develops the original again at full size.
-            print("AC3 export", url.lastPathComponent)
             let full = try await ImageExporter.shared.renderPlane(try #require(session.projectSnapshot()))
-            print("AC3 compare", url.lastPathComponent)
             #expect(full.width == node.originalWidth && full.height == node.originalHeight,
                     "export is the full-resolution development: \(url.lastPathComponent)")
             let reduced = try FilterEdit.prepared(kind: .cameraRaw, from: LWFloatPlaneImage(plane: full).image(), placed: layer.transform).previewSource

@@ -1,0 +1,35 @@
+name: Live RAW acceptance
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions: {contents: read}
+jobs:
+  live-raw:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - name: Select the provisioned Python 3.12.13 interpreter
+        run: |
+          test -x /opt/homebrew/opt/python@3.12/bin/python3.12
+          echo /opt/homebrew/opt/python@3.12/libexec/bin >> "$GITHUB_PATH"
+      - name: Verify the provisioned source-pinned Apple-silicon native route
+        run: ./scripts/ci/provision_s47_native_prerequisites.sh
+      - name: Build the app with its installed decode helpers
+        # build-native.sh installs PhotoCatalogWorker and LensWorksDecodeWorker into
+        # .build/xcode-app; the hosted unit tests develop RAW through those helpers.
+        run: |
+          ./scripts/build-native.sh
+          xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-app CODE_SIGN_IDENTITY=-
+          test -x .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/LensWorksDecodeWorker
+      - name: Run the live RAW acceptance tests (S08)
+        timeout-minutes: 50
+        run: |
+          xcodebuild test-without-building -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app -parallel-testing-enabled NO \
+            -only-testing:CompositorTests/LiveRawAcceptanceTests -resultBundlePath LiveRawAcceptance.xcresult
+      - name: Upload live RAW test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: live-raw-acceptance, path: LiveRawAcceptance.xcresult, if-no-files-found: ignore, retention-days: 7}

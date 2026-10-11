@@ -629,10 +629,13 @@ nonisolated final class LWFloatDirectoryChain: @unchecked Sendable {
             return false
         }
         guard errno == ENOENT else { throw ProjectError.invalid }
-        if held.st_nlink == 0 { return true }
-        // APFS keeps a removed directory's link count on its held descriptor, so
-        // ask the held inode itself: a deleted directory refuses new entries with
-        // ENOENT, while one merely renamed elsewhere stays uncertain.
+        return try Self.heldDirectoryIsDeleted(fd, linkCount: held.st_nlink)
+    }
+    /// APFS keeps a removed directory's link count on its held descriptor, so ask
+    /// the held inode itself: a deleted directory refuses new entries with ENOENT,
+    /// while one merely renamed elsewhere stays uncertain (false).
+    static func heldDirectoryIsDeleted(_ fd: Int32, linkCount: nlink_t) throws -> Bool {
+        if linkCount == 0 { return true }
         let probe = ".lw-unlink-probe-" + UUID().uuidString.lowercased()
         if mkdirat(fd, probe, 0o700) == 0 {
             guard unlinkat(fd, probe, AT_REMOVEDIR) == 0 else { throw ProjectError.invalid }

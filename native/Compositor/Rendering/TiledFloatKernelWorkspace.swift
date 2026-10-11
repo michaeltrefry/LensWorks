@@ -175,7 +175,9 @@ nonisolated final class LWFloatDoubleRows {
         let (bytes, overflow) = height.multipliedReportingOverflow(by: MemoryLayout<Identity>.stride)
         guard !overflow else { throw ProjectError.tooLarge }
         identityLease = try workingSet.reserve(bytes)
-        let components = directory.pathComponents
+        // Open the physical chain: /var and /tmp are links to their /private homes.
+        guard let physical = directory.physicalFileURL else { throw ProjectError.invalid }
+        let components = physical.pathComponents
         let (parentBytes, parentOverflow) = components.count.multipliedReportingOverflow(by: MemoryLayout<Parent>.stride)
         let (charge, chargeOverflow) = parentBytes.addingReportingOverflow(directory.path.utf8.count)
         guard !parentOverflow, !chargeOverflow else { throw ProjectError.tooLarge }

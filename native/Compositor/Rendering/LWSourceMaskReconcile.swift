@@ -26,11 +26,20 @@ nonisolated extension LWSourceMaskReconcile {
     static func plane(_ asset:ImportedImage,workspace:LWFloatWorkspace)throws->LWFloatPlane {
         guard LayerMask.isValid(asset.image) else { throw ProjectError.invalid }
         if let plane=asset.linearPlane { try asset.validatePlaneRead();return plane }
-        let imported=try LWFloatCompositor.from(asset.image,workspace:workspace)
-        let result=try LWFloatCompositor.map(imported,workspace:workspace) { p,_,_ in
-            guard p.x.isFinite,(0...1).contains(p.x) else { throw ProjectError.invalid }
-            return SIMD4(repeating:p.x)
+        // Mask gray is coverage, not color: read the stored levels per tile rather
+        // than color-converting them into linear light.
+        let image=asset.image,builder=try workspace.makeBuilder(width:image.width,height:image.height)
+        while let range=builder.nextRange {
+            try workspace.cancellation.check()
+            let bytes=try range.validate(frameWidth:image.width,frameHeight:image.height)
+            let lease=try workspace.workingSet.reserve(bytes)
+            guard let tile=image.cropping(to:CGRect(x:range.x,y:range.y,width:range.width,height:range.height)) else { throw ExportError.render }
+            let levels=try GuidedMatte.levels(of:tile,width:range.width,height:range.height)
+            try builder.append(LWLinearSurface(width:range.width,height:range.height,
+                pixels:levels.map { SIMD4(repeating:$0) },maximumBytes:bytes),at:range)
+            withExtendedLifetime(lease) {}
         }
+        let result=try builder.finish()
         try asset.validatePlaneRead();return result
     }
     /// Mask values are scalar coverage, not straight colors associated with their

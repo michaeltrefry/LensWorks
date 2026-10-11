@@ -1314,7 +1314,7 @@ extension LiveRawSourceTests {
     @Test func sourceHydrationNeverSubstitutesAnUnknownBackingAndRetainsChargedMetadata() throws {
         var source=try node(original:URL(fileURLWithPath:"/metadata-history.dng"),width:2,height:1)
         let coverage=try surface([SIMD4(repeating:1),SIMD4.zero]).packageData(maximumFileBytes:1024)
-        source=try source.metadataCopy(additionalBytes:8192)
+        source=try source.metadataCopy(additionalBytes:64*1024)
         source.selectedDevelopments=[.init(settings:CameraRawSettings(),whiteBalance:.asShot,seed:1,sourceCoverage:coverage)]
         let packed=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:16*1024)
         let missing=try #require(packed.assets.first(where:{$0.key.hasSuffix(".data")})).key
@@ -1588,10 +1588,10 @@ extension LiveRawSourceTests {
         // Exact original bytes/inode are restored by this test's own action.
         // Replacement changed ctime, so it cannot be silently adopted by retry.
         if fault == "replacement" {
-            #expect(throws: ProjectError.self) { try LWFloatWorkspace.retryRetainedCleanup() }
+            #expect(throws: ProjectError.self) { try LWFloatWorkspace.retryRetainedCleanup(admitting: working) }
             try FileManager.default.removeItem(at: directory)
         }
-        try LWFloatWorkspace.retryRetainedCleanup()
+        try LWFloatWorkspace.retryRetainedCleanup(admitting: working)
         #expect(!FileManager.default.fileExists(atPath: directory.path))
         _ = try working.reserve(working.limit)
     }
@@ -1640,7 +1640,7 @@ extension LiveRawSourceTests {
         #expect(throws: ProjectError.self) { _ = try working.reserve(working.limit) }
         #expect(try Data(contentsOf: member) == Data("must survive".utf8))
         try FileManager.default.removeItem(at: member)
-        try LWFloatWorkspace.retryRetainedCleanup()
+        try LWFloatWorkspace.retryRetainedCleanup(admitting: working)
         #expect(!FileManager.default.fileExists(atPath: root.path))
         _ = try working.reserve(working.limit)
     }
@@ -1662,7 +1662,7 @@ extension LiveRawSourceTests {
         let directory = try await operation.value
         #expect(FileManager.default.fileExists(atPath: directory.path))
         #expect(throws: ProjectError.self) { _ = try working.reserve(working.limit) }
-        try LWFloatWorkspace.retryRetainedCleanup()
+        try LWFloatWorkspace.retryRetainedCleanup(admitting: working)
         #expect(!FileManager.default.fileExists(atPath: directory.path))
         _ = try working.reserve(working.limit)
     }
@@ -1721,7 +1721,7 @@ extension LiveRawSourceTests {
     @Test func sourceCacheProjectionRefusesItsOwnCollectionChargeWithoutPublishing() throws {
         var source=try node(original:URL(fileURLWithPath:"/cache-admission.dng"),width:2,height:1)
         let coverage=try surface([SIMD4(repeating:1),SIMD4.zero]).packageData(maximumFileBytes:1024)
-        source=try source.metadataCopy(additionalBytes:8192)
+        source=try source.metadataCopy(additionalBytes:64*1024)
         source.selectedDevelopments=[.init(settings:CameraRawSettings(),whiteBalance:.asShot,seed:1,sourceCoverage:coverage)]
         let packed=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:16*1024)
         let set=try LWFloatWorkingSet(limit:1),cache=LWSourcePackageArchive.HydrationCache(workingSet:set)
@@ -1734,7 +1734,7 @@ extension LiveRawSourceTests {
     @Test func sourceCacheHitRechecksDeclaredBackingBeforePublishingSharedNode() throws {
         var source=try node(original:URL(fileURLWithPath:"/cache-custody.dng"),width:2,height:1)
         let coverage=try surface([SIMD4(repeating:1),SIMD4.zero]).packageData(maximumFileBytes:1024)
-        source=try source.metadataCopy(additionalBytes:8192)
+        source=try source.metadataCopy(additionalBytes:64*1024)
         source.selectedDevelopments=[.init(settings:CameraRawSettings(),whiteBalance:.asShot,seed:1,sourceCoverage:coverage)]
         let packed=try LWSourcePackageArchive.externalize(manifest(source),maximumBytes:16*1024)
         let missing=try #require(packed.assets.first(where:{$0.key.hasSuffix(".data")})).key

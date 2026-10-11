@@ -125,7 +125,7 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
     init(workingSet: LWFloatWorkingSet, afterCreated: ((URL) throws -> Void)? = nil) throws {
         // Failed cleanup is an admission hold, not an ARC success receipt. Retry
         // the exact original roster before creating another private graph root.
-        try Self.retryRetainedCleanup()
+        try Self.retryRetainedCleanup(admitting: workingSet)
         let admittedRoot = try workingSet.reserve(2048), creationID = UUID()
         rootLease = admittedRoot; cleanupID = creationID
         self.workingSet = workingSet
@@ -170,13 +170,18 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
     }
     /// No discovery/adoption: a retained record is copied from this exact owner
     /// after its last child token releases. Failed retries preserve the record.
-    static func retryRetainedCleanup() throws {
+    /// With `admitting`, only holds charged to that working set gate the new
+    /// workspace: a failed cleanup withholds its own admitted budget, not every
+    /// independent budget. Production source graphs share `.sourceGraphs`.
+    static func retryRetainedCleanup(admitting workingSet: LWFloatWorkingSet? = nil) throws {
         try cleanupRegistry.lock.withLock {
             for id in cleanupRegistry.creations.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                if let workingSet, cleanupRegistry.creations[id]!.workingSet !== workingSet { continue }
                 try retireFailedCreation(cleanupRegistry.creations[id]!)
                 cleanupRegistry.creations.removeValue(forKey: id)
             }
             for id in cleanupRegistry.records.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                if let workingSet, cleanupRegistry.records[id]!.workingSet !== workingSet { continue }
                 let owner = LWFloatWorkspace(restoring: cleanupRegistry.records[id]!)
                 do {
                     try owner.retireOwnedChildren()
@@ -196,8 +201,8 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
         let fd = heldRoot.fd
         var already = stat(), named = stat(); errno = 0
         guard fstat(fd, &already) == 0, already.st_dev == birth.st_dev, already.st_ino == birth.st_ino else { throw ProjectError.invalid }
-        if already.st_nlink == 0 {
-            guard fstatat(value.parent.fd, value.name, &named, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT else { throw ProjectError.invalid }
+        if fstatat(value.parent.fd, value.name, &named, AT_SYMLINK_NOFOLLOW) != 0 {
+            guard errno == ENOENT, try LWFloatDirectoryChain.heldDirectoryIsDeleted(fd, linkCount: already.st_nlink) else { throw ProjectError.invalid }
             try value.parent.check(); return
         }
         func checked() throws -> stat {
@@ -227,7 +232,8 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
             before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec, before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec,
             unlinkat(value.parent.fd, value.name, AT_REMOVEDIR) == 0 else { throw ProjectError.invalid }
         var retired = stat(), vacated = stat(); errno = 0
-        guard fstat(fd, &retired) == 0, retired.st_dev == birth.st_dev, retired.st_ino == birth.st_ino, retired.st_nlink == 0,
+        // Our own rmdir succeeded; APFS may still report the held directory's link count.
+        guard fstat(fd, &retired) == 0, retired.st_dev == birth.st_dev, retired.st_ino == birth.st_ino,
             fstatat(value.parent.fd, value.name, &vacated, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT else { throw ProjectError.invalid }
         try value.parent.check()
     }
@@ -356,8 +362,9 @@ nonisolated final class LWFloatWorkspace: @unchecked Sendable {
         }
         let before = try identity()
         let metadata=try workingSet.reserve(MemoryLayout<Member>.stride+name.utf8.count+64+1024)
-        let lease = try workingSet.reserve(1024 * 1024)
-        var chunk = Data(count: 1024 * 1024), hash = SHA256(), remaining = before.st_size
+        // A small hashing window keeps file custody inside tight tile budgets.
+        let lease = try workingSet.reserve(64 * 1024)
+        var chunk = Data(count: 64 * 1024), hash = SHA256(), remaining = before.st_size
         while remaining > 0 {
             try Task.checkCancellation()
             let requested = min(remaining, off_t(chunk.count))
