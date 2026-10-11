@@ -6,9 +6,17 @@ use crate::lightroom::{Issue, MANIFEST_BYTES, PAGE_BYTES, migration_source::test
 use std::sync::{Mutex, MutexGuard};
 
 // Each fixture below independently exercises the production maximum through an
-// actual Source child. Running all five maximum JSON graphs at once makes their
-// shared CI host scheduling part of the per-query production deadline.
+// actual Source child under the production 120 s per-query deadline. Running all
+// five maximum JSON graphs at once makes their shared CI host scheduling part of
+// the per-query production deadline.
 static MAXIMAL_SOURCE_FIXTURE: Mutex<()> = Mutex::new(());
+
+// The same applies to the rest of the suite: under the default parallel harness
+// a thousand other tests compete with the child for CPU, so the deadline measures
+// host contention instead of the product path. These fixtures are therefore
+// excluded from the parallel run and executed on their own, one at a time:
+//   cargo test --lib -- --ignored --test-threads=1 proxy::budget_tests
+// CI runs exactly that as a separate step.
 
 fn maximal_source_fixture() -> Result<MutexGuard<'static, ()>> {
     MAXIMAL_SOURCE_FIXTURE
@@ -17,6 +25,7 @@ fn maximal_source_fixture() -> Result<MutexGuard<'static, ()>> {
 }
 
 #[test]
+#[ignore = "maximum-size Source fixture; run serially: cargo test --lib -- --ignored --test-threads=1 proxy::budget_tests"]
 fn large_object_issue_manifest_now_has_exact_capacity_and_preserves_every_member() -> Result<()> {
     maximal_issue_manifest(
         br#"{"code":"","detail":""}"#,
@@ -27,6 +36,7 @@ fn large_object_issue_manifest_now_has_exact_capacity_and_preserves_every_member
 }
 
 #[test]
+#[ignore = "maximum-size Source fixture; run serially: cargo test --lib -- --ignored --test-threads=1 proxy::budget_tests"]
 fn maximal_sequence_issue_manifest_preserves_more_members_than_object_case() -> Result<()> {
     maximal_issue_manifest(
         br#"["",null,""]"#,
@@ -37,6 +47,7 @@ fn maximal_sequence_issue_manifest_preserves_more_members_than_object_case() -> 
 }
 
 #[test]
+#[ignore = "maximum-size Source fixture; run serially: cargo test --lib -- --ignored --test-threads=1 proxy::budget_tests"]
 fn shortest_some_empty_issue_manifest_preserves_the_full_retained_limit() -> Result<()> {
     maximal_issue_manifest(
         br#"["","",""]"#,
@@ -126,6 +137,7 @@ fn maximal_issue_manifest(
 }
 
 #[test]
+#[ignore = "maximum-size Source fixture; run serially: cargo test --lib -- --ignored --test-threads=1 proxy::budget_tests"]
 fn maximal_stable_source_table_and_canonical_key_preserve_expanded_result() -> Result<()> {
     let _fixture = maximal_source_fixture()?;
     let mut fixture = Fixture::new();
@@ -243,6 +255,7 @@ fn source_serialization_capacity_is_exact_and_both_passes_are_cancellable() -> R
 }
 
 #[test]
+#[ignore = "maximum-size Source fixture; run serially: cargo test --lib -- --ignored --test-threads=1 proxy::budget_tests"]
 fn maximal_units_first_manifest_preserves_foreign_evidence_and_rejects_tamper() -> Result<()> {
     let _fixture = maximal_source_fixture()?;
     let mut fixture = Fixture::new();

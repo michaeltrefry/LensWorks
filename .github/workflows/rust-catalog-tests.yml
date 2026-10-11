@@ -28,6 +28,11 @@ jobs:
       - name: Engine tests
         timeout-minutes: 40
         run: cargo test --manifest-path engines/catalog/Cargo.toml --locked
+      - name: Engine maximum-size Source fixtures (serial, production deadline)
+        timeout-minutes: 20
+        # Excluded from the parallel run above so their 120 s per-query production
+        # deadline measures the Source path, not contention from other tests.
+        run: cargo test --manifest-path engines/catalog/Cargo.toml --locked --lib -- --ignored --test-threads=1 proxy::budget_tests
       - name: Adapter tests
         timeout-minutes: 30
         run: cargo test --manifest-path adapters/catalog/Cargo.toml --locked

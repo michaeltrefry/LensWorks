@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "15a88c514f83e25852161d68bdd859a8252677c87dd4790d90c835d4819144ba",
+  "source_digest": "a35fe0af1de6a1fde831d94d60b66ea383cc862cc21f0d95d16226f0185f6759",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -3643,8 +3643,8 @@
     {
       "path": "src/lightroom_migration_worker/source_reader/proxy/budget_tests.rs",
       "mode": "100644",
-      "bytes": 18397,
-      "sha256": "848d9b0b6a9f1519fef35139734ac8e86e30b58cc1287ac01987d1dd4b65f4e7"
+      "bytes": 19500,
+      "sha256": "729ebc6607b400d39b14e065f51500c5ecb1602405fa330edf93a89fb5aea2a4"
     },
     {
       "path": "src/lightroom_migration_worker/source_reader/proxy/tests.rs",

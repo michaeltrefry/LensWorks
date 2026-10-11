@@ -782,7 +782,7 @@ struct LensWorksCatalogBrowserTests {
                     report["independentPreviewsDuringImportQualified"] = productionDefaults
                     report["negativeTwoRequestCapacityQualified"] = !productionDefaults && mode == "four_foreground" && outcomes.contains(where: { $0.outcome == "capacity_rejected" })
                 } else { report["independentPreviewsDuringImportQualified"] = false }
-                try await model.waitImport(terminal: true)
+                try await fixture.awaitImportCompletion(model)
                 let completed = try #require(model.importProgress)
                 guard completed.id == secondAttempt, completed.phase == .Complete,
                       completed.imported.value == 1, completed.unchanged.value == 102, completed.failed.value == 0 else {
@@ -2041,8 +2041,27 @@ struct LensWorksCatalogBrowserTests {
             } catch { print("Fixture diagnostic could not be retained at \(root.path): \(error)") }
         }
         func importPhotos(_ model: LensWorksCatalog) async throws {
-            try await model.startImport(photos.path); try await model.waitImport(terminal: true)
+            try await model.startImport(photos.path); try await awaitImportCompletion(model)
             #expect(model.importProgress?.failed.value == 0)
+        }
+        /// Observes the owned import to its end through the public (at most 60-second) observation windows. A window
+        /// that closes before the import ends must show the same attempt and source still making forward progress, so
+        /// a stalled import fails while a host slowed by parallel tests or CI builds only needs more windows.
+        func awaitImportCompletion(_ model: LensWorksCatalog) async throws {
+            let attempt = try #require(model.importProgress)
+            while true {
+                let before = try #require(model.importProgress)
+                do { try await model.waitImport(terminal: true); return }
+                catch LensWorksCatalogError.importObservationTimeout(let observed) {
+                    let advanced = observed.imported.value + observed.unchanged.value > before.imported.value + before.unchanged.value
+                        || (before.phase == .Discovering && observed.phase == .Draining)
+                        || (observed.phase == .Draining && observed.pending_previews < before.pending_previews)
+                    guard observed.id == attempt.id, observed.source == attempt.source,
+                          [.Discovering, .Draining].contains(observed.phase), observed.failed.value == 0, advanced else {
+                        throw LensWorksCatalogError.importObservationTimeout(observed)
+                    }
+                }
+            }
         }
         // Index tests need only the actual native identity format; layer serialization is covered
         // separately by LensWorksCatalogTests' real ProjectStore save/reopen fixtures.
