@@ -36,6 +36,7 @@ pub(super) fn shared(cap: usize) -> Arc<Shared> {
         wake: Condvar::new(),
         binary: Arc::new(AtomicUsize::new(0)),
         filesystem: None,
+        relay_ready: AtomicBool::new(false),
         backup: None,
         metadata: Default::default(),
         migration_stop: Mutex::new(None),

@@ -342,9 +342,18 @@ actor LensWorksCatalogService {
     func open(_ path: String, create: Bool) async throws -> LensWorksCatalogLocation {
         try await request(LensWorksCatalogRequest(op: create ? "create" : "open", catalog_path: path), as: LensWorksCatalogLocation.self)
     }
+    #if DEBUG
+    /// Test observation of catalog page fetches: how many were issued and the largest row limit requested.
+    private(set) var browseCalls = 0
+    private(set) var browseLimitHighWater: UInt16 = 0
+    #endif
     func browse(options: LWApplicationBrowseOptions, cursor: String?) async throws -> LensWorksBrowserPage {
         let (owner, token) = try context()
-        guard case .Images(let rows, let next, let more, let complete, let scanned) = try await owner.perform(.Search(catalog: token, options: options, cursor: cursor, limit: rowLimit)), rows.count <= 100 else {
+        let limit = rowLimit
+        #if DEBUG
+        browseCalls += 1; browseLimitHighWater = max(browseLimitHighWater, limit)
+        #endif
+        guard case .Images(let rows, let next, let more, let complete, let scanned) = try await owner.perform(.Search(catalog: token, options: options, cursor: cursor, limit: limit)), rows.count <= 100 else {
             throw LensWorksManagedError.protocolViolation("Expected a bounded catalog image page.")
         }
         return LensWorksBrowserPage(catalog: token, rows: rows, next: next, hasMore: more, complete: complete, scanned: scanned)

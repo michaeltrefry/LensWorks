@@ -136,6 +136,9 @@ struct Shared {
     wake: Condvar,
     binary: Arc<AtomicUsize>,
     filesystem: Option<Arc<filesystem::Parent>>,
+    /// Set when the filesystem relay queues output for the child; the writer
+    /// returns from its wait to send it instead of waiting out its poll.
+    relay_ready: AtomicBool,
     /// Managed backup B/F run beneath G, never beneath the catalog child C.
     backup: Option<Arc<Mutex<super::backup::Coordinator>>>,
     metadata: preview_metadata_admission::ProcessReservation,
@@ -764,12 +767,23 @@ impl DesktopBridge {
             wake: Condvar::new(),
             binary: Arc::new(AtomicUsize::new(0)),
             filesystem,
+            relay_ready: AtomicBool::new(false),
             backup,
             metadata,
             migration_stop: Mutex::new(None),
             #[cfg(test)]
             fixture: Mutex::new(None),
         });
+        if let Some(relay) = &shared.filesystem {
+            // Weak: the relay is owned by this Shared and must not keep it alive.
+            let writer = Arc::downgrade(&shared);
+            relay.set_output_waker(Some(Arc::new(move || {
+                if let Some(shared) = writer.upgrade() {
+                    shared.relay_ready.store(true, Ordering::Release);
+                    shared.wake.notify_all();
+                }
+            })));
+        }
         let local = match workbench {
             Some(dispatcher) => LocalOwner::Managed(dispatcher),
             None => Bridge::spawn(config.clone())

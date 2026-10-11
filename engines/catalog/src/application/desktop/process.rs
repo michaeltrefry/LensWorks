@@ -529,6 +529,11 @@ pub(super) fn next_outgoing(shared: &Shared, active: &mut Option<Message>) -> Op
         if let Some(m) = s.data.pop_front() {
             return Some(m);
         }
+        // Relay output queued since the writer last looked: return so it is
+        // written now. The timed wait remains only as a fallback.
+        if shared.filesystem.is_some() && shared.relay_ready.swap(false, Ordering::AcqRel) {
+            return None;
+        }
         s = shared
             .wake
             .wait_timeout(s, Duration::from_millis(2))
@@ -996,6 +1001,7 @@ fn output_writer(
     migration_rx: mpsc::Receiver<Message>,
     session: [u8; 16],
     proxy: Option<Arc<filesystem::Proxy>>,
+    relay_wake_pending: Arc<AtomicBool>,
 ) {
     let mut ordinary: Option<Message> = None;
     let mut migration: Option<Message> = None;
@@ -1064,6 +1070,7 @@ fn output_writer(
             }
             if ordinary.is_none() {
                 match rx.recv_timeout(Duration::from_millis(2)) {
+                    Ok(m) if m.kind == Kind::Wake => relay_wake_pending.store(false, Ordering::Release),
                     Ok(m) => ordinary = Some(m),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => ordinary_closed = true,
@@ -1439,6 +1446,21 @@ pub(super) fn worker_main() -> anyhow::Result<()> {
     let (migration_tx, migration_rx) = mpsc::sync_channel(CONTROL_SLOTS + 1);
     let (binary, binary_rx) = mpsc::sync_channel(1);
     let output_proxy = proxy.clone();
+    // Relay frames queued by the proxy wake the writer through its ordinary
+    // channel, with at most one wake outstanding. The guard removes the proxy's
+    // sender clone before `tx` drops, so the writer still observes disconnect.
+    let relay_wake_pending = Arc::new(AtomicBool::new(false));
+    let _relay_waker = proxy.as_ref().map(|proxy| {
+        let (wake, pending) = (tx.clone(), relay_wake_pending.clone());
+        proxy.set_output_waker(Some(Arc::new(move || {
+            if !pending.swap(true, Ordering::AcqRel)
+                && wake.try_send(Message::new(Kind::Wake, 0, Vec::new())).is_err()
+            {
+                pending.store(false, Ordering::Release);
+            }
+        })));
+        RelayWakerGuard(proxy.clone())
+    });
     let control = thread::spawn(move || {
         output_writer(
             std::io::stderr().lock(),
@@ -1446,6 +1468,7 @@ pub(super) fn worker_main() -> anyhow::Result<()> {
             migration_rx,
             session,
             output_proxy,
+            relay_wake_pending,
         )
     });
     let data = thread::spawn(move || binary_writer(std::io::stdout().lock(), binary_rx, session));
@@ -1517,10 +1540,18 @@ pub(super) fn worker_main() -> anyhow::Result<()> {
         state.pending.clear();
         state.retained.clear();
     }
+    drop(_relay_waker);
     drop(tx);
     let _ = control.join();
     let _ = data.join();
     result
+}
+/// Removes the child writer's relay wake (and its channel sender) from the proxy.
+struct RelayWakerGuard(Arc<filesystem::Proxy>);
+impl Drop for RelayWakerGuard {
+    fn drop(&mut self) {
+        self.0.set_output_waker(None);
+    }
 }
 // Explicit paired admission covers the qualified preview surface. The default
 // desktop constructor stays legacy until the remaining custody routes qualify.
@@ -2980,7 +3011,7 @@ mod tests {
         drop(tx);
         drop(migration_tx);
         let mut bytes = Vec::new();
-        output_writer(&mut bytes, rx, migration_rx, shared.session, None);
+        output_writer(&mut bytes, rx, migration_rx, shared.session, None, Default::default());
         let mut cursor = &bytes[..];
         let first = Frame::read(&mut cursor)?.unwrap();
         let second = Frame::read(&mut cursor)?.unwrap();

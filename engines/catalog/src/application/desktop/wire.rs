@@ -39,6 +39,9 @@ pub(super) enum Kind {
     BackupAdmissionReply = 23,
     #[cfg(test)]
     Fixture = 250,
+    /// Process-local: rings the child output writer when relay output is
+    /// queued. Never encoded or decoded; the writer discards it.
+    Wake = 251,
 }
 impl Kind {
     fn decode(v: u8) -> std::io::Result<Self> {

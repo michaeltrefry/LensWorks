@@ -418,19 +418,24 @@ struct LensWorksCatalogBrowserTests {
             var reads: [Task<LensWorksPreview, any Error>] = []
             for asset in assets { reads.append(Task { try await model.thumbnail(asset) }) }
             do {
+                // Native reads now finish within milliseconds, so public Status is
+                // sampled continuously from the moment the reads are issued rather
+                // than only after every bytes job has reached the gate.
                 let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-                while await gate.ticketCount != 4 {
-                    guard ContinuousClock.now < deadline else { throw LensWorksCatalogError.message("Four cold production preview bytes jobs did not reach their actual owned gate.") }
-                    try await Task.sleep(for: .milliseconds(5))
+                var undrained: LWApplicationPreviewSettingsStatus?
+                while true {
+                    let held = await gate.ticketCount
+                    if undrained != nil && held == 4 { break }
+                    guard ContinuousClock.now < deadline else {
+                        throw LensWorksCatalogError.message(undrained == nil ? "Real public Status never observed an undrained native read before cancellation."
+                            : "Four cold production preview bytes jobs did not reach their actual owned gate.")
+                    }
+                    if undrained == nil {
+                        try await model.settings()
+                        if model.previewSettings?.previews_drained == false { undrained = model.previewSettings }
+                    } else { try await Task.sleep(for: .milliseconds(5)) }
                 }
-                let nativeDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-                repeat {
-                    try await model.settings()
-                    if model.previewSettings?.previews_drained == false { break }
-                    guard ContinuousClock.now < nativeDeadline else { throw LensWorksCatalogError.message("Real public Status never observed an undrained native read before cancellation.") }
-                    try await Task.sleep(for: .milliseconds(25))
-                } while true
-                let nativeBefore = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(try #require(model.previewSettings)))
+                let nativeBefore = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(try #require(undrained)))
                 try fixture.writeComparison(["stage": "before native read cancellation", "ownedBytesJobs": await gate.ticketCount,
                     "catalogToken": try #require(model.catalogToken), "previews_drained": false,
                     "status": nativeBefore])
@@ -1593,6 +1598,14 @@ struct LensWorksCatalogBrowserTests {
                 #expect(model.selection.count <= pageRows)
                 #expect(model.cursorHistoryCount <= LensWorksCursorWindow.capacity)
             }
+            /// Runs one page transition and requires it to issue exactly one bounded catalog fetch.
+            @MainActor func singleFetch(_ step: () async -> Bool) async -> Bool {
+                let before = await model.service.browseCalls
+                let moved = await step()
+                #expect(await model.service.browseCalls - before == 1)
+                #expect(await model.service.browseLimitHighWater <= UInt16(pageRows))
+                return moved
+            }
             #expect(model.assets.count == pageRows && model.hasMore)
             checkWindow()
 
@@ -1602,7 +1615,7 @@ struct LensWorksCatalogBrowserTests {
             var lastSequence = try #require(model.assets.last?.sequence)
             let started = ContinuousClock.now
             for page in 1...150 {
-                #expect(await model.nextPage())
+                #expect(await singleFetch { await model.nextPage() })
                 checkWindow()
                 #expect(model.assets.count == pageRows)
                 let first = try #require(model.assets.first)
@@ -1614,7 +1627,7 @@ struct LensWorksCatalogBrowserTests {
             #expect(deepScroll < .seconds(120), "150 windowed pages took \(deepScroll)")
             // Scrolling back re-fetches exactly the earlier windows.
             for page in stride(from: 149, through: 140, by: -1) {
-                #expect(await model.previousPage())
+                #expect(await singleFetch { await model.previousPage() })
                 checkWindow()
                 #expect(model.assets.first?.id == firstIDs[Int64(page)])
             }
@@ -1624,7 +1637,7 @@ struct LensWorksCatalogBrowserTests {
             let anchor = model.assets[10]
             await model.select(anchor)
             #expect(model.selectionCount == 1)
-            for _ in 0..<3 { #expect(await model.nextPage()) }
+            for _ in 0..<3 { #expect(await singleFetch { await model.nextPage() }) }
             await model.select(model.assets[20], range: true)
             #expect(model.error == nil)
             #expect(model.selectionCount == Int64((pageRows - 10) + 2 * pageRows + 21))
@@ -1636,7 +1649,7 @@ struct LensWorksCatalogBrowserTests {
             // Keyboard navigation across a page boundary fetches only the next window.
             await model.select(try #require(model.assets.last))
             let beforeBoundary = model.pageAuthority.ordinal
-            await model.moveSelection(1, range: false)
+            _ = await singleFetch { await model.moveSelection(1, range: false); return true }
             #expect(model.pageAuthority.ordinal == beforeBoundary + 1)
             #expect(model.selectedPhotoID == model.assets.first?.id)
             checkWindow()
@@ -1653,6 +1666,7 @@ struct LensWorksCatalogBrowserTests {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
             await model.setOutput(output.path)
             let page = model.pageAuthority, rows = model.assets.map(\.id)
+            let fetchesBeforeEditor = await model.service.browseCalls
             let workspace = ProjectWorkspace()
             await model.createWorkingVersion(workspace: workspace)
             #expect(model.error == nil && !model.showingCatalog)
@@ -1663,9 +1677,9 @@ struct LensWorksCatalogBrowserTests {
             #expect(model.selectedPhotoID == rows[1] && model.pageAuthority == page)
             model.showingCatalog = true
             #expect(model.pageAuthority == page && model.assets.map(\.id) == rows)
+            #expect(await model.service.browseCalls == fetchesBeforeEditor, "the editor transition must not re-fetch the window")
             checkWindow()
 
-            #expect(model.rowsHighWater <= pageRows)
             let previews = await model.service.previewMetrics()
             #expect(previews.cacheEntriesHighWater <= LensWorksPreviewStore.maximumEntries)
         }

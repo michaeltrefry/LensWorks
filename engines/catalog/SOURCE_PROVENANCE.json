@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "7afb00a2f1920046271d679c125de30d8fbfb6c4055b7343995ad024d633cecc",
+  "source_digest": "ec47c27c17fa31871f31338c47578a8ccca58b26707a08a285a624a448b5e48f",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1945,8 +1945,8 @@
     {
       "path": "src/application.rs",
       "mode": "100644",
-      "bytes": 143735,
-      "sha256": "96b713d0f2ddaac16f9426e11ceda07575487aab3b7413b7153524a256eb16f5"
+      "bytes": 143916,
+      "sha256": "b66d68763f86da3f9c7926d5d94fcb0ff8ef9cd841bb0392abef2dff550db31e"
     },
     {
       "path": "src/application/backup.rs",
@@ -1975,8 +1975,8 @@
     {
       "path": "src/application/desktop.rs",
       "mode": "100644",
-      "bytes": 64374,
-      "sha256": "797c3dc5a00f5e11530b7409d2ed32742d8da2aef53174a8db68cb261df06672"
+      "bytes": 65066,
+      "sha256": "735b85cd5171815e7e90fabaf210ee62f8833c449ab4ec04ec08db630882b906"
     },
     {
       "path": "src/application/desktop/backup.rs",
@@ -1999,8 +1999,8 @@
     {
       "path": "src/application/desktop/filesystem.rs",
       "mode": "100644",
-      "bytes": 89088,
-      "sha256": "83459faddccf6357f1b03da1f559d3aecf6a6be808441fda744adce30ca5bd36"
+      "bytes": 90292,
+      "sha256": "bb171224fd7609f6a3d9162dd7aa719a76a1ab0013492ff209a6f749be59c865"
     },
     {
       "path": "src/application/desktop/filesystem/export_native.rs",
@@ -2101,8 +2101,8 @@
     {
       "path": "src/application/desktop/process.rs",
       "mode": "100644",
-      "bytes": 120198,
-      "sha256": "5f8644d8f9ce9c6df29986b5f5c342b2b43af78c4e8803733f7657453329853f"
+      "bytes": 121689,
+      "sha256": "515cdd3baaba247c65cfb8dabbf8a744a900b09c73aa735084ea3de5764d0933"
     },
     {
       "path": "src/application/desktop/process/test_reap.rs",
@@ -2119,14 +2119,14 @@
     {
       "path": "src/application/desktop/tests.rs",
       "mode": "100644",
-      "bytes": 15977,
-      "sha256": "1db159dfe769e6609ab5f56b23f86e5239e1b5b49071a1a8c9d7fe0791994cd1"
+      "bytes": 16022,
+      "sha256": "90bc11f356f1cbdc6a52c8ef69b6f7f621fc4d50701c3c015aca2d8a9f175267"
     },
     {
       "path": "src/application/desktop/wire.rs",
       "mode": "100644",
-      "bytes": 15818,
-      "sha256": "9a391bc29e31bed1f4d9ff4bf48a343cc2dd508b7441a7c1bbe0f9c945691465"
+      "bytes": 15974,
+      "sha256": "23c9777ed0f13113733934298cc02ca9482d4132a9e322f8cafbcb40e5251d91"
     },
     {
       "path": "src/application/desktop/workbench.rs",
@@ -3199,8 +3199,8 @@
     {
       "path": "src/import_preparation.rs",
       "mode": "100644",
-      "bytes": 76553,
-      "sha256": "d7b974d77b0098c368035f0bee2e6b1b198d5aad01eafecc79bbc34092eda28c"
+      "bytes": 78063,
+      "sha256": "2b3ab02ec2e5fe7c92a060ea9c7cbd5fef4ae90b1068350d39c9e41890770d97"
     },
     {
       "path": "src/import_readiness.rs",

@@ -484,8 +484,13 @@ impl Slot {
         self.entries.pop_front().map(|(_, bytes)| bytes)
     }
 }
+/// Wakes the process writer that drains a relay's output lanes. Without it the
+/// writer only notices a new frame on its next idle poll, which put a fixed
+/// delay on every relayed filesystem call.
+pub(super) type OutputWaker = Arc<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 struct Output {
+    waker: Option<OutputWaker>,
     failed: Option<Arc<Vec<u8>>>,
     cancel: Slot,
     ack: Slot,
@@ -504,7 +509,17 @@ struct Output {
     data: VecDeque<Arc<Vec<u8>>>,
 }
 impl Output {
+    fn ring(&self) {
+        if let Some(waker) = &self.waker {
+            waker();
+        }
+    }
     fn push(&mut self, binding: &Binding, body: Body) -> Result<()> {
+        let pushed = self.push_lane(binding, body);
+        self.ring();
+        pushed
+    }
+    fn push_lane(&mut self, binding: &Binding, body: Body) -> Result<()> {
         // Classify by borrowed scalars before moving the potentially large body.
         let class = match &body {
             Body::Control(Control::ExportNativeStop { key }) => (13, key.operation.0),
@@ -561,6 +576,7 @@ impl Output {
         }
         ensure!(self.data.len() < 2, "relay ordinary output capacity");
         self.data.push_back(bytes);
+        self.ring();
         Ok(())
     }
     fn next(&mut self, lane: Lane) -> Option<Out> {
@@ -908,6 +924,10 @@ impl Parent {
         }
         self.wake.notify_all();
     }
+    /// Installs the wake for the desktop writer that drains this relay's output.
+    pub fn set_output_waker(&self, waker: Option<OutputWaker>) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).output.waker = waker;
+    }
     pub fn next(&self, lane: Lane) -> Option<Out> {
         self.state.lock().unwrap().output.next(lane)
     }
@@ -1078,6 +1098,7 @@ impl Parent {
                     );
                     let bytes = bytes.clone();
                     s.output.admission.push(id.0, bytes, 1)?;
+                    s.output.ring();
                     return Ok(());
                 }
                 ensure!(id.0 == s.admission_next, "admission query replay/gap");
@@ -1114,6 +1135,7 @@ impl Parent {
                     ensure!(expected == &request.1, "altered store status result query");
                     let bytes = bytes.clone();
                     s.output.store_reply.push(id.0, bytes, 1)?;
+                    s.output.ring();
                     return Ok(());
                 }
                 ensure!(id.0 == s.store_next, "store status query replay/gap");
@@ -1379,6 +1401,7 @@ impl Parent {
                     s.admission_busy = None;
                     s.admission_result = Some((id, operation, session, bytes.clone()));
                     s.output.admission.push(id, bytes, 1)?;
+                    s.output.ring();
                 }
                 ReadQuery::Store(id, query) => {
                     let value = self
@@ -1400,6 +1423,7 @@ impl Parent {
                     s.store_busy = None;
                     s.store_result = Some((id, query, bytes.clone()));
                     s.output.store_reply.push(id, bytes, 1)?;
+                    s.output.ring();
                 }
             }
         }
@@ -1509,6 +1533,10 @@ impl Proxy {
     }
     pub fn next(&self, lane: Lane) -> Option<Out> {
         self.state.lock().unwrap().output.next(lane)
+    }
+    /// Installs (or, with None, removes) the wake for this proxy's output writer.
+    pub fn set_output_waker(&self, waker: Option<OutputWaker>) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).output.waker = waker;
     }
     pub fn next_relay(&self, allow_data: bool) -> Option<Out> {
         let mut state = self.state.lock().unwrap();

@@ -2317,10 +2317,14 @@ impl Actor {
                         &o.catalog.root.join("import.lock")
                     )))
                 };
+                let wake = uuid::Uuid::parse_str(&o.token)
+                    .ok()
+                    .map(|token| OwnerProgress::new(&shared, token));
                 let preparation = core!(crate::import_preparation::Preparation::spawn(
                     &o.catalog,
                     &path,
                     cancel.0.clone(),
+                    wake,
                     #[cfg(test)]
                     checkpoint,
                 ));

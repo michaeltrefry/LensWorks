@@ -42,9 +42,31 @@ pub(crate) enum Event {
     Failed { source: NativePath, message: String },
     Finished,
 }
+/// Producer half of the event stream. Each event occupies the one-slot channel
+/// and the producer then blocks until `Preparation::poll` acknowledges it, so
+/// delivery stays a rendezvous: no unpublished work runs ahead of the actor.
+/// Unlike a bare rendezvous channel, the parked event is visible to the actor's
+/// `try_recv`, and the owner-progress wake lets the actor take it immediately
+/// instead of on its next idle tick.
+pub(crate) struct EventSender {
+    events: mpsc::SyncSender<Event>,
+    consumed: mpsc::Receiver<()>,
+    wake: Option<Arc<crate::application::OwnerProgress>>,
+}
+impl EventSender {
+    fn send(&self, event: Event) -> std::result::Result<(), ()> {
+        self.events.send(event).map_err(|_| ())?;
+        if let Some(wake) = &self.wake {
+            wake.notify();
+        }
+        self.consumed.recv().map_err(|_| ())
+    }
+}
 pub(crate) struct Preparation {
     session: Arc<crate::catalog_session::CatalogSessionAuthority>,
     receiver: Option<mpsc::Receiver<Event>>,
+    /// Acknowledges each event `poll` takes; dropping it unblocks the producer.
+    consumed: Option<mpsc::SyncSender<()>>,
     cancel: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     commands: Option<mpsc::SyncSender<Command>>,
@@ -166,6 +188,7 @@ impl Preparation {
         Ok(Self {
             session: catalog.session.clone(),
             receiver: Some(receiver),
+            consumed: None,
             cancel,
             thread: Some(worker),
             commands: Some(command_sender),
@@ -177,6 +200,7 @@ impl Preparation {
         catalog: &Catalog,
         source: &Path,
         cancel: Arc<AtomicBool>,
+        wake: Option<Arc<crate::application::OwnerProgress>>,
         #[cfg(test)] checkpoint: Option<Checkpoint>,
     ) -> Result<Self> {
         catalog.require_jobs_released()?;
@@ -193,7 +217,9 @@ impl Preparation {
         } else {
             None
         };
-        let (sender, receiver) = mpsc::sync_channel(0);
+        let (events, receiver) = mpsc::sync_channel(1);
+        let (consumed_sender, consumed) = mpsc::sync_channel(1);
+        let sender = EventSender { events, consumed, wake };
         let (command_sender, command_receiver) = mpsc::sync_channel(0);
         let source = source.to_path_buf();
         let stop = cancel.clone();
@@ -248,6 +274,7 @@ impl Preparation {
         Ok(Self {
             session: catalog.session.clone(),
             receiver: Some(receiver),
+            consumed: Some(consumed_sender),
             cancel,
             thread: Some(worker),
             commands: Some(command_sender),
@@ -258,7 +285,13 @@ impl Preparation {
     pub(crate) fn poll(&self) -> Result<Option<Event>> {
         let receiver = self.receiver.as_ref().context("preparation already stopped")?;
         match crate::import_readiness::poll(|| receiver.try_recv(), readiness_kind) {
-            Ok(event) => Ok(Some(event)),
+            Ok(event) => {
+                if let Some(consumed) = &self.consumed {
+                    // At most one event is outstanding, so this slot is free.
+                    let _ = consumed.try_send(());
+                }
+                Ok(Some(event))
+            }
             Err(mpsc::TryRecvError::Empty) => Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => {
                 anyhow::bail!("source preparation ended without terminal event")
@@ -280,6 +313,7 @@ impl Preparation {
             return Err(error);
         }
         self.receiver.take();
+        self.consumed.take();
         self.commands.take();
         self.join_thread()?;
         self.retry_cleanup()
@@ -356,6 +390,7 @@ impl Preparation {
         }
         self.commands.take(); // Unblock a managed custody acknowledgement wait.
         self.receiver.take(); // Unblock a rendezvous send before joining.
+        self.consumed.take();
     }
     pub(crate) fn cancel_and_finish(&mut self) -> Result<()> {
         self.request_cancel();
@@ -419,7 +454,7 @@ fn readiness_kind(event: &Event) -> crate::import_readiness::Kind {
         Event::Finished => Kind::Finished,
     }
 }
-fn send(sender: &mpsc::SyncSender<Event>, cancel: &AtomicBool, event: Event) -> Result<()> {
+fn send(sender: &EventSender, cancel: &AtomicBool, event: Event) -> Result<()> {
     let stage = match &event {
         Event::Header(_) => Some(crate::import_timing::Stage::SendHeader),
         Event::Source(_) => Some(crate::import_timing::Stage::SendSource),
@@ -493,7 +528,7 @@ fn recheck(path: &Path, file: &File, before: &Stamp) -> Result<()> {
 fn prepare_walk(
     admitted: Option<crate::catalog_session::SqlConnection>,
     root: &Path,
-    sender: &mpsc::SyncSender<Event>,
+    sender: &EventSender,
     cancel: &Arc<AtomicBool>,
     #[cfg(test)] checkpoint: Option<Checkpoint>,
 ) -> Result<()> {
@@ -1114,7 +1149,7 @@ fn prepare_managed(
     admitted: Option<crate::catalog_session::SqlConnection>,
     root: crate::catalog_session::RootCapability,
     source_root: &Path,
-    sender: &mpsc::SyncSender<Event>,
+    sender: &EventSender,
     commands: &mpsc::Receiver<Command>,
     cancel: &Arc<AtomicBool>,
     cleanup: &Arc<std::sync::Mutex<Option<RemoteImport>>>,
