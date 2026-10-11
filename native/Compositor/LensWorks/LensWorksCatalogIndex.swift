@@ -16,6 +16,21 @@ nonisolated struct LensWorksSelectedRow: Sendable {
     let imageID: String
     let key: LWCatalogEditsVariantKey
 }
+/// One photo's recorded organization change: the encoded forward edit and its exact
+/// inverse. Recorded before the write is sent, so a committed change is never unrecorded.
+nonisolated struct LensWorksOrganizationRecord: Sendable {
+    let row: LensWorksSelectedRow
+    let forward: Data
+    let inverse: Data
+}
+/// One recorded keyword-dictionary edit of a step, replayed before (phase 0) or
+/// after (phase 1) the step's photo records.
+nonisolated struct LensWorksDictionaryRecord: Sendable {
+    let ordinal: Int64
+    let phase: Int32
+    let forward: Data
+    let inverse: Data
+}
 
 /// Rebuildable LensWorks metadata only. Native package records remain the version authority.
 /// Selection is disk-backed TEMP storage; neither browse nor save materializes the global registry.
@@ -102,7 +117,7 @@ actor LensWorksCatalogIndex {
         do {
             sqlite3_busy_timeout(pointer, 3000)
             sqlite3_progress_handler(pointer, 1000, { _ in Task.isCancelled ? 1 : 0 }, nil)
-            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
+            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE organization_history(step INTEGER NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,image)); CREATE TEMP TABLE organization_dictionary(step INTEGER NOT NULL,phase INTEGER NOT NULL,ordinal INTEGER NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,phase,ordinal)); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
         } catch { sqlite3_close_v2(pointer); database = nil; throw error }
     }
     private func execute(_ sql: String) throws {
@@ -305,6 +320,95 @@ actor LensWorksCatalogIndex {
                 if step == SQLITE_DONE { return rows }
                 guard step == SQLITE_ROW else { throw failure() }
                 rows.append(LensWorksSelectedRow(imageID: text(prepared, 0), key: LWCatalogEditsVariantKey(asset_id: text(prepared, 1), variant_id: text(prepared, 2))))
+            }
+        }
+    }
+    /// Undo history is disk-backed TEMP storage written and read one bounded page at a time.
+    func recordOrganization(step: Int64, records: [LensWorksOrganizationRecord]) throws {
+        guard records.count <= 100 else { throw LensWorksManagedError.resourceLimit("Organization history admission exceeds one page.") }
+        try validate(records.map(\.row))
+        try open(); try execute("BEGIN IMMEDIATE")
+        do {
+            for record in records {
+                try statement("INSERT OR REPLACE INTO organization_history(step,image,asset,variant,forward,inverse) VALUES(?,?,?,?,?,?)", strings: ["", record.row.imageID, record.row.key.asset_id, record.row.key.variant_id]) { prepared in
+                    sqlite3_bind_int64(prepared, 1, step)
+                    try bind(prepared, 5, record.forward); try bind(prepared, 6, record.inverse)
+                    guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
+                }
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    private func bind(_ prepared: OpaquePointer, _ column: Int32, _ data: Data) throws {
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        guard data.withUnsafeBytes({ sqlite3_bind_blob(prepared, column, $0.baseAddress ?? UnsafeRawPointer(bitPattern: 1), Int32($0.count), transient) }) == SQLITE_OK else { throw failure() }
+    }
+    private func blob(_ prepared: OpaquePointer, _ column: Int32) -> Data {
+        let count = Int(sqlite3_column_bytes(prepared, column))
+        guard count > 0, let bytes = sqlite3_column_blob(prepared, column) else { return Data() }
+        return Data(bytes: bytes, count: count)
+    }
+    func organizationRecords(step: Int64, after: String = "") throws -> [LensWorksOrganizationRecord] {
+        try statement("SELECT image,asset,variant,forward,inverse FROM organization_history WHERE step=? AND image>? ORDER BY image LIMIT 100", strings: ["", after]) { prepared in
+            sqlite3_bind_int64(prepared, 1, step)
+            var rows: [LensWorksOrganizationRecord] = []
+            while true {
+                let step = sqlite3_step(prepared)
+                if step == SQLITE_DONE { return rows }
+                guard step == SQLITE_ROW else { throw failure() }
+                rows.append(LensWorksOrganizationRecord(row: LensWorksSelectedRow(imageID: text(prepared, 0), key: LWCatalogEditsVariantKey(asset_id: text(prepared, 1), variant_id: text(prepared, 2))), forward: blob(prepared, 3), inverse: blob(prepared, 4)))
+            }
+        }
+    }
+    /// Forget photos whose recorded change was not applied (for example a batch item
+    /// that failed its compare-and-set), so undo never reports them.
+    func forgetOrganization(step: Int64, images: [String]) throws {
+        guard images.count <= 100 else { throw LensWorksManagedError.resourceLimit("Organization history admission exceeds one page.") }
+        for image in images {
+            try statement("DELETE FROM organization_history WHERE step=? AND image=?", strings: ["", image]) { prepared in
+                sqlite3_bind_int64(prepared, 1, step)
+                guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
+            }
+        }
+    }
+    func recordDictionary(step: Int64, records: [LensWorksDictionaryRecord]) throws {
+        guard records.count <= 100 else { throw LensWorksManagedError.resourceLimit("Organization history admission exceeds one page.") }
+        try open(); try execute("BEGIN IMMEDIATE")
+        do {
+            for record in records {
+                try statement("INSERT OR REPLACE INTO organization_dictionary(step,phase,ordinal,forward,inverse) VALUES(?,?,?,?,?)", strings: []) { prepared in
+                    sqlite3_bind_int64(prepared, 1, step); sqlite3_bind_int(prepared, 2, record.phase); sqlite3_bind_int64(prepared, 3, record.ordinal)
+                    try bind(prepared, 4, record.forward); try bind(prepared, 5, record.inverse)
+                    guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
+                }
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    /// One page of a step's dictionary records in one phase, ascending or descending by ordinal.
+    func dictionaryRecords(step: Int64, phase: Int32, after: Int64?, descending: Bool) throws -> [LensWorksDictionaryRecord] {
+        let sql = descending
+            ? "SELECT ordinal,phase,forward,inverse FROM organization_dictionary WHERE step=? AND phase=? AND ordinal<? ORDER BY ordinal DESC LIMIT 100"
+            : "SELECT ordinal,phase,forward,inverse FROM organization_dictionary WHERE step=? AND phase=? AND ordinal>? ORDER BY ordinal LIMIT 100"
+        return try statement(sql, strings: []) { prepared in
+            sqlite3_bind_int64(prepared, 1, step); sqlite3_bind_int(prepared, 2, phase)
+            sqlite3_bind_int64(prepared, 3, after ?? (descending ? Int64.max : Int64.min))
+            var rows: [LensWorksDictionaryRecord] = []
+            while true {
+                let step = sqlite3_step(prepared)
+                if step == SQLITE_DONE { return rows }
+                guard step == SQLITE_ROW else { throw failure() }
+                rows.append(LensWorksDictionaryRecord(ordinal: sqlite3_column_int64(prepared, 0), phase: sqlite3_column_int(prepared, 1), forward: blob(prepared, 2), inverse: blob(prepared, 3)))
+            }
+        }
+    }
+    func discardOrganization(steps: [Int64]) throws {
+        for step in steps {
+            for table in ["organization_history", "organization_dictionary"] {
+                try statement("DELETE FROM \(table) WHERE step=?", strings: [""]) { prepared in
+                    sqlite3_bind_int64(prepared, 1, step)
+                    guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
+                }
             }
         }
     }

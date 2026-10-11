@@ -144,6 +144,39 @@ pub enum Operation {
     RemoveCollection {
         collection: String,
     },
+    /// Restore an exact prior `xmp:Rating` (raw text, including Lightroom's
+    /// reject `-1`), or remove the property when it was absent.
+    RestoreRating {
+        value: Option<String>,
+    },
+    /// Restore an exact prior `xmp:Label`, or remove the property when it was absent.
+    RestoreLabel {
+        value: Option<String>,
+    },
+    /// Restore an explicit flag, or clear it so the flag derives from the rating again.
+    RestoreFlag {
+        value: Option<Flag>,
+    },
+}
+/// A rating restored verbatim must still be a valid XMP Rating (real -1..=5).
+pub(crate) fn restorable_rating(value: &str) -> bool {
+    value.len() <= 32
+        && value
+            .trim()
+            .parse::<f64>()
+            .is_ok_and(|v| v.is_finite() && (-1.0..=5.0).contains(&v))
+}
+/// See [`Catalog::image_organization_state`].
+#[derive(Debug, Clone)]
+pub struct ImageOrganizationState {
+    pub identity: crate::catalog_images::ImageMetadataIdentity,
+    pub rating: Option<String>,
+    pub label: Option<String>,
+    pub flag: Option<Flag>,
+    pub effective_flag: Flag,
+    pub keywords: Vec<(KeywordKind, Vec<String>)>,
+    /// Requested collection: None when not requested, Some(None) when not a member.
+    pub collection: Option<Option<i64>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchItem {
@@ -569,6 +602,24 @@ impl Catalog {
         for r in self.db.prepare("SELECT id,parent,name,path FROM organization_keywords WHERE kind=?1 AND parent IS ?2 AND id>?3 ORDER BY id LIMIT ?4")?.query_map(params![kind.sql(),parent,after,limit as i64],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get::<_,String>(3)?)))?{let(id,parent,name,path)=r?;result.push(Keyword{id,kind,parent,name,path:serde_json::from_str(&path)?});}
         Ok(result)
     }
+    pub fn find_keyword(&self, kind: KeywordKind, path: &[String]) -> Result<Option<Keyword>> {
+        path_valid(kind, path)?;
+        let row: Option<(i64, Option<i64>, String)> = self
+            .db
+            .query_row(
+                "SELECT id,parent,name FROM organization_keywords WHERE kind=?1 AND path=?2",
+                params![kind.sql(), serde_json::to_string(path)?],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.map(|(id, parent, name)| Keyword {
+            id,
+            kind,
+            parent,
+            name,
+            path: path.to_vec(),
+        }))
+    }
     /// Removing an in-use hierarchy requires an explicit resumable remove/move batch first.
     pub fn delete_keyword(&mut self, id: i64) -> Result<()> {
         let _write = self
@@ -791,7 +842,7 @@ impl Catalog {
             );
             validate_operation(&self.db, &current.operation)?;
             match &current.operation {
-                Operation::Flag { value } => {
+                Operation::Flag { .. } | Operation::RestoreFlag { .. } => {
                     let _write = self
                         .writers
                         .enter(crate::catalog_writer::Priority::Foreground)?;
@@ -799,7 +850,12 @@ impl Catalog {
                         .db
                         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                     assert_pending(&tx, job, seq, revision)?;
-                    tx.execute("INSERT INTO organization_flags VALUES(?1,?2,?3) ON CONFLICT(sequence) DO UPDATE SET flag=excluded.flag,provenance=excluded.provenance",params![seq,value.sql(),serde_json::json!({"job":job,"operation":current.operation}).to_string()])?;
+                    write_flag(
+                        &tx,
+                        seq,
+                        &current.operation,
+                        serde_json::json!({"job":job,"operation":current.operation}),
+                    )?;
                     let next = advance_local(&tx, &asset, job)?;
                     refresh(&tx, &asset)?;
                     complete_item(&tx, job, seq, next)?;
@@ -930,9 +986,13 @@ pub(crate) fn page_limit(limit: usize) -> Result<()> {
 fn validate_operation(db: &Connection, op: &Operation) -> Result<()> {
     match op {
         Operation::Rating { value } => ensure!(*value <= 5, "rating must be 0..5"),
-        Operation::Label { value } => ensure!(
+        Operation::Label { value } | Operation::RestoreLabel { value: Some(value) } => ensure!(
             value.len() <= 1024 && !value.contains('\0'),
             "invalid label"
+        ),
+        Operation::RestoreRating { value: Some(value) } => ensure!(
+            restorable_rating(value),
+            "restored rating must be a real number -1..5"
         ),
         Operation::AddKeyword { kind, path } | Operation::RemoveKeyword { kind, path } => {
             path_valid(*kind, path)?
@@ -956,6 +1016,25 @@ fn validate_operation(db: &Connection, op: &Operation) -> Result<()> {
             )
         }
         _ => {}
+    }
+    Ok(())
+}
+/// An explicit flag is an override row; restoring "no explicit flag" deletes it so
+/// the flag derives from the rating (a Lightroom `-1` rating is a reject) again.
+fn write_flag(
+    db: &Connection,
+    seq: i64,
+    operation: &Operation,
+    provenance: serde_json::Value,
+) -> Result<()> {
+    match operation {
+        Operation::Flag { value } | Operation::RestoreFlag { value: Some(value) } => {
+            db.execute("INSERT INTO organization_flags VALUES(?1,?2,?3) ON CONFLICT(sequence) DO UPDATE SET flag=excluded.flag,provenance=excluded.provenance",params![seq,value.sql(),provenance.to_string()])?;
+        }
+        Operation::RestoreFlag { value: None } => {
+            db.execute("DELETE FROM organization_flags WHERE sequence=?", [seq])?;
+        }
+        _ => anyhow::bail!("operation is not a flag change"),
     }
     Ok(())
 }
@@ -1012,8 +1091,10 @@ fn organization_edits(
     op: &Operation,
 ) -> Result<(Option<i64>, Vec<String>, Vec<Edit>)> {
     let (field, namespace, path) = match op {
-        Operation::Rating { .. } => ("rating", xmp::XMP, "Rating"),
-        Operation::Label { .. } => ("label", xmp::XMP, "Label"),
+        Operation::Rating { .. } | Operation::RestoreRating { .. } => {
+            ("rating", xmp::XMP, "Rating")
+        }
+        Operation::Label { .. } | Operation::RestoreLabel { .. } => ("label", xmp::XMP, "Label"),
         Operation::AddKeyword {
             kind: KeywordKind::Flat,
             ..
@@ -1053,6 +1134,15 @@ fn organization_edits(
     match op {
         Operation::Rating { value } => edits.push(set(path.into(), value.to_string())),
         Operation::Label { value } => edits.push(set(path.into(), value.clone())),
+        Operation::RestoreRating { value: Some(value) }
+        | Operation::RestoreLabel { value: Some(value) } => {
+            edits.push(set(path.into(), value.clone()))
+        }
+        Operation::RestoreRating { value: None } | Operation::RestoreLabel { value: None } => edits
+            .push(Edit::Remove {
+                namespace: namespace.into(),
+                path: path.into(),
+            }),
         Operation::AddKeyword { kind, path: parts } => {
             let term = if *kind == KeywordKind::Flat {
                 parts[0].clone()
@@ -1144,6 +1234,7 @@ impl Catalog {
         )?;
         match &operation {
             Operation::Flag { .. }
+            | Operation::RestoreFlag { .. }
             | Operation::AddCollection { .. }
             | Operation::RemoveCollection { .. } => {
                 let _write = self
@@ -1164,8 +1255,13 @@ impl Catalog {
                 );
                 validate_operation(&tx, &operation)?;
                 match &operation {
-                    Operation::Flag { value } => {
-                        tx.execute("INSERT INTO organization_flags VALUES(?1,?2,?3) ON CONFLICT(sequence) DO UPDATE SET flag=excluded.flag,provenance=excluded.provenance",params![seq,value.sql(),serde_json::json!({"operation":operation,"expected_revision":expected_revision}).to_string()])?;
+                    Operation::Flag { .. } | Operation::RestoreFlag { .. } => {
+                        write_flag(
+                            &tx,
+                            seq,
+                            &operation,
+                            serde_json::json!({"operation":operation,"expected_revision":expected_revision}),
+                        )?;
                     }
                     Operation::AddCollection { collection } => {
                         tx.execute("INSERT INTO organization_collection_members VALUES(?1,?2,?3) ON CONFLICT(collection,sequence) DO NOTHING",params![collection,seq,serde_json::json!({"operation":operation,"expected_revision":expected_revision}).to_string()])?;
@@ -1196,6 +1292,115 @@ impl Catalog {
                 Ok(self.edit_metadata_commit(asset,expected_revision,base,&edits,&fields,|db,revision|{db.execute("INSERT INTO organization_events(sequence,action,detail) VALUES(?1,'single_asset',?2)",params![seq,serde_json::to_string(&operation)?])?;after(db,revision)})?.revision)
             }
         }
+    }
+    /// One logical image's current organization state, read in one snapshot so a
+    /// client can record an exact inverse and compare-and-set against the same
+    /// metadata revision: raw `xmp:Rating`/`xmp:Label` (None when absent), the
+    /// explicit flag override, the direct keyword terms at or under each target,
+    /// and ordered membership of one collection.
+    pub fn image_organization_state(
+        &self,
+        key: &crate::catalog_edits::VariantKey,
+        keywords: &[(KeywordKind, &[String])],
+        collection: Option<&str>,
+    ) -> Result<ImageOrganizationState> {
+        let tx = self.db.unchecked_transaction()?;
+        let image = crate::catalog_images::id(&tx, key)?;
+        let identity = crate::catalog_images::identity(&tx, &image)?;
+        let seq: i64 = tx.query_row(
+            "SELECT sequence FROM image_assets WHERE id=?",
+            [&image],
+            |r| r.get(0),
+        )?;
+        let scalar = |field: &str| -> Result<Option<String>> {
+            let value: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT value FROM metadata_effective WHERE asset_id=?1 AND field=?2",
+                    params![image, field],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(match value.flatten() {
+                Some(v) => match serde_json::from_str::<Value>(&v)? {
+                    Value::Text(text) => Some(text),
+                    _ => None,
+                },
+                None => None,
+            })
+        };
+        let rating = scalar("rating")?;
+        let label = scalar("label")?;
+        let flag: Option<String> = tx
+            .query_row(
+                "SELECT flag FROM organization_flags WHERE sequence=?",
+                [seq],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let flag = flag
+            .map(|v| match v.as_str() {
+                "pick" => Ok(Flag::Pick),
+                "reject" => Ok(Flag::Reject),
+                "unflagged" => Ok(Flag::Unflagged),
+                _ => Err(anyhow::anyhow!("unknown retained flag")),
+            })
+            .transpose()?;
+        let effective_flag = flag.clone().unwrap_or_else(|| {
+            if rating.as_deref().and_then(|v| v.parse::<i64>().ok()) == Some(-1) {
+                Flag::Reject
+            } else {
+                Flag::Unflagged
+            }
+        });
+        ensure!(keywords.len() <= 4, "at most four keyword targets");
+        let mut terms: Vec<(KeywordKind, Vec<String>)> = Vec::new();
+        for (kind, path) in keywords {
+            path_valid(*kind, path)?;
+            let exact = serde_json::to_string(path)?;
+            let prefix = format!("{},", &exact[..exact.len() - 1]);
+            let mut statement = tx.prepare("SELECT k.path FROM organization_keyword_members m JOIN organization_keywords k ON k.id=m.keyword WHERE m.sequence=?1 AND m.direct=1 AND k.kind=?2 AND (k.path=?3 OR substr(k.path,1,length(?4))=?4) ORDER BY k.path LIMIT 1001")?;
+            for row in statement.query_map(params![seq, kind.sql(), exact, prefix], |r| {
+                r.get::<_, String>(0)
+            })? {
+                let found: Vec<String> = serde_json::from_str(&row?)?;
+                if !terms.iter().any(|(k, p)| k == kind && *p == found) {
+                    terms.push((*kind, found));
+                }
+            }
+            ensure!(terms.len() <= 1000, "image keyword terms exceed one page");
+        }
+        let collection = collection
+            .map(|collection| -> Result<Option<i64>> {
+                Ok(tx.query_row("SELECT COALESCE(o.position,0) FROM organization_collection_members m LEFT JOIN organization_collection_order o ON o.collection=m.collection AND o.image_sequence=m.sequence WHERE m.collection=?1 AND m.sequence=?2",params![collection,seq],|r|r.get(0)).optional()?)
+            })
+            .transpose()?;
+        terms.sort_by(|a, b| (a.0.sql(), &a.1).cmp(&(b.0.sql(), &b.1)));
+        tx.commit()?;
+        Ok(ImageOrganizationState {
+            identity,
+            rating,
+            label,
+            flag,
+            effective_flag,
+            keywords: terms,
+            collection,
+        })
+    }
+    /// Advance up to `limit` items of a sealed batch, each in its own commit, and
+    /// stop at the first failure (which pauses the job for review) or completion.
+    pub fn run_organization_batch(&mut self, job: &str, limit: usize) -> Result<Job> {
+        ensure!(
+            (1..=MAX_BATCH).contains(&limit),
+            "run limit must be 1..1000"
+        );
+        let mut current = self.organization_job(job)?;
+        for _ in 0..limit {
+            if !matches!(current.state.as_str(), "ready" | "running") || current.pending == 0 {
+                break;
+            }
+            current = self.step_organization_batch(job)?;
+        }
+        Ok(current)
     }
     pub fn organization_events(&self, after: i64, limit: usize) -> Result<Vec<serde_json::Value>> {
         page_limit(limit)?;

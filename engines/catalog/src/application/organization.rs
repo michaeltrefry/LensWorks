@@ -30,12 +30,21 @@ pub enum Request {
     DeleteKeyword {
         id: I64,
     },
+    /// Look up one dictionary keyword by its exact kind and path.
+    FindKeyword {
+        kind: core::KeywordKind,
+        path: Vec<String>,
+    },
     Synonyms {
         keyword: I64,
         after: String,
         limit: u16,
     },
     AddSynonym {
+        keyword: I64,
+        synonym: String,
+    },
+    RemoveSynonym {
         keyword: I64,
         synonym: String,
     },
@@ -80,6 +89,13 @@ pub enum Request {
         collection: String,
         position: I64,
     },
+    /// One read-only snapshot per image (at most one page) of the state a client
+    /// needs to record an exact inverse and compare-and-set against it.
+    States {
+        keys: Vec<VariantKey>,
+        keywords: Vec<KeywordTarget>,
+        collection: Option<String>,
+    },
     Apply {
         key: VariantKey,
         expected_revision: I64,
@@ -97,6 +113,11 @@ pub enum Request {
     },
     Step {
         job: String,
+    },
+    /// Advance up to `limit` items (each its own commit), stopping at a failure.
+    Run {
+        job: String,
+        limit: u16,
     },
     Cancel {
         job: String,
@@ -118,6 +139,30 @@ pub enum Request {
         key: VariantKey,
         new_revision: Option<I64>,
     },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeywordTarget {
+    pub kind: core::KeywordKind,
+    pub path: Vec<String>,
+}
+/// Current organization state of one image; see `Request::States`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageState {
+    pub identity: ImageIdentity,
+    /// Raw `xmp:Rating` text (Lightroom reject is `-1`); None when absent.
+    pub rating: Option<String>,
+    /// Raw `xmp:Label`; None when absent (distinct from an empty label).
+    pub label: Option<String>,
+    /// Explicit flag override; None when the flag derives from the rating.
+    pub flag: Option<core::Flag>,
+    pub effective_flag: core::Flag,
+    /// Direct keyword terms at or under the requested targets.
+    pub keywords: Vec<KeywordTarget>,
+    /// Membership of the requested collection; None when none was requested.
+    pub member: Option<bool>,
+    /// Ordered position when a member of the requested collection.
+    pub position: Option<I64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -277,6 +322,7 @@ pub struct JobItem {
 pub enum Response {
     Keywords(Page<Keyword, I64>),
     KeywordCreated { id: I64 },
+    Keyword(Option<Keyword>),
     Synonyms(Page<Synonym, String>),
     Collections(Page<Collection, String>),
     Collection(Option<Collection>),
@@ -284,6 +330,7 @@ pub enum Response {
     Placement(Placement),
     Members(MembershipPage),
     Identity(ImageIdentity),
+    States(Vec<ImageState>),
     Changed { revision: I64 },
     Acknowledged,
     Job(Job),
@@ -371,6 +418,12 @@ fn operation(value: &core::Operation) -> Result<()> {
         }
         core::Operation::AddCollection { collection }
         | core::Operation::RemoveCollection { collection } => text(collection, false),
+        core::Operation::RestoreRating { value } => invalid(
+            value.as_deref().is_none_or(core::restorable_rating),
+            "restored rating must be a real number -1..5",
+        ),
+        core::Operation::RestoreLabel { value } => value.as_deref().map_or(Ok(()), |v| text(v, true)),
+        core::Operation::RestoreFlag { .. } => Ok(()),
     }
 }
 fn opaque(value: serde_json::Value, bounds: &Limits) -> Result<String> {
@@ -453,6 +506,7 @@ pub fn execute(catalog: &mut Catalog, request: Request, bounds: &Limits) -> Resu
         Request::Append { job, .. }
         | Request::Seal { job }
         | Request::Step { job }
+        | Request::Run { job, .. }
         | Request::Cancel { job }
         | Request::Review { job, .. } => {
             text(job, false)?;
@@ -498,6 +552,21 @@ pub fn execute(catalog: &mut Catalog, request: Request, bounds: &Limits) -> Resu
             catalog.delete_keyword(id.0).map_err(native)?;
             Response::Acknowledged
         }
+        Request::FindKeyword { kind, path: parts } => {
+            path(kind, &parts)?;
+            Response::Keyword(
+                catalog
+                    .find_keyword(kind, &parts)
+                    .map_err(native)?
+                    .map(|v| Keyword {
+                        id: I64(v.id),
+                        kind: v.kind,
+                        parent: v.parent.map(I64),
+                        name: v.name,
+                        path: v.path,
+                    }),
+            )
+        }
         Request::Synonyms {
             keyword,
             after,
@@ -528,6 +597,14 @@ pub fn execute(catalog: &mut Catalog, request: Request, bounds: &Limits) -> Resu
                     &synonym,
                     &serde_json::json!({"source":"desktop"}),
                 )
+                .map_err(native)?;
+            Response::Acknowledged
+        }
+        Request::RemoveSynonym { keyword, synonym } => {
+            invalid(keyword.0 > 0, "keyword id")?;
+            text(&synonym, false)?;
+            catalog
+                .remove_keyword_synonym(keyword.0, &synonym)
                 .map_err(native)?;
             Response::Acknowledged
         }
@@ -655,6 +732,52 @@ pub fn execute(catalog: &mut Catalog, request: Request, bounds: &Limits) -> Resu
                     .map_err(native)?
                     .into(),
             )
+        }
+        Request::States {
+            keys,
+            keywords,
+            collection,
+        } => {
+            invalid(
+                !keys.is_empty()
+                    && keys.len() <= usize::from(bounds.page_rows)
+                    && keywords.len() <= 2,
+                "organization state page limit",
+            )?;
+            for target in &keys {
+                key(target)?;
+            }
+            for v in &keywords {
+                path(v.kind, &v.path)?;
+            }
+            if let Some(v) = &collection {
+                text(v, false)?;
+            }
+            let targets = keywords
+                .iter()
+                .map(|v| (v.kind, v.path.as_slice()))
+                .collect::<Vec<_>>();
+            let mut states = Vec::with_capacity(keys.len());
+            for target in &keys {
+                let state = catalog
+                    .image_organization_state(target, &targets, collection.as_deref())
+                    .map_err(native)?;
+                states.push(ImageState {
+                    identity: state.identity.into(),
+                    rating: state.rating,
+                    label: state.label,
+                    flag: state.flag,
+                    effective_flag: state.effective_flag,
+                    keywords: state
+                        .keywords
+                        .into_iter()
+                        .map(|(kind, path)| KeywordTarget { kind, path })
+                        .collect(),
+                    member: state.collection.map(|v| v.is_some()),
+                    position: state.collection.flatten().map(I64),
+                });
+            }
+            Response::States(states)
         }
         Request::Members {
             collection,
@@ -817,6 +940,16 @@ pub fn execute(catalog: &mut Catalog, request: Request, bounds: &Limits) -> Resu
                     .into(),
             )
         }
+        Request::Run { job, limit } => {
+            text(&job, false)?;
+            let limit = count(limit, bounds)?;
+            Response::Job(
+                catalog
+                    .run_organization_batch(&job, limit)
+                    .map_err(native)?
+                    .into(),
+            )
+        }
         Request::Cancel { job } => {
             text(&job, false)?;
             Response::Job(
@@ -948,6 +1081,320 @@ mod tests {
             panic!()
         };
         Ok(page.rows)
+    }
+    fn fixture_photos(
+        count: usize,
+        sidecar: Option<&str>,
+    ) -> anyhow::Result<(tempfile::TempDir, Catalog, Vec<VariantKey>)> {
+        let temp = tempfile::tempdir()?;
+        let originals = temp.path().join("photos");
+        std::fs::create_dir_all(&originals)?;
+        for i in 0..count {
+            image::RgbImage::from_pixel(8, 8, image::Rgb([30u8, 60, 90 + i as u8]))
+                .save(originals.join(format!("photo-{i}.png")))?;
+            if let Some(sidecar) = sidecar {
+                std::fs::write(originals.join(format!("photo-{i}.xmp")), sidecar)?;
+            }
+        }
+        let mut c = Catalog::open(temp.path().join("catalog"))?;
+        c.import(originals.as_path(), None, |_| Ok(()))?;
+        while c.organization_index(20)?.pending {}
+        let keys = c
+            .browse_images(0, count)?
+            .into_iter()
+            .map(|v| v.key)
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), count);
+        Ok((temp, c, keys))
+    }
+    fn state(
+        c: &mut Catalog,
+        key: &VariantKey,
+        keywords: &[&[&str]],
+        collection: Option<&str>,
+    ) -> anyhow::Result<ImageState> {
+        let Response::States(mut states) = call(
+            c,
+            Request::States {
+                keys: vec![key.clone()],
+                keywords: keywords
+                    .iter()
+                    .map(|p| KeywordTarget {
+                        kind: core::KeywordKind::Hierarchical,
+                        path: p.iter().map(|v| v.to_string()).collect(),
+                    })
+                    .collect(),
+                collection: collection.map(str::to_owned),
+            },
+        )?
+        else {
+            panic!()
+        };
+        assert_eq!(states.len(), 1);
+        Ok(states.remove(0))
+    }
+    fn apply(c: &mut Catalog, key: &VariantKey, operation: core::Operation) -> anyhow::Result<I64> {
+        let expected_revision = revision(c, key)?;
+        let Response::Changed { revision } = call(
+            c,
+            Request::Apply {
+                key: key.clone(),
+                expected_revision,
+                operation,
+            },
+        )?
+        else {
+            panic!()
+        };
+        Ok(revision)
+    }
+    /// The filterable projection: rating (-2 = unrated), effective flag, label.
+    fn projection(c: &Catalog, key: &VariantKey) -> anyhow::Result<(i64, String, String)> {
+        let sequence = c.image(key)?.sequence;
+        Ok(c.db.query_row(
+            "SELECT rating,flag,label FROM organization_assets WHERE sequence=?",
+            [sequence],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    }
+    fn paths(state: &ImageState) -> Vec<Vec<String>> {
+        state.keywords.iter().map(|v| v.path.clone()).collect()
+    }
+    #[test]
+    fn states_report_direct_terms_membership_position_and_revision() -> anyhow::Result<()> {
+        let (_temp, mut c, key) = fixture()?;
+        let Response::CollectionCreated { id } = call(
+            &mut c,
+            Request::CreateCollection {
+                name: "Portraits".into(),
+            },
+        )?
+        else {
+            panic!()
+        };
+        let before = state(&mut c, &key, &[&["People"]], Some(&id))?;
+        assert!(before.keywords.is_empty());
+        assert_eq!((before.member, before.position), (Some(false), None));
+        assert_eq!(before.identity.metadata_revision, revision(&c, &key)?);
+        for path in [vec!["People", "Ada"], vec!["People", "Ada", "Kid"], vec!["Places"]] {
+            apply(
+                &mut c,
+                &key,
+                core::Operation::AddKeyword {
+                    kind: core::KeywordKind::Hierarchical,
+                    path: path.into_iter().map(str::to_owned).collect(),
+                },
+            )?;
+        }
+        let identity = c.image_metadata_identity(&key)?;
+        let Response::Changed { revision: changed } = call(
+            &mut c,
+            Request::SetMember {
+                identity: identity.into(),
+                collection: id.clone(),
+                position: I64(7),
+            },
+        )?
+        else {
+            panic!()
+        };
+        let after = state(&mut c, &key, &[&["People"]], Some(&id))?;
+        // Direct terms at or under the target only; the ancestor itself is indirect.
+        assert_eq!(
+            paths(&after),
+            vec![vec!["People", "Ada"], vec!["People", "Ada", "Kid"]]
+        );
+        assert_eq!((after.member, after.position), (Some(true), Some(I64(7))));
+        assert_eq!(after.identity.metadata_revision, changed);
+        // A sibling prefix ("Peop") is not a parent of "People".
+        assert!(state(&mut c, &key, &[&["Peop"]], None)?.keywords.is_empty());
+        let both = state(&mut c, &key, &[&["People", "Ada", "Kid"], &["Places"]], None)?;
+        assert_eq!(paths(&both), vec![vec!["People", "Ada", "Kid"], vec!["Places"]]);
+        assert_eq!(both.member, None);
+        Ok(())
+    }
+    #[test]
+    fn restore_operations_return_absent_and_reject_ratings_labels_and_flags_exactly()
+    -> anyhow::Result<()> {
+        // An unrated, unlabeled, unflagged photo: absent properties stay absent.
+        let (_temp, mut c, keys) = fixture_photos(1, None)?;
+        let key = &keys[0];
+        let initial = state(&mut c, key, &[], None)?;
+        assert_eq!(
+            (initial.rating.as_deref(), initial.label.as_deref(), initial.flag.clone()),
+            (None, None, None)
+        );
+        apply(&mut c, key, core::Operation::Rating { value: 3 })?;
+        apply(&mut c, key, core::Operation::Label { value: "Blue".into() })?;
+        apply(&mut c, key, core::Operation::Flag { value: core::Flag::Pick })?;
+        let changed = state(&mut c, key, &[], None)?;
+        assert_eq!(changed.rating.as_deref(), Some("3"));
+        assert_eq!(changed.label.as_deref(), Some("Blue"));
+        assert_eq!(changed.flag, Some(core::Flag::Pick));
+        apply(&mut c, key, core::Operation::RestoreRating { value: None })?;
+        apply(&mut c, key, core::Operation::RestoreLabel { value: None })?;
+        apply(&mut c, key, core::Operation::RestoreFlag { value: None })?;
+        let restored = state(&mut c, key, &[], None)?;
+        assert_eq!(restored.rating, None, "an absent rating must not become 0");
+        assert_eq!(restored.label, None, "an absent label must not become empty");
+        assert_eq!(
+            (restored.flag.clone(), restored.effective_flag.clone()),
+            (None, core::Flag::Unflagged)
+        );
+        assert_eq!(projection(&c, key)?, (-2, "unflagged".into(), String::new()));
+
+        // A Lightroom reject (xmp:Rating=-1) survives a rating change and its undo.
+        let reject = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="-1"/></rdf:RDF></x:xmpmeta>"#;
+        let (_temp, mut c, keys) = fixture_photos(1, Some(reject))?;
+        let key = &keys[0];
+        let initial = state(&mut c, key, &[], None)?;
+        assert_eq!(initial.rating.as_deref(), Some("-1"));
+        assert_eq!((initial.flag.clone(), initial.effective_flag.clone()), (None, core::Flag::Reject));
+        apply(&mut c, key, core::Operation::Rating { value: 3 })?;
+        assert_eq!(state(&mut c, key, &[], None)?.effective_flag, core::Flag::Unflagged);
+        apply(
+            &mut c,
+            key,
+            core::Operation::RestoreRating {
+                value: Some("-1".into()),
+            },
+        )?;
+        let restored = state(&mut c, key, &[], None)?;
+        assert_eq!(restored.rating.as_deref(), Some("-1"));
+        assert_eq!((restored.flag, restored.effective_flag), (None, core::Flag::Reject));
+        assert_eq!(projection(&c, key)?, (-1, "reject".into(), String::new()));
+        // Only a valid XMP Rating can be restored verbatim.
+        for invalid in ["6", "-2", "abc", "NaN"] {
+            let expected_revision = revision(&c, key)?;
+            assert!(
+                call(
+                    &mut c,
+                    Request::Apply {
+                        key: key.clone(),
+                        expected_revision,
+                        operation: core::Operation::RestoreRating {
+                            value: Some(invalid.into()),
+                        },
+                    },
+                )
+                .is_err(),
+                "{invalid}"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn run_advances_a_sealed_batch_in_one_request_and_pauses_on_a_changed_photo()
+    -> anyhow::Result<()> {
+        let (_temp, mut c, keys) = fixture_photos(3, None)?;
+        let job = begin(&mut c, core::Operation::Rating { value: 2 })?;
+        let mut items = Vec::new();
+        for key in &keys {
+            items.push(BatchItem {
+                key: key.clone(),
+                expected_revision: revision(&c, key)?,
+            });
+        }
+        // The last photo changes after its revision was read.
+        apply(&mut c, &keys[2], core::Operation::Label { value: "Red".into() })?;
+        call(&mut c, Request::Append { job: job.clone(), items })?;
+        call(&mut c, Request::Seal { job: job.clone() })?;
+        let Response::Job(run) = call(
+            &mut c,
+            Request::Run {
+                job: job.clone(),
+                limit: 100,
+            },
+        )?
+        else {
+            panic!()
+        };
+        assert_eq!((run.applied, run.failed, run.state.as_str()), (I64(2), I64(1), "paused"));
+        for key in &keys[..2] {
+            assert_eq!(state(&mut c, key, &[], None)?.rating.as_deref(), Some("2"));
+        }
+        assert_eq!(state(&mut c, &keys[2], &[], None)?.rating, None);
+        assert!(
+            call(
+                &mut c,
+                Request::Run {
+                    job: job.clone(),
+                    limit: 101,
+                },
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+    #[test]
+    fn find_keyword_and_remove_synonym_invert_dictionary_edits() -> anyhow::Result<()> {
+        let (_temp, mut c, _key) = fixture()?;
+        let Response::KeywordCreated { id } = call(
+            &mut c,
+            Request::CreateKeyword {
+                kind: core::KeywordKind::Hierarchical,
+                path: vec!["People".into()],
+            },
+        )?
+        else {
+            panic!()
+        };
+        let list = |c: &mut Catalog| -> anyhow::Result<Vec<String>> {
+            let Response::Synonyms(page) = call(
+                c,
+                Request::Synonyms {
+                    keyword: id,
+                    after: String::new(),
+                    limit: 10,
+                },
+            )?
+            else {
+                panic!()
+            };
+            Ok(page.rows.into_iter().map(|v| v.synonym).collect())
+        };
+        let find = |c: &mut Catalog, path: &[&str]| -> anyhow::Result<Option<I64>> {
+            let Response::Keyword(found) = call(
+                c,
+                Request::FindKeyword {
+                    kind: core::KeywordKind::Hierarchical,
+                    path: path.iter().map(|v| v.to_string()).collect(),
+                },
+            )?
+            else {
+                panic!()
+            };
+            Ok(found.map(|v| v.id))
+        };
+        assert_eq!(find(&mut c, &["People"])?, Some(id));
+        assert_eq!(find(&mut c, &["Missing"])?, None);
+        call(
+            &mut c,
+            Request::AddSynonym {
+                keyword: id,
+                synonym: "Folks".into(),
+            },
+        )?;
+        assert_eq!(list(&mut c)?, vec!["Folks".to_owned()]);
+        call(
+            &mut c,
+            Request::RemoveSynonym {
+                keyword: id,
+                synonym: "Folks".into(),
+            },
+        )?;
+        assert!(list(&mut c)?.is_empty());
+        assert!(
+            call(
+                &mut c,
+                Request::RemoveSynonym {
+                    keyword: id,
+                    synonym: "Folks".into(),
+                },
+            )
+            .is_err()
+        );
+        Ok(())
     }
     #[test]
     fn variant_batch_is_durable_single_unit_cancelable_and_never_becomes_master()

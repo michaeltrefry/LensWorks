@@ -141,6 +141,11 @@ fn shutdown(s: &str) {
     assert_eq!(command("session_release", json!({"session":s}))["ok"], true);
 }
 fn fixture() -> (std::sync::Arc<tempfile::TempDir>, String, String, Value) {
+    fixture_with_sidecar(None)
+}
+fn fixture_with_sidecar(
+    sidecar: Option<&str>,
+) -> (std::sync::Arc<tempfile::TempDir>, String, String, Value) {
     let temp = std::sync::Arc::new(tempfile::tempdir().unwrap());
     TEST_ROOTS.with(|v| v.borrow_mut().push(temp.clone()));
     let originals = temp.path().join("originals");
@@ -148,6 +153,9 @@ fn fixture() -> (std::sync::Arc<tempfile::TempDir>, String, String, Value) {
     image::RgbImage::from_pixel(32, 24, image::Rgb([12, 80, 200]))
         .save(originals.join("photo.png"))
         .unwrap();
+    if let Some(sidecar) = sidecar {
+        std::fs::write(originals.join("photo.xmp"), sidecar).unwrap();
+    }
     let s = session(
         Path::new(env!("CARGO_BIN_EXE_lensworks-decode-worker")),
         temp.path(),
@@ -856,31 +864,77 @@ fn metadata_action(s: &str, c: &str, attempts: &AtomicUsize, action: Value) -> V
     )["result"]
         .clone()
 }
-#[test]
-fn managed_retained_organization_xmp_conflict_rejects_sidecar_without_source_effects() {
-    let _scope = TestScope::new();
-    let (temp, s, c, key) = fixture();
-    let original = temp.path().join("originals/photo.png");
-    let before = std::fs::read(&original).unwrap();
-    family(
-        &s,
-        &c,
-        "organization",
-        json!({"command":"create_keyword","args":{"kind":"hierarchical","path":["People","Ada"]}}),
-    );
+const PRESERVATION_SIDECAR: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmlns:acme="http://example.com/acme/1.0/"
+    xmp:Rating="2"
+    crs:Exposure2012="+0.50"
+    acme:Secret="keep-me">
+   <dc:subject><rdf:Bag><rdf:li>Existing</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Paris</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+   <acme:Shot rdf:parseType="Resource">
+    <acme:Lens>Fixture 50mm</acme:Lens>
+    <acme:Notes><rdf:Seq><rdf:li>first</rdf:li><rdf:li>second</rdf:li></rdf:Seq></acme:Notes>
+   </acme:Shot>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+
+fn organize(s: &str, c: &str, key: &Value, operation: Value) -> Value {
     let identity = family(
-        &s,
-        &c,
+        s,
+        c,
         "organization",
         json!({"command":"identity","args":{"key":key}}),
     )["value"]
         .clone();
-    family(
-        &s,
-        &c,
-        "organization",
-        json!({"command":"apply","args":{"key":key,"expected_revision":identity["metadata_revision"],"operation":{"operation":"add_keyword","kind":"hierarchical","path":["People","Ada"]}}}),
+    rpc(
+        s,
+        json!({"command":"organization","args":{"catalog":c,"request":{"command":"apply","args":{"key":key,"expected_revision":identity["metadata_revision"],"operation":operation}}}}),
+    )
+}
+fn metadata_fields(s: &str, c: &str, key: &Value) -> (Value, Vec<Value>) {
+    let identity = family(
+        s,
+        c,
+        "metadata",
+        json!({"command":"identity","args":{"key":key}}),
+    )["value"]
+        .clone();
+    let fields = family(
+        s,
+        c,
+        "metadata",
+        json!({"command":"fields","args":{"identity":identity,"after":null,"limit":50}}),
     );
+    (
+        identity,
+        fields["value"]["rows"].as_array().unwrap().clone(),
+    )
+}
+
+/// S05 AC2: unknown, Adobe (crs) and structured XMP plus source provenance survive
+/// import, organization edits, an unrelated metadata edit and controlled sidecar
+/// output. The former combined-state fault (hierarchical keyword, then a rating
+/// edit with no explicit base) no longer orphans the keyword choice.
+#[test]
+fn managed_organization_preserves_unknown_adobe_structured_xmp_through_sidecar_output() {
+    let _scope = TestScope::new();
+    let (temp, s, c, key) = fixture_with_sidecar(Some(PRESERVATION_SIDECAR));
+    let originals = temp.path().join("originals");
+    let photo_before = std::fs::read(originals.join("photo.png")).unwrap();
+    let sidecar_before = std::fs::read(originals.join("photo.xmp")).unwrap();
+    let (_, fields) = metadata_fields(&s, &c, &key);
+    let rating = fields.iter().find(|f| f["name"] == "rating").unwrap();
+    assert_eq!(rating["conflicted"], false, "{rating}");
+    // Source provenance: the associated sidecar is a recorded source.
     let identity = family(
         &s,
         &c,
@@ -888,6 +942,49 @@ fn managed_retained_organization_xmp_conflict_rejects_sidecar_without_source_eff
         json!({"command":"identity","args":{"key":key}}),
     )["value"]
         .clone();
+    let sources = family(
+        &s,
+        &c,
+        "metadata",
+        json!({"command":"sources","args":{"identity":identity,"after":null,"limit":20}}),
+    );
+    assert!(
+        sources["value"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row.to_string().contains("sidecar")),
+        "{sources}"
+    );
+
+    family(
+        &s,
+        &c,
+        "organization",
+        json!({"command":"create_keyword","args":{"kind":"hierarchical","path":["People","Ada"]}}),
+    );
+    let collection = family(
+        &s,
+        &c,
+        "organization",
+        json!({"command":"create_collection","args":{"name":"Portraits"}}),
+    )["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for operation in [
+        json!({"operation":"add_keyword","kind":"hierarchical","path":["People","Ada"]}),
+        json!({"operation":"rating","value":4}),
+        json!({"operation":"label","value":"Blue"}),
+        json!({"operation":"flag","value":"pick"}),
+        json!({"operation":"add_collection","collection":collection}),
+    ] {
+        let applied = organize(&s, &c, &key, operation.clone());
+        assert_eq!(applied["status"], "ok", "{operation}: {applied}");
+    }
+
+    // An unrelated metadata edit with no explicit base (the former fault path).
+    let (identity, _) = metadata_fields(&s, &c, &key);
     let edits = serde_json::to_vec(&vec![photocatalog::xmp::Edit::Set {
         namespace: "http://ns.adobe.com/xap/1.0/".into(),
         path: "Rating".into(),
@@ -907,42 +1004,199 @@ fn managed_retained_organization_xmp_conflict_rejects_sidecar_without_source_eff
     );
     let review = action(json!({"kind":"prepare","identity":identity,"base_model":null,"input":input["token"],"input_blake3":digest}))["value"].clone();
     action(json!({"kind":"commit","review":review["token"],"review_digest":review["digest"]}));
-    let identity = family(
-        &s,
-        &c,
-        "metadata",
-        json!({"command":"identity","args":{"key":key}}),
-    )["value"]
-        .clone();
-    let fields = family(
-        &s,
-        &c,
-        "metadata",
-        json!({"command":"fields","args":{"identity":identity,"after":null,"limit":10}}),
-    );
-    let conflict = fields["value"]["rows"]
-        .as_array()
-        .unwrap()
+
+    let (identity, fields) = metadata_fields(&s, &c, &key);
+    for field in &fields {
+        assert_eq!(field["conflicted"], false, "{field}");
+    }
+    let keywords = fields
         .iter()
         .find(|f| f["name"] == "hierarchical_keywords")
         .unwrap();
-    assert_eq!(conflict["conflicted"], true);
-    assert!(conflict["selected_model"].is_null());
+    assert!(keywords.to_string().contains("People|Ada"), "{keywords}");
+    assert!(keywords.to_string().contains("Places|Paris"), "{keywords}");
+    let model = fields
+        .iter()
+        .find(|f| f["name"] == "rating")
+        .and_then(|f| f["selected_model"].as_str())
+        .unwrap()
+        .to_owned();
+    let sidecar = temp.path().canonicalize().unwrap().join("exported.xmp");
+    let plan = action(json!({"kind":"sidecar_plan","identity":identity,"base_model":model,"destination":native(&sidecar),"limits":limits}))["value"].clone();
+    let receipt = action(
+        json!({"kind":"sidecar_apply","operation":plan["operation"],"authority_blake3":plan["authority_blake3"],"overwrite_ack":false,"limits":limits}),
+    );
+    assert_eq!(receipt["kind"], "sidecar_receipt", "{receipt}");
+    let exported = std::fs::read_to_string(&sidecar).unwrap();
+    let meta = photocatalog::xmp::parse(exported.as_bytes()).unwrap();
+    let text = |ns: &str, path: &str| meta.property(ns, path).map(|v| v.value);
+    const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+    const ACME: &str = "http://example.com/acme/1.0/";
+    assert_eq!(text(XMP, "Rating").as_deref(), Some("3"), "{exported}");
+    assert_eq!(text(XMP, "Label").as_deref(), Some("Blue"), "{exported}");
+    assert_eq!(text(ACME, "Secret").as_deref(), Some("keep-me"), "{exported}");
+    assert_eq!(
+        text("http://ns.adobe.com/camera-raw-settings/1.0/", "Exposure2012").as_deref(),
+        Some("+0.50"),
+        "{exported}"
+    );
+    assert_eq!(
+        text(ACME, "Shot/acme:Lens").as_deref(),
+        Some("Fixture 50mm"),
+        "{exported}"
+    );
+    assert_eq!(meta.array_len(ACME, "Shot/acme:Notes"), 2, "{exported}");
+    let lr = "http://ns.adobe.com/lightroom/1.0/";
+    let hierarchy: Vec<String> = (1..=meta.array_len(lr, "hierarchicalSubject"))
+        .map(|i| meta.array_item(lr, "hierarchicalSubject", i as i32).unwrap().value)
+        .collect();
+    assert!(hierarchy.contains(&"People|Ada".to_owned()), "{exported}");
+    assert!(hierarchy.contains(&"Places|Paris".to_owned()), "{exported}");
+    assert_eq!(
+        meta.array_item("http://purl.org/dc/elements/1.1/", "subject", 1)
+            .map(|v| v.value)
+            .as_deref(),
+        Some("Existing")
+    );
+    // Controlled output never touches the original or its source sidecar.
+    assert_eq!(std::fs::read(originals.join("photo.png")).unwrap(), photo_before);
+    assert_eq!(std::fs::read(originals.join("photo.xmp")).unwrap(), sidecar_before);
+    shutdown(&s);
+}
+
+fn organization_state(s: &str, c: &str, key: &Value) -> Value {
+    family(
+        s,
+        c,
+        "organization",
+        json!({"command":"states","args":{"keys":[key],"keywords":[],"collection":null}}),
+    )["value"][0]
+        .clone()
+}
+/// Export the photo's current catalog metadata through controlled sidecar output.
+fn exported_sidecar(
+    temp: &tempfile::TempDir,
+    s: &str,
+    c: &str,
+    key: &Value,
+    name: &str,
+) -> String {
+    let (identity, fields) = metadata_fields(s, c, key);
+    let model = fields
+        .iter()
+        .filter_map(|f| f["selected_model"].as_str())
+        .max_by_key(|v| v.parse::<i64>().unwrap())
+        .unwrap()
+        .to_owned();
+    let limits = serde_json::to_value(app::metadata_write::WriteLimits::default()).unwrap();
+    let attempts = AtomicUsize::new(1);
+    let action = |a| metadata_action(s, c, &attempts, a);
+    let sidecar = temp.path().canonicalize().unwrap().join(name);
+    let plan = action(json!({"kind":"sidecar_plan","identity":identity,"base_model":model,"destination":native(&sidecar),"limits":limits}))["value"].clone();
+    let receipt = action(
+        json!({"kind":"sidecar_apply","operation":plan["operation"],"authority_blake3":plan["authority_blake3"],"overwrite_ack":false,"limits":limits}),
+    );
+    assert_eq!(receipt["kind"], "sidecar_receipt", "{receipt}");
+    std::fs::read_to_string(&sidecar).unwrap()
+}
+
+/// S05 AC1/AC2: undoing a rating/label/flag change restores the exact prior state.
+/// An absent rating or label stays absent (no explicit `xmp:Rating="0"` or empty
+/// label in sidecar output) and a Lightroom reject (`xmp:Rating="-1"`) stays a
+/// reject rather than being clamped to 0 and silently unflagged.
+#[test]
+fn managed_organization_undo_restores_absent_and_reject_values_through_sidecar_output() {
+    let _scope = TestScope::new();
+    const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+    let (temp, s, c, key) = fixture();
+    let before = organization_state(&s, &c, &key);
+    assert!(before["rating"].is_null() && before["label"].is_null(), "{before}");
+    for operation in [
+        json!({"operation":"rating","value":3}),
+        json!({"operation":"label","value":"Blue"}),
+        json!({"operation":"flag","value":"pick"}),
+        json!({"operation":"restore_rating","value":null}),
+        json!({"operation":"restore_label","value":null}),
+        json!({"operation":"restore_flag","value":null}),
+    ] {
+        let applied = organize(&s, &c, &key, operation.clone());
+        assert_eq!(applied["status"], "ok", "{operation}: {applied}");
+    }
+    let after = organization_state(&s, &c, &key);
+    assert!(after["rating"].is_null() && after["label"].is_null(), "{after}");
+    assert!(after["flag"].is_null() && after["effective_flag"] == "unflagged", "{after}");
+    let exported = exported_sidecar(&temp, &s, &c, &key, "unrated.xmp");
+    let meta = photocatalog::xmp::parse(exported.as_bytes()).unwrap();
+    assert!(meta.property(XMP, "Rating").is_none(), "absent rating exported: {exported}");
+    assert!(meta.property(XMP, "Label").is_none(), "absent label exported: {exported}");
+    shutdown(&s);
+
+    let reject = PRESERVATION_SIDECAR.replace("xmp:Rating=\"2\"", "xmp:Rating=\"-1\"");
+    let (temp, s, c, key) = fixture_with_sidecar(Some(&reject));
+    let before = organization_state(&s, &c, &key);
+    assert_eq!((&before["rating"], &before["effective_flag"]), (&json!("-1"), &json!("reject")));
+    for operation in [
+        json!({"operation":"rating","value":3}),
+        json!({"operation":"restore_rating","value":"-1"}),
+    ] {
+        let applied = organize(&s, &c, &key, operation.clone());
+        assert_eq!(applied["status"], "ok", "{operation}: {applied}");
+    }
+    let after = organization_state(&s, &c, &key);
+    assert_eq!((&after["rating"], &after["flag"], &after["effective_flag"]), (&json!("-1"), &Value::Null, &json!("reject")), "{after}");
+    let exported = exported_sidecar(&temp, &s, &c, &key, "reject.xmp");
+    let meta = photocatalog::xmp::parse(exported.as_bytes()).unwrap();
+    assert_eq!(meta.property(XMP, "Rating").map(|v| v.value).as_deref(), Some("-1"));
+    assert_eq!(
+        meta.property("http://example.com/acme/1.0/", "Secret").map(|v| v.value).as_deref(),
+        Some("keep-me")
+    );
+    shutdown(&s);
+}
+
+/// S05 AC2: a genuine source disagreement is surfaced as a conflict; organization
+/// edits and sidecar output refuse to overwrite it, and source bytes stay intact.
+#[test]
+fn managed_source_conflict_is_surfaced_and_never_silently_overwritten() {
+    let _scope = TestScope::new();
+    let (temp, s, c, key) = fixture_with_sidecar(Some(PRESERVATION_SIDECAR));
+    let originals = temp.path().join("originals");
+    let photo_before = std::fs::read(originals.join("photo.png")).unwrap();
+    // A second, independent source for the same photo disagrees about Rating.
+    let embedded = PRESERVATION_SIDECAR.replace("xmp:Rating=\"2\"", "xmp:Rating=\"5\"");
+    std::fs::write(originals.join("photo.png.xmp"), &embedded).unwrap();
+    let resume = rpc(
+        &s,
+        json!({"command":"import_resume","args":{"catalog":c,"source":native(&originals)}}),
+    );
+    assert_eq!(resume["status"], "ok", "{resume}");
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let v = rpc(&s, json!({"command":"import_status","args":{"catalog":c}}));
+        if v["value"]["data"]["phase"] == "complete" {
+            break;
+        }
+        assert!(Instant::now() < until, "{v}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (identity, fields) = metadata_fields(&s, &c, &key);
+    let rating = fields.iter().find(|f| f["name"] == "rating").unwrap();
+    assert_eq!(rating["conflicted"], true, "{fields:?}");
+    let refused = organize(&s, &c, &key, json!({"operation":"rating","value":1}));
+    assert_ne!(refused["status"], "ok", "{refused}");
+    assert!(refused.to_string().contains("conflict"), "{refused}");
+    // Both disagreeing values remain visible as explicit candidates.
     let candidates = family(
         &s,
         &c,
         "metadata",
-        json!({"command":"candidates","args":{"identity":identity,"field":"hierarchical_keywords","after":null,"limit":10}}),
+        json!({"command":"candidates","args":{"identity":identity,"field":"rating","after":null,"limit":10}}),
     );
-    assert!(candidates["value"]["rows"].as_array().unwrap().is_empty());
-    assert!(candidates["value"]["next"].is_null());
-    let model = fields["value"]["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find_map(|f| f["selected_model"].as_str())
-        .unwrap();
-    let sidecar = temp.path().canonicalize().unwrap().join("rejected.xmp");
+    let rows = candidates["value"]["rows"].as_array().unwrap();
+    assert!(rows.len() >= 2, "{candidates}");
+    let model = rows[0]["model"].as_str().unwrap().to_owned();
+    let limits = serde_json::to_value(app::metadata_write::WriteLimits::default()).unwrap();
+    let sidecar = temp.path().canonicalize().unwrap().join("conflicted.xmp");
     let start = family(
         &s,
         &c,
@@ -959,23 +1213,16 @@ fn managed_retained_organization_xmp_conflict_rejects_sidecar_without_source_eff
         );
         let operation = &status["value"]["operation"];
         if operation["phase"] == "failed" {
-            assert_eq!(
-                operation["error"],
-                "resolve metadata conflicts before export"
-            );
+            assert_eq!(operation["error"], "resolve metadata conflicts before export");
             break;
         }
+        assert!(operation["phase"] != "complete", "{status}");
         assert!(Instant::now() < until, "{status}");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(!sidecar.exists());
-    assert_eq!(std::fs::read(original).unwrap(), before);
-    assert_eq!(
-        std::fs::read_dir(temp.path().join("originals"))
-            .unwrap()
-            .count(),
-        1
-    );
+    assert_eq!(std::fs::read(originals.join("photo.png")).unwrap(), photo_before);
+    assert_eq!(std::fs::read_to_string(originals.join("photo.png.xmp")).unwrap(), embedded);
     shutdown(&s);
 }
 

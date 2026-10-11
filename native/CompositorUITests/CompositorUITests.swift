@@ -577,6 +577,62 @@ extension CompositorUITests {
             app.typeKey(key.lowercased(), modifierFlags: modifiers)
         }
     }
+    /// S05: the native catalog Rate/Flag menus change the selected photo and the
+    /// organization Undo/Redo buttons reverse and replay those changes.
+    @MainActor
+    func testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let fixture = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S38_FIXTURE_ROOT"))
+        let worker = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_WORKER")
+        let decode = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_DECODE_WORKER")
+        let output = fixture.appendingPathComponent("WorkingVersions-4")
+        guard try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty else {
+            throw NSError(domain: "LensWorks.S05", code: 1, userInfo: [NSLocalizedDescriptionKey: "The fixture owner must prepare an empty private WorkingVersions-4 folder."])
+        }
+        let app = XCUIApplication()
+        addTeardownBlock { @MainActor in
+            guard app.state == .runningForeground || app.state == .runningBackground else { return }
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+        }
+        app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
+        app.launchEnvironment["LW_CATALOG_TEST_WORKER"] = worker
+        app.launchEnvironment["LW_CATALOG_TEST_DECODE_WORKER"] = decode
+        app.launchArguments = ["--lensworks-catalog", output.appendingPathComponent("Demo.catalog").path, "--lensworks-create-catalog",
+                               "--lensworks-import", fixture.appendingPathComponent("photos").path, "--lensworks-output", output.path,
+                               "-ApplePersistenceIgnoreState", "YES", "-LensWorksPinnedWindowFrame", s47Placement.appKitFrame]
+        app.launch(); app.activate()
+        let grid = app.scrollViews["LensWorks.catalogGrid"]
+        XCTAssertTrue(grid.waitForExistence(timeout: 30))
+        let photo = grid.staticTexts["LensWorks.catalogAsset.single-harbor.png"]
+        XCTAssertTrue(photo.waitForExistence(timeout: 30))
+        photo.click()
+        func choose(_ menu: String, _ item: String) {
+            let control = app.descendants(matching: .any).matching(identifier: menu).firstMatch
+            XCTAssertTrue(control.waitForExistence(timeout: 10), menu)
+            control.click()
+            let entry = app.menuItems[item]
+            XCTAssertTrue(entry.waitForExistence(timeout: 10), item)
+            entry.click()
+        }
+        func expectSummary(_ value: String) {
+            let cell = grid.staticTexts["LensWorks.catalogAsset.single-harbor.png"]
+            let matched = NSPredicate { _, _ in (cell.value as? String) == value }
+            XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: matched, object: nil)], timeout: 20), .completed, "expected \"\(value)\", saw \(String(describing: cell.value))")
+        }
+        choose("LensWorks.rateMenu", "★★★")
+        expectSummary("★★★")
+        choose("LensWorks.flagMenu", "Pick")
+        expectSummary("★★★ · Pick")
+        let undo = app.buttons["LensWorks.undoOrganization"], redo = app.buttons["LensWorks.redoOrganization"]
+        undo.click(); expectSummary("★★★")
+        // An explicit 0 rating reads "Rating 0", so "" proves the rating is absent again.
+        undo.click(); expectSummary("")
+        XCTAssertFalse(undo.isEnabled)
+        redo.click(); expectSummary("★★★")
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+    }
     @MainActor
     func testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo() throws {
         let context = try s38Open(run: 1)

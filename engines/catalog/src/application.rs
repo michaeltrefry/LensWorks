@@ -1300,11 +1300,13 @@ fn during_relink_hold(request: &Request) -> bool {
             request.as_ref(),
             organization::Request::Keywords { .. }
                 | organization::Request::Synonyms { .. }
+                | organization::Request::FindKeyword { .. }
                 | organization::Request::Collections { .. }
                 | organization::Request::Collection { .. }
                 | organization::Request::Placement { .. }
                 | organization::Request::Members { .. }
                 | organization::Request::Identity { .. }
+                | organization::Request::States { .. }
                 | organization::Request::Job { .. }
                 | organization::Request::Jobs { .. }
                 | organization::Request::Items { .. }
