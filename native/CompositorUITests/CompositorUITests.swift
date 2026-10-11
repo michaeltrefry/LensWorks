@@ -214,6 +214,23 @@ extension CompositorUITests {
         return hashes
     }
 
+    /// One fixed editor window frame on the primary (menu bar) display, as an AppKit-coordinate rect string for
+    /// the app's pinned-frame launch argument and as the matching accessibility frame (top-left origin, y down)
+    /// XCUIElement reports.
+    private struct S47WindowPlacement {
+        let appKitFrame: String
+        let accessibilityFrame: CGRect
+    }
+
+    @MainActor private var s47Placement: S47WindowPlacement {
+        let screen = NSScreen.screens[0]
+        let visible = screen.visibleFrame
+        let size = CGSize(width: min(1280, visible.width), height: min(800, visible.height))
+        let origin = CGPoint(x: visible.minX, y: visible.maxY - size.height)
+        return S47WindowPlacement(appKitFrame: NSStringFromRect(NSRect(origin: origin, size: size)),
+                                  accessibilityFrame: CGRect(x: origin.x, y: screen.frame.maxY - origin.y - size.height, width: size.width, height: size.height))
+    }
+
     /// Captures the window only once two consecutive frames are identical, so a press, hover
     /// or scroller transition still in flight is never frozen into the comparison.
     @MainActor
@@ -254,6 +271,15 @@ extension CompositorUITests {
             // phases: overlay scrollers that fade out, a blinking insertion point and window animations.
             + ["-AppleShowScrollBars", "Always", "-NSTextInsertionPointBlinkPeriodOn", "1000000000", "-NSTextInsertionPointBlinkPeriodOff", "0",
                "-NSAutomaticWindowAnimationsEnabled", "NO"]
+            // Pin the editor window to one fixed frame on the primary display. Otherwise macOS restores the frame the
+            // previous launch autosaved, which on a multi-display host can sit on a display with a different backing
+            // scale, so consecutive tours capture different pixel sizes of the same content.
+            + ["-ApplePersistenceIgnoreState", "YES", "-NSQuitAlwaysKeepsWindows", "NO",
+               "-LensWorksPinnedWindowFrame", s47Placement.appKitFrame]
+        // SwiftUI first places a new window on the display holding the pointer; start it on the primary display
+        // too, so the window never opens at another backing scale before the pin moves it.
+        let primary = NSScreen.screens[0].frame
+        CGWarpMouseCursorPosition(CGPoint(x: primary.maxX - 2, y: primary.height - 2))
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30), "tour \(run) must activate its owned UI window")
@@ -324,10 +350,24 @@ extension CompositorUITests {
         XCTAssertEqual(savedRecord["name"] as? String, "single-harbor")
         XCTAssertEqual(try Data(contentsOf: createdProject.appendingPathComponent("LensWorks.json")), originalRecordBytes, "Save As must preserve the created working version's source record")
         XCTAssertEqual(windowLoaded.value as? String, "single-harbor.png|master|160x120", "Save As must retain the selected original and master identity")
+        // The sidebar refreshes its working-version list asynchronously after Save As, and the list sits below the
+        // fold where only the sidebar scroller's thumb length shows it. Capture only once it lists both versions.
+        let versionButtons = editorWindow.buttons.matching(NSPredicate(format: "label IN %@", [try XCTUnwrap(originalRecord["name"] as? String), namedProject.deletingPathExtension().lastPathComponent]))
+        let versionsDeadline = Date().addingTimeInterval(30)
+        while versionButtons.count != 2 || editorWindow.buttons["Continue Finding Versions"].exists || editorWindow.buttons["More Working Versions"].exists {
+            guard Date() < versionsDeadline else {
+                throw NSError(domain: "LensWorks.S47", code: 18, userInfo: [NSLocalizedDescriptionKey: "tour \(run) sidebar never listed exactly its two working versions."])
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
         let fit = editorWindow.buttons["fitCanvas"]
         XCTAssertTrue(fit.waitForExistence(timeout: 10) && fit.isEnabled, "tour \(run) must reach an enabled editor state")
         fit.click()
         let frame = editorWindow.frame
+        XCTAssertEqual(frame, s47Placement.accessibilityFrame, "tour \(run) must capture the editor window at its pinned primary-display frame")
+        guard frame == s47Placement.accessibilityFrame else {
+            throw NSError(domain: "LensWorks.S47", code: 17, userInfo: [NSLocalizedDescriptionKey: "S47 capture requires the editor window at its pinned frame \(s47Placement.accessibilityFrame), found \(frame)."])
+        }
         let screenshot = try s47QuiescentScreenshot(editorWindow)
         let image = try S47ScreenshotComparator.normalizedRGBA8(screenshot)
         try S47ScreenshotComparator.requireWindowGeometry(pixelWidth: image.width, pixelHeight: image.height, frame: frame)

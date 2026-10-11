@@ -7,46 +7,57 @@
     "TEST_RUNNER_LW_S47_MAX_CHANNEL_DELTA",
     "TEST_RUNNER_LW_S47_MAX_CHANGED_PIXEL_FRACTION"
   ],
-  "method": "Two independent full native catalog-to-editor tours on one host, selected uniquely by the loaded editor window marker/full source identity, retain receiver-window PNGs and separate per-run domain records, observe public Quit and preserve all originals. Compare the complete dense RGBA8 images; no crop, ignored region, label normalization or pixel exclusion. Window geometry alone does not certify image content. Current raw measurements and independently visually verified captures are the calibration sample.",
+  "method": "Two independent full native catalog-to-editor tours on one host, selected uniquely by the loaded editor window marker/full source identity, retain receiver-window PNGs and separate per-run domain records, observe public Quit and preserve all originals. Each tour launches with -LensWorksPinnedWindowFrame so the editor window has one fixed 1280x800-point frame on the primary display (no frame restoration or autosave), with an opaque app-owned backdrop behind its rounded corners and the pointer warped to the primary display before launch, and the test asserts that exact accessibility frame and waits for the sidebar to list both working versions before capture. Compare the complete dense RGBA8 images; no crop, ignored region, label normalization or pixel exclusion. Window geometry alone does not certify image content. Current raw measurements and independently visually verified captures are the calibration sample.",
   "result": {
     "calibration": {
-      "actual_independent_review": {
-        "sha256": "8fda5223da190fccddac1dc4da10d94ed551a82376c65b6664e3ebcc901b282a"
-      },
-      "observedPairs": 1,
-      "publication": {
-        "sha256": "0f27463fa828bde1f3f656a4c6e02696978e26876c2968340c4a74bf96315708"
-      },
+      "observedPairs": 2,
       "raw_status": "MEASURED_NOT_ACCEPTED",
-      "report": {
-        "sha256": "ff31edd7ee7fe1f4ecdacffbc884203844e59c1e8e8020ab221ffb42e2931d91"
-      },
-      "runs": [
+      "pairs": [
         {
-          "domain_sha256": "6ffbbdcb5b05f03e6f2052cba4be41723fd86c0c14d67a9a6738dd466f1bf13f",
-          "png_sha256": "92d09948c2974e8634e496301e39108209bc606e768746fa69b152f255aeb848",
-          "root_visual_review": "LensWorks editor visibly present; harbor canvas/layer/catalog/filmstrip and correct run-specific Demo catalog visible"
+          "runs": [
+            {
+              "domain_sha256": "0a0fdc081677c5591874fc8386dcc8ca9621f2eae6a378b6a0b6f3529e9db21f",
+              "png_sha256": "cecfd9a94aeb6f272f8afa556de97ebe187ab3e892cd3a8b3feeff8d791648e1"
+            },
+            {
+              "domain_sha256": "0a682b2f50c636dee415effbf28f800bea836b8f22137c2a97494f8780f14542",
+              "png_sha256": "cecfd9a94aeb6f272f8afa556de97ebe187ab3e892cd3a8b3feeff8d791648e1"
+            }
+          ],
+          "maximumChannelDelta": 0,
+          "changedPixelFraction": 0.0
         },
         {
-          "domain_sha256": "40e96ff2630b5d885571fa3027cdd31b718952c85725239f395c4d5616892684",
-          "png_sha256": "8232b32b59e05bf6b11c5eb995dd133122066cc3c9e6f4f3e05a99d1dbc5f936",
-          "root_visual_review": "LensWorks editor visibly present; harbor canvas/layer/catalog/filmstrip and correct run-specific Demo catalog visible"
+          "runs": [
+            {
+              "domain_sha256": "1272d96dcca3893a63258594a094df31f931db1381a81b9d809d010d112b3832",
+              "png_sha256": "cecfd9a94aeb6f272f8afa556de97ebe187ab3e892cd3a8b3feeff8d791648e1"
+            },
+            {
+              "domain_sha256": "7212b90ff9d61d6a10851668de7b825f182e5e7c60176373354de5993fd2b14d",
+              "png_sha256": "cecfd9a94aeb6f272f8afa556de97ebe187ab3e892cd3a8b3feeff8d791648e1"
+            }
+          ],
+          "maximumChannelDelta": 0,
+          "changedPixelFraction": 0.0
         }
       ],
-      "evidence_location": "Calibration files were host-local build outputs and are not in the repository; only their SHA-256 digests are retained as provenance."
+      "root_visual_review": "LensWorks editor visibly present at the pinned frame: harbor canvas, layer, Demo.catalog sidebar, filmstrip and the single-harbor tab; black backdrop in the four rounded corners.",
+      "evidence_location": "Calibration files were host-local build outputs and are not in the repository; only their SHA-256 digests are retained as provenance.",
+      "additionalPairsSameSource": "Two further final-source pairs on the same host also measured 0 and 0/4096000 with the same PNG digest; two other attempts ended in XCUITest event-synthesis/typing failures while another session's tests were running on the host, before any capture."
     },
     "derivation": {
-      "changedPixels": 665,
-      "height": 1001,
-      "maximumChangedPixelFraction": "Exact665/1729728 changed-pixel ratio, no rounding increase or added margin",
-      "maximumChannelDelta": "Exact observed maximum, no added margin",
-      "totalPixels": 1729728,
-      "width": 1728,
-      "changedPixelLocation": "All 665 changed pixels lay in the window's top-left chrome (x 81-292, y 15-133 of 1728x1001): the project tab title, which showed each run's UUID-named working version, and the sidebar catalog name, which differed per run (Demo-1/Demo-2). The current tour saves the working version as single-harbor and names both catalogs Demo.catalog, launches with fixed scrollers, no caret blink and no window animations, and captures only after two identical consecutive frames. These limits predate that change and must be re-measured with two fresh tours before they are tightened."
+      "width": 2560,
+      "height": 1600,
+      "totalPixels": 4096000,
+      "changedPixels": 0,
+      "maximumChannelDelta": "Exact observed maximum over both fresh pairs, no added margin",
+      "maximumChangedPixelFraction": "Exact observed 0/4096000 over both fresh pairs, no added margin",
+      "history": "CI run 38139318825 failed because the two tours captured different layouts: macOS restored the editor frame autosaved by an earlier launch, and on the two-display host one tour opened on the 2x built-in display (3456x1498 px) and the other on the 1x external display (1728x749 px). The previous bounds (191, 665/1729728) came from a pair whose per-run catalog names and UUID document titles differed; the current tour removes both. An intermediate pinned pair without the backdrop differed only in 908 corner pixels showing other apps' windows behind the rounded corners. Before the pointer warp, one of five pinned pairs differed by a sub-pixel shift of the transform-bar text fields (delta 190, 3991/4096000 pixels); the likely cause is SwiftUI first placing the window on the 1x display holding the pointer before the pin moved it. Four pairs after the warp were byte-identical. One later pair differed only in the sidebar scroller thumb length (delta 118, 430 pixels): the working-version list below the fold refreshes asynchronously after Save As, so the tour now waits until it lists both versions."
     },
-    "maximumChangedPixelFraction": 0.0003844535094535095,
-    "maximumChannelDelta": 191,
-    "scope": "Empirical bound from one same-host current-source pair only. Not a population noise bound or CI-host result. Fresh full acceptance pair and actual CI smoke must independently pass; failures never automatically widen these limits."
+    "maximumChangedPixelFraction": 0.0,
+    "maximumChannelDelta": 0,
+    "scope": "Empirical bound from two fresh same-host current-source pairs. Not a population noise bound or CI-host result. Actual CI smoke must independently pass; failures never automatically widen these limits."
   },
   "runner_environment": [
     "LW_S47_FIXTURE_ROOT",
