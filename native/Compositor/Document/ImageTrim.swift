@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import Darwin
 
 public enum TrimBasedOn: String, CaseIterable, Identifiable, Sendable {
     case transparentPixels = "Transparent Pixels"
@@ -177,9 +178,11 @@ nonisolated public enum ImageTrim {
     /// Returns the trimmed snapshot, or nil if no content remained to trim.
     static func trim(_ snapshot: ProjectSnapshot, options: TrimOptions) async throws -> ProjectSnapshot? {
         let raster = try await ImageExporter.shared.render(snapshot)
-        guard let rect = calculateTrimRect(in: raster.image, options: options) else {
-            return nil
-        }
+        let rect: CGRect?
+        if let plane = raster.linearPlane { rect = try calculateTrimRect(in:plane,options:options) }
+        else { rect = calculateTrimRect(in:raster.image,options:options) }
+        try raster.check()
+        guard let rect else { return nil }
         let fullWidth = snapshot.manifest.width
         let fullHeight = snapshot.manifest.height
         if Int(rect.width) == fullWidth && Int(rect.height) == fullHeight && rect.minX == 0 && rect.minY == 0 {
@@ -199,12 +202,53 @@ extension EditorSession {
     @discardableResult
     func trim(options: TrimOptions = TrimOptions()) async throws -> Bool {
         guard canStartProjectOperation, let snapshot = projectSnapshot() else { return false }
+        let admission=try captureDocumentEditAdmission()
         isProjectBusy = true
         defer { isProjectBusy = false }
         guard let trimmedSnapshot = try await ImageTrim.trim(snapshot, options: options) else {
             return false
         }
-        applyDocumentSize(trimmedSnapshot, actionName: "Trim")
+        try applyDocumentSize(trimmedSnapshot,actionName:"Trim",admission:admission)
         return true
+    }
+}
+
+
+nonisolated extension ImageTrim {
+    /// The trim decision retains the public encoded-color/alpha criterion, while
+    /// consuming only bounded provider rows. It never changes the source graph.
+    static func calculateTrimRect(in plane: LWFloatPlane, options: TrimOptions) throws -> CGRect? {
+        guard options.trimsAny else { return nil }
+        let provider = LWFloatPlaneImage(plane:plane,format:.rgba8SRGB)
+        let lease = try plane.workingSet.reserve(plane.width * 4 + 8)
+        var row = Data(count:plane.width * 4)
+        func pixel(x:Int,y:Int) throws -> [UInt8] {
+            var bytes = [UInt8](repeating:0,count:4)
+            let count = try bytes.withUnsafeMutableBytes { try provider.copy(into:$0.baseAddress!,position:off_t((y*plane.width+x)*4),count:4) }
+            guard count == 4 else { throw ProjectError.invalid };return bytes
+        }
+        let target: [UInt8]
+        switch options.basedOn {
+        case .transparentPixels: target = []
+        case .topLeftPixelColor: target = try pixel(x:0,y:0)
+        case .bottomRightPixelColor: target = try pixel(x:plane.width-1,y:plane.height-1)
+        }
+        var left=plane.width,right=0,top=plane.height,bottom=0
+        for y in 0..<plane.height {
+            try Task.checkCancellation();try plane.checkCancellation()
+            let rowBytes = row.count
+            let count = try row.withUnsafeMutableBytes { try provider.copy(into:$0.baseAddress!,position:off_t(y*rowBytes),count:rowBytes) }
+            guard count == row.count else { throw ProjectError.invalid }
+            for x in 0..<plane.width {
+                let offset=x*4, matches:Bool
+                if options.basedOn == .transparentPixels { matches = row[offset+3] == 0 }
+                else { matches = (0..<4).allSatisfy { abs(Int(row[offset+$0])-Int(target[$0])) <= Int(options.tolerance) } }
+                if !matches { left=min(left,x);right=max(right,x+1);top=min(top,y);bottom=max(bottom,y+1) }
+            }
+        }
+        try provider.check();withExtendedLifetime(lease) {}
+        guard right>0 else { return nil }
+        let minX=options.left ? left:0,minY=options.top ? top:0,maxX=options.right ? right:plane.width,maxY=options.bottom ? bottom:plane.height
+        return CGRect(x:minX,y:minY,width:maxX-minX,height:maxY-minY)
     }
 }

@@ -1,5 +1,6 @@
 #include "decode.h"
 #include "dng_host.h"
+#include "dng_abort_sniffer.h"
 #include "dng_info.h"
 #include "dng_ifd.h"
 #include "dng_stream.h"
@@ -9,6 +10,7 @@
 #include "dng_color_space.h"
 #include "dng_pixel_buffer.h"
 #include "dng_image.h"
+#include "dng_stage_plane.h"
 #include "dng_tag_types.h"
 #include "dng_exceptions.h"
 #include "dng_xy_coord.h"
@@ -36,13 +38,18 @@ public:
 // buffers are allocated. The allocator independently bounds each scratch block.
 class AdmissionHost : public dng_host {
     const PcDecodeLimits &limits;
+    bool planes;
+    dng_memory_allocator &storage;
 public:
-    AdmissionHost(dng_memory_allocator *allocator,const PcDecodeLimits &value):dng_host(allocator),limits(value) {}
+    std::shared_ptr<std::atomic<bool>> planeFailure=std::make_shared<std::atomic<bool>>(false);
+    AdmissionHost(dng_memory_allocator *allocator,const PcDecodeLimits &value,bool streamed=false):dng_host(allocator),limits(value),planes(streamed),storage(*allocator) {}
+    void verify() {if(planeFailure->load(std::memory_order_acquire))ThrowBadFormat("DNG stage publication failed");}
     dng_image *Make_dng_image(const dng_rect &bounds,uint32 planes,uint32 pixelType) override {
         uint64_t pixels=uint64_t(bounds.W())*bounds.H();
         uint64_t bytes_per_pixel=uint64_t(planes)*TagTypeSize(pixelType);
         if(!bytes_per_pixel || pixels>limits.max_intermediate_pixels || pixels>limits.max_allocation_bytes/bytes_per_pixel)
             ThrowMemoryFull("PhotoCatalog DNG configured stage resource limit");
+        if(this->planes)return new PcDngStagePlane(bounds,planes,pixelType,storage,planeFailure);
         return dng_host::Make_dng_image(bounds,planes,pixelType);
     }
 };
@@ -53,23 +60,37 @@ static dng_pixel_buffer row_buffer(const dng_rect &area, uint32 planes, float *d
     buffer.fPixelType=ttFloat; buffer.fPixelSize=4; buffer.fData=data; buffer.fDirty=true;
     return buffer;
 }
-extern "C" int pc_dng(const unsigned char *bytes, size_t len, const PcDecodeLimits *limits, const PcWhitePoint *white, PcImage *out) {
+class PcDngCancelSniffer final:public dng_abort_sniffer {
+    const PcDecodeControl *control;
+public:
+    explicit PcDngCancelSniffer(const PcDecodeControl *value):control(value){}
+    bool ThreadSafe() const override{return true;}
+protected:
+    void Sniff() override {if(pc_canceled(control))ThrowUserCanceled();}
+};
+static int dng_decode(const unsigned char *bytes, size_t len, const PcDecodeLimits *limits, const PcWhitePoint *white, PcImage *out,PcRowSink sink,void *context,const PcDecodeControl *control=nullptr) {
     try {
-        BoundedAllocator allocator(limits->max_allocation_bytes);
-        AdmissionHost host(&allocator,*limits); host.SetNeedsMeta(true); host.SetForPreview(false);
+        BoundedAllocator legacyAllocator(limits->max_allocation_bytes);
+        PcDngAllocator planeAllocator(limits->max_allocation_bytes);
+        planeAllocator.budget->setControl(control);
+        PcDngSourceScope sdkOwner(sink ? planeAllocator.budget : std::shared_ptr<PcDngBudget>());
+        AdmissionHost host(sink ? static_cast<dng_memory_allocator *>(&planeAllocator) : static_cast<dng_memory_allocator *>(&legacyAllocator),*limits,sink!=nullptr);
+        PcDngCancelSniffer sniffer(control);host.SetSniffer(&sniffer);sniffer.SniffNoPriorityWait();
+        host.SetNeedsMeta(true); host.SetForPreview(false);
+        dng_memory_allocator &allocator=sink ? static_cast<dng_memory_allocator &>(planeAllocator) : static_cast<dng_memory_allocator &>(legacyAllocator);
         // Prefer the full source RAW over optional enhanced/proxy renderings.
         host.SetIgnoreEnhanced(true);
         dng_stream stream(bytes,len);
         dng_info info; info.Parse(host,stream); info.PostParse(host);
         if (!info.IsValidDNG() || info.fMainIndex<0) return fail(out,"corrupt DNG structure");
         auto *ifd=info.fIFD.at(info.fMainIndex);
-        if (!ifd->fImageWidth || !ifd->fImageLength || uint64_t(ifd->fImageWidth)*ifd->fImageLength>100000000 || uint64_t(ifd->fImageWidth)*ifd->fImageLength>limits->max_intermediate_pixels || uint64_t(ifd->fImageWidth)*ifd->fImageLength*16>limits->max_allocation_bytes)
+        if (!ifd->fImageWidth || !ifd->fImageLength || (!sink && uint64_t(ifd->fImageWidth)*ifd->fImageLength>100000000) || uint64_t(ifd->fImageWidth)*ifd->fImageLength>limits->max_intermediate_pixels || uint64_t(ifd->fImageWidth)*ifd->fImageLength*16>limits->max_allocation_bytes)
             return fail(out,"resource limit: DNG dimensions");
         AutoPtr<dng_negative> negative(host.Make_dng_negative());
         negative->Parse(host,stream,info); negative->PostParse(host,stream,info);
         negative->ReadStage1Image(host,stream,info);
         if (info.fMaskIndex!=-1) negative->ReadTransparencyMask(host,stream,info);
-        negative->BuildStage2Image(host); negative->BuildStage3Image(host);
+        negative->BuildStage2Image(host);host.verify();negative->BuildStage3Image(host);host.verify();
         const auto *image=negative->Stage3Image();
         if (!image || image->Planes()!=3) return fail(out,"unsupported DNG camera channel count");
         auto bounds=image->Bounds();
@@ -82,7 +103,10 @@ extern "C" int pc_dng(const unsigned char *bytes, size_t len, const PcDecodeLimi
         if (ifd->fSampleFormat[0]==3) out->flags|=1;
         if (info.fEnhancedIndex!=-1) out->flags|=2;
         out->orientation=negative->BaseOrientation().GetTIFF(); out->primaries=1; out->transfer=8;
-        if (!allocate(out, limits)) return fail(out,"resource limit: DNG output allocation");
+        if (!sink && !allocate(out, limits)) return fail(out,"resource limit: DNG output allocation");
+        if(uint64_t(out->width)*16>limits->max_allocation_bytes) return fail(out,"resource limit: DNG row allocation");
+        PcDngReservation rowAdmission(planeAllocator.budget,uint64_t(out->width)*45);
+        std::vector<float> output_row(sink ? size_t(out->width)*4 : 0);
         AutoPtr<dng_color_spec> spec(negative->MakeColorSpec(dng_camera_profile_id()));
         dng_camera_profile profile;
         if (negative->GetProfileByID(dng_camera_profile_id(),profile)) {
@@ -129,8 +153,10 @@ extern "C" int pc_dng(const unsigned char *bytes, size_t len, const PcDecodeLimi
         std::vector<unsigned char> apply(out->width);
         const double black=negative->Stage3BlackLevelNormalized();
         for (uint32 y=0;y<out->height;++y) {
+            sniffer.SniffNoPriorityWait();
             dng_rect area(crop.t+y,crop.l,crop.t+y+1,crop.r);
-            auto buffer=row_buffer(area,3,row.data()); image->Get(buffer);
+            float *destination=sink ? output_row.data() : out->pixels+size_t(y)*out->width*4;
+            auto buffer=row_buffer(area,3,row.data()); image->Get(buffer);host.verify();
             if (mask) {auto mask_buffer=row_buffer(area,1,alpha.data());mask->Get(mask_buffer);}
             if (calibration.Get() || spatial) {
                 for (uint32 x=0;x<out->width;++x) {
@@ -178,11 +204,13 @@ extern "C" int pc_dng(const unsigned char *bytes, size_t len, const PcDecodeLimi
                         for(uint32 k=0;k<3;++k) value+=matrix[c][k]*(row[3*x+k]-black)/(1.0-black);
                     }
                     if (!std::isfinite(value)) return fail(out,"corrupt DNG non-finite sample");
-                    out->pixels[(size_t(y)*out->width+x)*4+c]=static_cast<float>(value);
+                    destination[x*4+c]=static_cast<float>(value);
                 }
                 if (!std::isfinite(alpha[x])||alpha[x]<0||alpha[x]>1) return fail(out,"corrupt DNG transparency mask");
-                out->pixels[(size_t(y)*out->width+x)*4+3]=alpha[x];
+                destination[x*4+3]=alpha[x];
             }
+            host.verify();
+            if(sink && sink(context,out,y,output_row.data())) return fail(out,"DNG row consumer refused");
         }
         return 0;
     } catch (const dng_exception &e) {
@@ -201,3 +229,6 @@ extern "C" int pc_temperature_xy(double kelvin,double tint,PcWhitePoint *out) {
     out->x=xy.x;out->y=xy.y;
     return std::isfinite(xy.x)&&std::isfinite(xy.y)&&xy.x>0&&xy.y>0&&xy.x+xy.y<1 ? 0 : -1;
 }
+
+extern "C" int pc_dng(const unsigned char *bytes,size_t len,const PcDecodeLimits *limits,const PcWhitePoint *white,PcImage *out) { return dng_decode(bytes,len,limits,white,out,nullptr,nullptr); }
+extern "C" int pc_dng_rows(const unsigned char *bytes,size_t len,const PcDecodeLimits *limits,const PcWhitePoint *white,PcImage *out,PcRowSink sink,void *context,const PcDecodeControl *control) { if(!sink) return fail(out,"missing DNG row consumer");return dng_decode(bytes,len,limits,white,out,sink,context,control); }

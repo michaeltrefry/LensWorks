@@ -8,6 +8,9 @@
 #include <exception>
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include "pc_private_file.h"
+#include <string>
 #include "decode.h"
 
 // This ABI contains no vendor structs. Compile against the linked library's headers.
@@ -30,6 +33,15 @@ bool allocate(PcImage *out, const PcDecodeLimits *limits) {
 class OriginalCropRaw : public LibRaw {
 public:
     libraw_raw_inset_crop_t vendor_crop{};
+    // Same inherited serializer as dcraw_ppm_tiff_writer, but the caller's
+    // exclusive FILE is retained throughout. No /dev/fd alias or path reopen.
+    void writeHeldRows(FILE *file) {
+        FILE *previous=libraw_internal_data.internal_data.output;
+        libraw_internal_data.internal_data.output=file;
+        try{write_ppm_tiff();}catch(...){libraw_internal_data.internal_data.output=previous;throw;}
+        libraw_internal_data.internal_data.output=previous;
+    }
+
     OriginalCropRaw() {
         callbacks.post_identify_cb=[](void *ctx) {
             auto *self=static_cast<OriginalCropRaw *>(static_cast<LibRaw *>(ctx));
@@ -79,16 +91,100 @@ static bool custom_wb(LibRaw &raw,const PcWhitePoint &white) {
     raw.imgdata.params.use_camera_wb=0;raw.imgdata.params.use_auto_wb=0;
     return true;
 }
-extern "C" int pc_raw(const unsigned char *bytes, size_t len, const PcDecodeLimits *limits, const PcWhitePoint *white, PcImage *out) {
+// LibRaw's public PPM writer and make_mem_image both serialize the developed
+// camera samples. The row route uses the writer's 16-bit binary representation
+// into an already-held unlinked private file; no processed full-frame copy.
+static bool ppm_token(const std::vector<unsigned char> &bytes,size_t &cursor,std::string &token,size_t &header_bytes) {
+    token.clear();int c;
+    auto next=[&]()->int{return cursor<bytes.size()?int(bytes[cursor++]):EOF;};
+    for(;;) {
+        c=next();if(c==EOF||++header_bytes>65536)return false;
+        if(c=='#'){do{c=next();if(c==EOF||++header_bytes>65536)return false;}while(c!='\n');continue;}
+        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
+        break;
+    }
+    for(;;) {
+        if(token.size()>=64)return false;token.push_back(char(c));
+        c=next();if(c==EOF||++header_bytes>65536)return false;
+        if(c==' '||c=='\t'||c=='\r'||c=='\n')break;
+    }
+    return true;
+}
+static bool ppm_number(const std::string &token,uint32_t &value) {
+    if(token.empty())return false;uint64_t n=0;
+    for(char c:token){if(c<'0'||c>'9')return false;n=n*10+unsigned(c-'0');if(n>UINT32_MAX)return false;}
+    value=uint32_t(n);return true;
+}
+static int raw_rows_from_writer(OriginalCropRaw &raw,const PcDecodeLimits *limits,PcImage *out,
+    PcRowSink sink,void *context,const float matrix[3][3],float headroom,const PcDecodeControl *control) {
+    int width=0,height=0,colors=0,bits=0;raw.get_mem_image_format(&width,&height,&colors,&bits);
+    if(width<=0||height<=0||colors!=3||bits!=16)return fail(out,"unsupported RAW row writer format");
+    uint32_t left=0,top=0;out->width=uint32_t(width);out->height=uint32_t(height);
+    const auto crop=raw.vendor_crop;const auto sizes=raw.imgdata.sizes;
+    if(crop.cwidth&&crop.cheight&&crop.cleft<0xffff&&crop.ctop<0xffff) {
+        if(width!=sizes.width||height!=sizes.height||crop.cleft<sizes.left_margin||crop.ctop<sizes.top_margin)
+            return fail(out,"unsupported RAW vendor crop with scaled or diagonal development");
+        left=crop.cleft-sizes.left_margin;top=crop.ctop-sizes.top_margin;
+        if(uint64_t(left)+crop.cwidth>uint32_t(width)||uint64_t(top)+crop.cheight>uint32_t(height))
+            return fail(out,"unsupported RAW vendor crop outside developed area");
+        out->width=crop.cwidth;out->height=crop.cheight;
+    }
+    const uint64_t row_bytes=uint64_t(width)*6;
+    if(uint64_t(width)*height>limits->max_intermediate_pixels||row_bytes>limits->max_allocation_bytes||
+        uint64_t(out->width)*16>limits->max_allocation_bytes)return fail(out,"resource limit: RAW writer row admission");
+    PcPrivateFile file;
+    raw.imgdata.params.output_tiff=0;raw.writeHeldRows(file.writerStream());
+    const uint64_t payload=uint64_t(width)*height*6;
+    file.acceptWriter(payload+65536);file.seal();const uint64_t published=file.size();
+    if(published<payload)return fail(out,"RAW writer backing extent");
+    // All matrix/headroom/crop/source metadata used below was captured before
+    // releasing the mosaic and developed image. The immutable file is separate.
+    raw.recycle();
+    // Header parsing is bounded, then row reads use the checked held range API.
+    std::vector<unsigned char> header_bytes(static_cast<size_t>(published-payload));
+    file.read(header_bytes.data(),0,header_bytes.size());
+    size_t cursor=0;
+    size_t header=0;std::string token;uint32_t declared_width=0,declared_height=0,maximum=0;
+    if(!ppm_token(header_bytes,cursor,token,header)||token!="P6"||!ppm_token(header_bytes,cursor,token,header)||!ppm_number(token,declared_width)||
+        !ppm_token(header_bytes,cursor,token,header)||!ppm_number(token,declared_height)||!ppm_token(header_bytes,cursor,token,header)||!ppm_number(token,maximum)||
+        declared_width!=uint32_t(width)||declared_height!=uint32_t(height)||maximum!=65535||header+payload!=published)
+        return fail(out,"RAW writer PPM descriptor mismatch");
+    std::vector<unsigned char> encoded(static_cast<size_t>(row_bytes));std::vector<float> row(size_t(out->width)*4);
+    out->primaries=1;out->transfer=8;
+    for(uint32_t y=0;y<out->height;++y) {
+        if(pc_canceled(control))return fail(out,"RAW decode canceled");
+        file.read(encoded.data(),header+(uint64_t(y+top)*width+left)*6,size_t(out->width)*6);
+        for(uint32_t x=0;x<out->width;++x) {
+            for(size_t c=0;c<3;++c) {
+                float value=0;
+                for(size_t k=0;k<3;++k) {
+                    size_t sample=(size_t(x)*3+k)*2;
+                    const uint16_t n=uint16_t((uint16_t(encoded[sample])<<8)|encoded[sample+1]);
+                    value+=matrix[c][k]*(n/65535.0f)*headroom;
+                }
+                row[4*x+c]=value;
+            }
+            row[4*x+3]=1;
+        }
+        if(sink(context,out,y,row.data()))return fail(out,"RAW row consumer refused");
+    }
+    file.verify();
+    return 0;
+}
+static int raw_decode(const unsigned char *bytes, size_t len, const PcDecodeLimits *limits, const PcWhitePoint *white, PcImage *out, PcRowSink sink, void *context,const PcDecodeControl *control=nullptr) {
     try {
+        if(pc_canceled(control))return fail(out,"RAW decode canceled");
         OriginalCropRaw raw;
+        if(control)raw.set_progress_handler([](void *value,enum LibRaw_progress,int,int)->int {
+            return pc_canceled(static_cast<const PcDecodeControl *>(value))?1:0;
+        },const_cast<PcDecodeControl *>(control));
         raw.imgdata.rawparams.max_raw_memory_mb = unsigned(limits->max_allocation_bytes==UINT64_MAX ? 768 : std::min<uint64_t>(4096, limits->max_allocation_bytes/(1024*1024)));
         if (!raw.imgdata.rawparams.max_raw_memory_mb) return fail(out,"resource limit: RAW allocation allowance below 1 MiB");
         raw.imgdata.rawparams.options &= ~LIBRAW_RAWOPTIONS_CONVERTFLOAT_TO_INT;
         int status = raw.open_buffer(const_cast<unsigned char *>(bytes), len);
         if (status) return raw_failure(out, status);
         out->width = raw.imgdata.sizes.width; out->height = raw.imgdata.sizes.height;
-        if (uint64_t(out->width) * out->height > 100000000) return fail(out, "resource limit: RAW exceeds 100 megapixels");
+        if (!sink && uint64_t(out->width) * out->height > 100000000) return fail(out, "resource limit: RAW exceeds 100 megapixels");
         uint64_t sensor_pixels=uint64_t(raw.imgdata.sizes.raw_width)*raw.imgdata.sizes.raw_height;
         uint64_t developed_pixels=uint64_t(out->width)*out->height;
         if(sensor_pixels>limits->max_intermediate_pixels || developed_pixels>limits->max_intermediate_pixels ||
@@ -134,6 +230,7 @@ extern "C" int pc_raw(const unsigned char *bytes, size_t len, const PcDecodeLimi
         }
         const float headroom=1.f/minimum_wb;
         if (!std::isfinite(headroom)) return fail(out,"unsupported RAW white balance range");
+        if(sink)return raw_rows_from_writer(raw,limits,out,sink,context,camera_to_rgb,headroom,control);
         auto *processed = raw.dcraw_make_mem_image(&status);
         if (!processed) return raw_failure(out, status);
         std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> image(processed, LibRaw::dcraw_clear_mem);
@@ -153,28 +250,38 @@ extern "C" int pc_raw(const unsigned char *bytes, size_t len, const PcDecodeLimi
                 return fail(out,"unsupported RAW vendor crop outside developed area");
             out->width=crop.cwidth;out->height=crop.cheight;
         }
-        if (!allocate(out, limits)) return fail(out, "resource limit: RAW output allocation");
+        if (!sink && !allocate(out, limits)) return fail(out, "resource limit: RAW output allocation");
+        if (uint64_t(out->width)*16>limits->max_allocation_bytes) return fail(out,"resource limit: RAW row allocation");
+        std::vector<float> row(sink ? size_t(out->width)*4 : 0);
         const auto *samples = reinterpret_cast<const uint16_t *>(processed->data);
-        for (size_t i = 0; i < size_t(out->width) * out->height; ++i) {
-            size_t source=(i/out->width+crop_top)*processed->width+(i%out->width+crop_left);
-            for (size_t c = 0; c < 3; ++c) {
-                float value=0;
-                for(size_t k=0;k<3;++k) value+=camera_to_rgb[c][k]*(samples[3*source+k]/65535.0f)*headroom;
-                out->pixels[4*i+c]=value;
-            }
-            out->pixels[4*i+3] = 1;
-        }
         out->primaries = 1; out->transfer = 8; // linear sRGB primaries
+        for (uint32_t y=0;y<out->height;++y) {
+            float *destination=sink ? row.data() : out->pixels+size_t(y)*out->width*4;
+            for(uint32_t x=0;x<out->width;++x) {
+                size_t source=size_t(y+crop_top)*processed->width+x+crop_left;
+                for(size_t c=0;c<3;++c) {
+                    float value=0;
+                    for(size_t k=0;k<3;++k) value+=camera_to_rgb[c][k]*(samples[3*source+k]/65535.0f)*headroom;
+                    destination[4*x+c]=value;
+                }
+                destination[4*x+3]=1;
+            }
+            if(sink && sink(context,out,y,row.data())) return fail(out,"RAW row consumer refused");
+        }
         return 0;
     } catch (const std::bad_alloc &) { return fail(out,"resource limit: RAW allocation failed"); }
     catch (const std::exception &error) { return fail(out, error.what()); }
     catch (...) { return fail(out, "RAW decoder exception"); }
 }
-extern "C" int pc_avif(const unsigned char *bytes, size_t len, const PcDecodeLimits *limits, PcImage *out) {
+extern "C" int pc_raw(const unsigned char *bytes,size_t len,const PcDecodeLimits *limits,const PcWhitePoint *white,PcImage *out) { return raw_decode(bytes,len,limits,white,out,nullptr,nullptr); }
+extern "C" int pc_raw_rows(const unsigned char *bytes,size_t len,const PcDecodeLimits *limits,const PcWhitePoint *white,PcImage *out,PcRowSink sink,void *context,const PcDecodeControl *control) { if(!sink) return fail(out,"missing RAW row consumer");return raw_decode(bytes,len,limits,white,out,sink,context,control); }
+static int avif_decode(const unsigned char *bytes, size_t len, const PcDecodeLimits *limits, PcImage *out,PcRowSink sink,void *context,const PcDecodeControl *control=nullptr) {
+    try {
     std::unique_ptr<avifDecoder, decltype(&avifDecoderDestroy)> decoder(avifDecoderCreate(), avifDecoderDestroy);
     if (!decoder) return fail(out, "resource limit: AVIF allocation failed");
-    decoder->maxThreads = 1; decoder->imageSizeLimit = 100000000; decoder->imageDimensionLimit = 40000;
+    decoder->maxThreads = 1; decoder->imageSizeLimit = sink ? uint32_t(std::min<uint64_t>(limits->max_intermediate_pixels,UINT32_MAX)) : 100000000; decoder->imageDimensionLimit = 40000;
     decoder->imageCountLimit = 1;
+    if(pc_canceled(control))return fail(out,"AVIF decode canceled");
     auto result = avifDecoderSetIOMemory(decoder.get(), bytes, len);
     if (result == AVIF_RESULT_OK) result = avifDecoderParse(decoder.get());
     if (result == AVIF_RESULT_OK) {
@@ -184,6 +291,7 @@ extern "C" int pc_avif(const unsigned char *bytes, size_t len, const PcDecodeLim
         result = avifDecoderNextImage(decoder.get());
     }
     if (result != AVIF_RESULT_OK) return fail(out, result==AVIF_RESULT_OUT_OF_MEMORY ? "resource limit: AVIF allocation failed" : avifResultToString(result));
+    if(pc_canceled(control))return fail(out,"AVIF decode canceled");
     const avifImage *img = decoder->image;
     avifCropRect crop{0,0,img->width,img->height};
     if ((img->transformFlags & AVIF_TRANSFORM_CLAP) && !avifCropRectConvertCleanApertureBox(&crop,&img->clap,img->width,img->height,img->yuvFormat,&decoder->diag))
@@ -200,7 +308,9 @@ extern "C" int pc_avif(const unsigned char *bytes, size_t len, const PcDecodeLim
         const uint32_t horizontal[]={2,7,4,5},vertical[]={4,5,2,7};
         out->orientation=(img->imir.axis==1?horizontal:vertical)[angle&3];
     }
-    if (!allocate(out, limits)) return fail(out, "resource limit: AVIF output allocation");
+    if (!sink && !allocate(out, limits)) return fail(out, "resource limit: AVIF output allocation");
+    if(uint64_t(out->width)*16>limits->max_allocation_bytes) return fail(out,"resource limit: AVIF row allocation");
+    std::vector<float> output_row(sink ? size_t(out->width)*4 : 0);
     if (img->icc.size) {
         if (img->icc.size > 16*1024*1024) return fail(out, "resource limit: ICC profile");
         out->icc = static_cast<unsigned char *>(malloc(img->icc.size));
@@ -214,11 +324,22 @@ extern "C" int pc_avif(const unsigned char *bytes, size_t len, const PcDecodeLim
     result = avifImageYUVToRGB(img, &rgb);
     if (result == AVIF_RESULT_OK) {
         for (size_t y = 0; y < out->height; ++y) {
+            if(pc_canceled(control)){avifRGBImageFreePixels(&rgb);return fail(out,"AVIF row decode canceled");}
             const auto *row = reinterpret_cast<const uint16_t *>(rgb.pixels + (y+crop.y) * rgb.rowBytes)+crop.x*4;
-            for (size_t x = 0; x < size_t(out->width)*4; ++x) out->pixels[y*out->width*4+x] = row[x] / 65535.0f;
+            float *destination=sink ? output_row.data() : out->pixels+y*out->width*4;
+            for(size_t x=0;x<size_t(out->width)*4;++x) destination[x]=row[x]/65535.0f;
+            if(sink && sink(context,out,uint32_t(y),output_row.data())) {
+                avifRGBImageFreePixels(&rgb);return fail(out,"AVIF row consumer refused");
+            }
         }
     }
     avifRGBImageFreePixels(&rgb);
     if (result != AVIF_RESULT_OK) return fail(out, result==AVIF_RESULT_OUT_OF_MEMORY ? "resource limit: AVIF allocation failed" : avifResultToString(result));
     return 0;
+    }catch(const std::bad_alloc &){return fail(out,"resource limit: AVIF row allocation failed");}
+    catch(const std::exception &error){return fail(out,error.what());}
+    catch(...){return fail(out,"AVIF decoder exception");}
 }
+
+extern "C" int pc_avif(const unsigned char *bytes,size_t len,const PcDecodeLimits *limits,PcImage *out) { return avif_decode(bytes,len,limits,out,nullptr,nullptr); }
+extern "C" int pc_avif_rows(const unsigned char *bytes,size_t len,const PcDecodeLimits *limits,PcImage *out,PcRowSink sink,void *context,const PcDecodeControl *control) { if(!sink) return fail(out,"missing AVIF row consumer");return avif_decode(bytes,len,limits,out,sink,context,control); }

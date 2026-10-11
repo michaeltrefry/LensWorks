@@ -314,8 +314,9 @@ import QuartzCore
 
     /// Draws `image` into `layer`'s next drawable, in step with the Core Animation transaction it's drawn in, so it
     /// lands on the same frame as the overlays above it.
-    func present(_ image: CIImage, in layer: CAMetalLayer) {
-        guard let drawable = layer.nextDrawable(), let buffer = queue.makeCommandBuffer() else { return }
+    func present(_ image: CIImage,in layer:CAMetalLayer,validateBeforePresentation:(() throws -> Void)? = nil) throws -> Bool {
+        guard let drawable=layer.nextDrawable(),let buffer=queue.makeCommandBuffer() else { return false }
+        defer { endFrame() }
         let size = layer.drawableSize
         // Core Image writes a texture that can be rendered to bottom row first (a plain one, top row first), so the
         // frame is turned over to land top row first.
@@ -324,9 +325,15 @@ import QuartzCore
         context.render(upright, to: drawable.texture, commandBuffer: buffer,
                        bounds: CGRect(x: 0, y: 0, width: size.width, height: size.height), colorSpace: space)
         buffer.commit()
-        buffer.waitUntilScheduled()
+        if let validateBeforePresentation {
+            // Provider callbacks may run after scheduling and outside the originating Task.
+            // The float frame cannot be presented until every callback has completed and checked.
+            buffer.waitUntilCompleted()
+            guard buffer.status == .completed else { throw ExportError.render }
+            try validateBeforePresentation()
+        } else { buffer.waitUntilScheduled() }
         drawable.present()
-        endFrame()
+        return true
     }
 }
 

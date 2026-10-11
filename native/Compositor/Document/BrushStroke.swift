@@ -124,6 +124,20 @@ final class BrushStroke {
     let width: Int
     let height: Int
     let settings: BrushSettings
+    private(set) var recordedSourceDabs:[CGPoint] = []
+    private var sourceTailStart:Int?
+    let recordedSourceSeed = UInt32.random(in:.min ... .max)
+    var sourceCloneOffset = CGSize.zero
+    var sourceCloneSettings = CloneSettings()
+    var sourceSelection:Data?
+    var sourceSelectionPlane:LWSourcePlaneAsset?
+    var sourceWorkspace:LWFloatWorkspace?
+    var sourcePlaneAssets:[UUID:LWSourcePlaneAsset]=[:]
+    var sourceIsClone=false
+    var sourceComposite:LWSourceSampleComposite?
+    var sourcePreview:LWFloatPlane?
+    var sourcePreviewTask:Task<Void,Never>?
+    var sourcePreviewPending=false
     let canvas: CGRect
     let pixelToDocument: CGAffineTransform
     let sourceRect: CGRect
@@ -191,7 +205,7 @@ final class BrushStroke {
     /// `growsMask`: a brush on a mask can paint anywhere on the canvas, as Photoshop's does, growing the mask past its
     /// layer. Other edits of a mask stay within it.
     init(layer: ImageLayer, mask: Bool, settings: BrushSettings, canvas: CGSize, useGPU: Bool = true, growsMask: Bool = false) throws {
-        gpu = useGPU ? MetalBrushCoverage.shared : nil
+        gpu = useGPU && layer.liveSource == nil ? MetalBrushCoverage.shared : nil
         self.layer = layer
         isMask = mask
         self.settings = settings
@@ -420,6 +434,7 @@ final class BrushStroke {
                 }
             }
         }
+        if layer.liveSource != nil { sourceTailStart=recordedSourceDabs.count }
         let saved = (previous, distanceToNext)
         try walk(to: end, changed: &changed)
         (previous, distanceToNext) = saved
@@ -427,6 +442,7 @@ final class BrushStroke {
 
     private func removeTail() -> Set<Int> {
         var restored = Set<Int>()
+        if let start=sourceTailStart { recordedSourceDabs.removeSubrange(start...);sourceTailStart=nil }
         for (key, image) in tailBackup {
             guard let context = coverage[key], let tile = tiles[key] else { continue }
             let local = CGRect(origin: .zero, size: tile.rect.size)
@@ -573,7 +589,14 @@ final class BrushStroke {
     private static let eraseColor = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
     private static let healingWash = CGColor(srgbRed: 0.12, green: 0.12, blue: 0.12, alpha: 1)
 
+    private var sourceDabMetadata:LWSourceMetadataStorage?
     private func dab(_ point: CGPoint, changed: inout Set<Int>) throws {
+        if layer.liveSource != nil {
+            guard recordedSourceDabs.count < 100000 else { throw ProjectError.tooLarge }
+            let owner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.collectionBytes(count:recordedSourceDabs.count+1,stride:MemoryLayout<CGPoint>.stride))
+            recordedSourceDabs.append(point);sourceDabMetadata=owner
+            return // Retained float source operations never allocate byte painting tiles.
+        }
         let radius = settings.diameter / 2
         let circle = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
         let clipped = circle.intersection(canvas)

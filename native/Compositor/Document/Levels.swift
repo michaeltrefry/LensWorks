@@ -106,6 +106,10 @@ final class LevelsEdit {
     let layerID: UUID
     let original: ImportedImage
     let transform: LayerTransform
+    let liveSource:LWLiveSourceNode?
+    let originalMask:LayerMask?
+    var liveAdmission:LWDocumentEditAdmission?
+    @ObservationIgnored var livePreviewPlane:LWFloatPlane?
     let selection: SelectionClip?
     let mapping: CGAffineTransform
     let previewSource: CGImage
@@ -116,6 +120,7 @@ final class LevelsEdit {
     var committing = false
     var histogram: [[Double]] = Array(repeating: Array(repeating: 0, count: 256), count: 4)
     var histogramReady = false
+    @ObservationIgnored var histogramCharge:LWFloatWorkingSet.Lease?
     @ObservationIgnored var preparedPreview: CGImage?
     @ObservationIgnored var pending: LevelsJob?
     @ObservationIgnored var previewTask: Task<Void, Never>?
@@ -123,11 +128,12 @@ final class LevelsEdit {
 
     init(layer: ImageLayer, selection: SelectionClip?) throws {
         layerID = layer.id; original = layer.asset!; transform = layer.transform; self.selection = selection
+        liveSource=layer.liveSource;originalMask=layer.mask
         mapping = BrushRaster.pixelToDocument(transform, width: original.image.width, height: original.image.height)
         // Full size up to 8000 pixels on a side: a levels preview is a lookup table per pixel, quick enough to run
         // on the whole layer, and a downscaled copy showed the canvas a coarse, pixelated version while dragging.
         let factor = min(1, 8000 / CGFloat(max(original.image.width, original.image.height)))
-        if factor < 1 {
+        if factor < 1,layer.liveSource == nil {
             let w = max(1, Int(CGFloat(original.image.width) * factor)), h = max(1, Int(CGFloat(original.image.height) * factor))
             let context = try BrushRaster.context(width: w, height: h, mask: false)
             let rect = CGRect(x: 0, y: 0, width: w, height: h)
@@ -153,9 +159,25 @@ extension EditorSession {
         guard let layer = activeLayer, let document else { return }
         do {
             let edit = try LevelsEdit(layer: layer, selection: selection?.clip(canvas: document.size))
+            if edit.liveSource != nil { edit.liveAdmission=try captureDocumentEditAdmission() }
             levels = edit
             let job = edit.previewJob
-            edit.histogramTask = Task { @MainActor [weak self, weak edit] in
+            edit.histogramTask = try makeSourcePreviewTask { [weak self, weak edit] in
+                if let self,let edit,let source=edit.liveSource,let admission=edit.liveAdmission {
+                    do {
+                        try self.validateSourceAdjustmentAdmission(admission,layerID:edit.layerID,node:source,original:edit.original,transform:edit.transform,mask:edit.originalMask)
+                        let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+                        let result=try await withTaskCancellationHandler {
+                            let before=try await LWSourceDeveloper.shared.evaluatePlane(source)
+                            return try LWSourceLevelsHistogram.make(before.surface,selection:edit.selection,transform:edit.transform,workspace:workspace)
+                        } onCancel: { workspace.cancellation.cancel() }
+                        try Task.checkCancellation()
+                        try self.validateSourceAdjustmentAdmission(admission,layerID:edit.layerID,node:source,original:edit.original,transform:edit.transform,mask:edit.originalMask)
+                        guard self.levels === edit else { return }
+                        edit.histogram=result.bins;edit.histogramCharge=result.charge;edit.histogramReady=true
+                    } catch { if self.levels === edit { self.brushError=error.localizedDescription } }
+                    return
+                }
                 let result = await Task.detached(priority: .userInitiated) { try? LevelsFilter.histogram(job) }.value
                 guard let self, let edit, self.levels === edit, !Task.isCancelled else { return }
                 if let result { edit.histogram = result }
@@ -168,8 +190,8 @@ extension EditorSession {
         edit.settings = settings; edit.preview = preview
         if previewAdjustmentEditing(preview: preview) { return }
         if !preview || settings.isIdentity {
-            edit.previewTask?.cancel(); edit.previewTask = nil; edit.pending = nil
-            edit.preparedPreview = nil; brushRevision += 1
+            edit.previewTask?.cancel(); edit.pending = nil
+            edit.preparedPreview = nil;edit.livePreviewPlane=nil; brushRevision += 1
             return
         }
         edit.pending = edit.previewJob
@@ -178,13 +200,31 @@ extension EditorSession {
     private func renderLevelsPreview(_ edit: LevelsEdit) {
         guard levels === edit, edit.previewTask == nil, let job = edit.pending else { return }
         edit.pending = nil
-        edit.previewTask = Task { @MainActor [weak self, weak edit] in
+        do {
+        edit.previewTask = try makeSourcePreviewTask { [weak self, weak edit] in
+            if let self,let edit,let node=edit.liveSource,let admission=edit.liveAdmission {
+                do {
+                    try self.validateSourceAdjustmentAdmission(admission,layerID:edit.layerID,node:node,original:edit.original,transform:edit.transform,mask:edit.originalMask)
+                    var settings=LayerAdjustment(kind:.levels);settings.levels=job.settings
+                    let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+                    let made=try await LWSourceAdjustmentPreparation.prepare(node,settings:settings,selection:edit.selection,transform:edit.transform,workspace:workspace)
+                    try Task.checkCancellation()
+                    try self.validateSourceAdjustmentAdmission(admission,layerID:edit.layerID,node:node,original:edit.original,transform:edit.transform,mask:edit.originalMask)
+                    guard self.levels === edit else { throw CancellationError() }
+                    let provider=LWFloatPlaneImage(plane:made.plane,cancellation:workspace.cancellation)
+                    let image=try provider.image();try provider.check()
+                    edit.livePreviewPlane=made.plane;edit.preparedPreview=image;self.brushRevision+=1
+                } catch { if self.levels === edit { self.brushError=error.localizedDescription } }
+                edit.previewTask=nil;self.renderLevelsPreview(edit);return
+            }
             let result = await Task.detached(priority: .userInitiated) { try? LevelsFilter.run(job) }.value
-            guard let self, let edit, self.levels === edit, !Task.isCancelled else { return }
-            edit.previewTask = nil
+            guard let self,let edit else { return }
+            edit.previewTask=nil
+            guard self.levels === edit,!Task.isCancelled else { return }
             if edit.preview, !edit.settings.isIdentity { edit.preparedPreview = result; self.brushRevision += 1 }
             self.renderLevelsPreview(edit)
         }
+        } catch { commandRefusal=error.localizedDescription }
     }
     func cancelLevels() {
         if finishAdjustmentEditing(commit: false) { return }
@@ -200,6 +240,14 @@ extension EditorSession {
         edit.previewTask?.cancel(); edit.histogramTask?.cancel()
         isProjectBusy = true
         defer { levels = nil; isProjectBusy = false; brushRevision += 1 }
+        if let node=edit.liveSource,let admission=edit.liveAdmission {
+            do {
+                var value=LayerAdjustment(kind:.levels);value.levels=edit.settings
+                try await commitSourceAdjustment(admission:admission,layerID:edit.layerID,node:node,original:edit.original,
+                    transform:edit.transform,mask:edit.originalMask,settings:value,selection:edit.selection)
+            } catch { brushError=error.localizedDescription }
+            return
+        }
         let job = LevelsJob(image: edit.original.image, settings: edit.settings, selection: edit.selection, mapping: edit.mapping)
         do {
             let asset = try await Task.detached(priority: .userInitiated) {
@@ -209,7 +257,7 @@ extension EditorSession {
             guard let index = document?.layers.firstIndex(where: { $0.id == edit.layerID }),
                   let current = document?.layers[index], current.asset?.image === edit.original.image,
                   current.transform == edit.transform else { return }
-            beginEdit("Levels")
+            guard beginEdit("Levels") else { return }
             document?.layers[index] = ImageLayer(id: current.id, asset: asset, name: current.name, isVisible: current.isVisible,
                 transform: current.transform, parentID: current.parentID, isGroup: false,
                 opacity: current.opacity, blendMode: current.blendMode, mask: current.mask, maskSourceID: current.maskSourceID)

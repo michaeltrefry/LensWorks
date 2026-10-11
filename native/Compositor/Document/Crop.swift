@@ -239,11 +239,12 @@ extension EditorSession {
         isProjectBusy = true
         defer { isProjectBusy = false }
         do {
+            let admission=try captureDocumentEditAdmission()
             let result = try await CanvasResizer.shared.resize(snapshot,
                 to: CanvasSizeOptions(width: Int(rect.width), height: Int(rect.height),
                     contentOffset: CGPoint(x: -rect.minX, y: -rect.minY)))
+            try applyDocumentSize(result,actionName:"Crop",admission:admission)
             cropRect = nil
-            applyDocumentSize(result, actionName: "Crop")
         } catch { cropError = error.localizedDescription }
     }
 }

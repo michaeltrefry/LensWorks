@@ -45,6 +45,18 @@ final class EffectsPreviewCache {
     }
     nonisolated private static let worker = DispatchQueue(label: "com.compositor.effects-preview", qos: .userInitiated)
     private var entries: [UUID: Entry] = [:]
+    nonisolated private let pendingWorkers = DispatchGroup()
+    var hasPendingWorkers: Bool { pendingWorkers.wait(timeout: .now()) != .success }
+    func cancelAndDrain(deadline: ContinuousClock.Instant) async throws {
+        for entry in entries.values { entry.request.cancel() }
+        for values in recent.values { for entry in values { entry.request.cancel() } }
+        entries.removeAll(); recent.removeAll(); seeds.removeAll()
+        while pendingWorkers.wait(timeout: .now()) != .success {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw LWSourceCleanupFailure(operation:nil,cleanup:"Effects previews are still draining; retry Close.") }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
     /// A few recent finished previews per layer, newest last. Undo and redo put a layer's earlier pixels back, and
     /// the effects for them are taken from here instead of blinking off while they're rendered again.
     private var recent: [UUID: [Entry]] = [:]
@@ -108,11 +120,16 @@ final class EffectsPreviewCache {
         } ?? seeds[layer.id]
         entries[layer.id] = Entry(request: request, result: previous)
         let layerID = layer.id
+        let pending = pendingWorkers
+        pending.enter()
         Self.worker.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            defer { pending.leave() }
             guard !request.isCancelled else { return }
             let result = autoreleasepool { try? Self.render(request) }
             guard !request.isCancelled else { return }
+            pending.enter()
             Task { @MainActor [weak self] in
+                defer { pending.leave() }
                 guard let self, self.entries[layerID]?.request.id == request.id else { return }
                 self.entries[layerID]?.result = result
                 if let result {

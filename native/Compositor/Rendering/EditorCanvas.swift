@@ -21,6 +21,14 @@ struct EditorCanvas: NSViewRepresentable {
 final class CanvasView: NSView {
     var inlineTextEditor: InlineTextEditor?
     /// The text being typed, rendered as the layer will hold it, remade only when its style changes.
+    private var floatFrameProvider: LWFloatPlaneImage?
+    private var floatFrameWorkspace: LWFloatWorkspace?
+    func releaseSourceFrame() {
+        floatFrameProvider = nil; floatFrameWorkspace = nil
+        draftTextCache = nil; draftEffects = nil; draftEffectsSource = nil
+        strokeSurface = nil; cloneTipCache = nil; clonePreviewCache = nil
+        displayedState = nil; gpuView?.isHidden = true; needsDisplay = true
+    }
     private var draftTextCache: (style: LayerTextStyle, image: CGImage)?
     /// The effects rendered for the text being edited, and what they were rendered from.
     private var draftEffects: (image: CGImage, effects: LayerEffects, transform: LayerTransform, rendered: CGImage, inset: CGFloat)?
@@ -646,6 +654,8 @@ final class CanvasView: NSView {
         self.session = session
         transformOverlay = TransformOverlay(session: session)
         super.init(frame: .zero)
+        session.releaseSourcePresentation = { [weak self] in self?.releaseSourceFrame() }
+        session.sourcePresentationOwner = { [weak self] in self?.floatFrameWorkspace }
         session.refreshCanvasPreview = { [weak self] in
             self?.synchronizeDisplay()
             self?.displayIfNeeded()
@@ -946,6 +956,38 @@ final class CanvasView: NSView {
     }
 
     private func drawLayers(_ document: CanvasDocument, scale: CGFloat, center: @escaping (CGPoint) -> CGPoint, in context: CGContext, onSurface: Bool = false) {
+        if document.layers.contains(where:{$0.liveSource != nil || $0.asset?.linear != nil || $0.asset?.linearPlane != nil || $0.mask?.asset.linearPlane != nil}) {
+            do {
+                let maskLayer = session.maskAloneLayer
+                let image: CGImage?
+                if maskLayer == nil { image = try liveFloatCanvasImage(document) } else { image = nil }
+                let provider = maskLayer == nil ? floatFrameProvider : maskLayer?.mask?.asset.planeImage
+                try provider?.check()
+                let origin=center(.zero)
+                let rectangle = CGRect(x: origin.x,y: origin.y,width: document.size.width*scale,height: document.size.height*scale)
+                let deviceRect = context.convertToDeviceSpace(rectangle.intersection(context.boundingBoxOfClipPath)).integral
+                guard !deviceRect.isNull,!deviceRect.isEmpty else { return }
+                guard [deviceRect.minX,deviceRect.minY,deviceRect.width,deviceRect.height].allSatisfy(\.isFinite),
+                    deviceRect.width <= CGFloat(Int.max/16),deviceRect.height <= CGFloat(Int.max/16) else { throw ProjectError.tooLarge }
+                let width=Int(deviceRect.width),height=Int(deviceRect.height)
+                let (count,overflow)=width.multipliedReportingOverflow(by:height), (bytes,byteOverflow)=count.multipliedReportingOverflow(by:4)
+                guard !overflow,!byteOverflow,bytes <= Int.max/2 else { throw ProjectError.tooLarge }
+                let lease=try LWFloatWorkingSet.sourceGraphs.reserve(bytes*2)
+                guard let staging=CGContext(data:nil,width:width,height:height,bitsPerComponent:8,bytesPerRow:width*4,
+                    space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { throw ExportError.render }
+                staging.translateBy(x:-deviceRect.minX,y:-deviceRect.minY); staging.concatenate(context.ctm)
+                if let maskLayer, let mask = maskLayer.mask {
+                    drawMaskAlone(mask, of: maskLayer, document: document, scale: scale, center: center, in: staging)
+                } else if let image { staging.draw(image,in:rectangle) }
+                else { throw ProjectError.invalid }
+                try provider?.check() // Callback failures must be observed before publishing this viewport.
+                guard let ready=staging.makeImage() else { throw ExportError.render }
+                context.saveGState();defer { context.restoreGState() }
+                context.concatenate(context.ctm.inverted());context.draw(ready,in:deviceRect)
+                withExtendedLifetime(lease) {}
+            } catch { session.brushError=error.localizedDescription }
+            return
+        }
         // Pixels being moved, or a gradient: the tiles drawn below follow the drag only once something reads them (see
         // PixelMove and GradientEdit).
         if let move = session.pixelMove {
@@ -2588,9 +2630,12 @@ extension CanvasView {
         guard let frame = gpuFrame(document, renderer: renderer, size: view.metalLayer.drawableSize) else {
             return hideGPUView(dirtyRect)
         }
-        if view.isHidden { view.isHidden = false }
-        renderer.present(frame, in: view.metalLayer)
-        return true
+        let provider = floatFrameProvider
+        do {
+            let shown = try renderer.present(frame,in:view.metalLayer,validateBeforePresentation:provider.map { retained in { try retained.check() } })
+            if shown,view.isHidden { view.isHidden = false }
+            return shown
+        } catch { session.brushError=error.localizedDescription; return hideGPUView(dirtyRect) }
     }
 
     /// Set `CompositorCPUCanvas` to draw every frame with Core Graphics, to compare the two.
@@ -2639,6 +2684,7 @@ extension CanvasView {
     /// The whole view as `draw(_:)` draws it — the backdrop, the document's shadow and checkerboard, the layers and the
     /// document's edge — in screen pixels, `size` across. Nil when the Core Graphics canvas has to draw it.
     private func gpuFrame(_ document: CanvasDocument, renderer: GPUCanvasRenderer, size: CGSize) -> CIImage? {
+        floatFrameProvider = nil; floatFrameWorkspace = nil
         let viewport = session.viewport
         let device = viewport.backingScale
         let pixels = renderBounds ?? CGRect(origin: .zero, size: document.size)
@@ -2684,7 +2730,49 @@ extension CanvasView {
 
     /// The layers composited as `drawLayers` composites them, over nothing. Nil when a layer needs the Core Graphics
     /// canvas.
+    private func liveFloatCanvasImage(_ document:CanvasDocument) throws -> CGImage {
+        guard let original=session.projectSnapshot(),original.manifest.documentID == document.id else { throw ProjectError.invalid }
+        let projected=try original.metadataProjection(workingSet:.sourceGraphs)
+        var manifest=projected.manifest,images=projected.images
+        // The manifest owner retains both layer and image dictionary projections
+        // through composition; retained pixel/history owners are still shared.
+        defer { withExtendedLifetime(projected) {} }
+        for i in manifest.layers.indices {
+            let id=manifest.layers[i].id
+            guard let layer=document.layers.first(where:{$0.id == id}) else { throw ProjectError.invalid }
+            manifest.layers[i].transform=session.displayedTransform(for:layer)
+            manifest.layers[i].blendMode=session.displayedBlendMode(for:layer)
+            manifest.layers[i].maskPlacement=session.displayedMaskPlacement(for:layer)
+            if let stroke=session.brushStroke,stroke.layer.id == id,!stroke.isMask,let surface=stroke.sourcePreview {
+                images[id]=try ImportedImage(plane:surface,name:layer.name)
+                manifest.layers[i].transform=layer.transform
+            }
+            if let warp=session.warpStroke,warp.layer.id == id,let surface=warp.sourcePreview {
+                images[id]=try ImportedImage(plane:surface,name:layer.name)
+                manifest.layers[i].transform=layer.transform
+            }
+            if let edit=session.hueSaturation,edit.layerID == id,edit.preview,let surface=edit.livePreviewPlane {
+                images[id]=try ImportedImage(plane:surface,name:layer.name);manifest.layers[i].transform=edit.transform
+            }
+            if let edit=session.levels,edit.layerID == id,edit.preview,let surface=edit.livePreviewPlane {
+                images[id]=try ImportedImage(plane:surface,name:layer.name);manifest.layers[i].transform=edit.transform
+            }
+            if let edit=session.filterEdit,edit.layerID == id,edit.preview,let surface=edit.liveDiagnosticSurface ?? edit.livePreviewSurface {
+                images[id]=try ImportedImage(plane:surface,name:layer.name)
+                manifest.layers[i].transform=edit.preparedTransform ?? edit.grownTransform ?? edit.transform
+            }
+        }
+        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+        let plane = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: images, masks: original.masks),workspace: workspace)
+        let provider = LWFloatPlaneImage(plane: plane,cancellation: workspace.cancellation), image = try provider.image()
+        try provider.check(); floatFrameProvider = provider; floatFrameWorkspace = workspace; return image
+    }
+
     private func gpuLayers(_ document: CanvasDocument, placement: GPUPlacement) -> CIImage? {
+        if document.layers.contains(where:{$0.liveSource != nil || $0.asset?.linear != nil || $0.asset?.linearPlane != nil}),session.maskAloneLayer == nil {
+            do { return CIImage(cgImage:try liveFloatCanvasImage(document)).transformed(by:placement.mapping) }
+            catch { session.brushError=error.localizedDescription;return nil }
+        }
         handOffTextEffects(document)
         session.effectsPreviews.prepare(layers: document.layers)
         let byID = Dictionary(uniqueKeysWithValues: document.layers.map { ($0.id, $0) })
@@ -2767,6 +2855,11 @@ extension CanvasView {
         // Option-click on a mask thumbnail: that mask by itself, gray across the canvas (its edge tone past its pixels),
         // with a stroke or gradient being laid into it, as `drawMaskAlone` draws it on the Core Graphics canvas.
         if let layer = session.maskAloneLayer, let mask = layer.mask {
+            do { try mask.asset.validatePlaneRead() }
+            catch { session.brushError = error.localizedDescription; return nil }
+            // The same provider is checked after CI has consumed its bytes and
+            // before Metal presents, including mask-only float displays.
+            floatFrameProvider = mask.asset.planeImage
             let edge = LayerMask.background(of: mask.asset.thumbnail)
             let back = CIImage(color: CIColor(red: edge, green: edge, blue: edge))
                 .cropped(to: CGRect(origin: .zero, size: document.size).applying(placement.mapping))

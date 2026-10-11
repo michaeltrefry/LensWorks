@@ -2459,6 +2459,7 @@ final class LensWorksCatalog {
     func createWorkingVersion(workspace: ProjectWorkspace) async {
         guard !closingRequested, let selected = selectedAsset, let catalogPath, !isBusy, workspace.canSwitch else { return }
         let scope = captureScope(), selectedID = selected.id
+        let sourceEpoch = catalogSelectionEpoch, sourceQuery = queryOwner, sourcePage = pageAuthority, sourceOwner = selectionOwner
         let busy = beginBusy(); defer { finishBusy(busy) }
         do {
             track(workspace)
@@ -2475,13 +2476,27 @@ final class LensWorksCatalog {
             try checkScope(scope)
             guard outputDirectory == output, selectedAsset?.id == selectedID else { throw CancellationError() }
             let rasterTypes = ["png", "jpg", "jpeg", "tif", "tiff", "heic", "heif", "webp", "bmp", "gif"]
-            guard rasterTypes.contains(URL(fileURLWithPath: asset.originalPath).pathExtension.lowercased()) else { error = "Live RAW editing is not available in this build."; return }
+            let isRasterOriginal = rasterTypes.contains(URL(fileURLWithPath: asset.originalPath).pathExtension.lowercased())
+            guard try isRasterOriginal || RawImporter.matches(asset.originalURL) else { error = "The original format is not supported by an admitted editor decoder."; return }
             let available = await LensWorksVersionStore.shared.sourceAvailable(asset.originalPath, native: asset.nativeOriginal)
             try checkScope(scope)
             guard outputDirectory == output, selectedAsset?.id == selectedID else { throw CancellationError() }
             guard available else { error = "The original photo is offline. Reconnect its location before creating a working version."; return }
             guard workspace.canSwitch else { error = "Finish the current edit before creating a working version."; return }
             let originalURL = try asset.originalURL
+            var capturedSourceAuthority: Data?
+            if RawImporter.matches(originalURL) {
+                guard let key = asset.key else { throw LensWorksManagedError.protocolViolation("Missing native RAW variant authority.") }
+                let recipe = try await service.variant(key)
+                try checkScope(scope)
+                guard catalogSelectionEpoch == sourceEpoch, queryOwner == sourceQuery,
+                    pageAuthority == sourcePage, selectionOwner == sourceOwner, selectedAsset?.id == selectedID,
+                    selectedAsset?.metadataRevision == asset.metadataRevision else { throw CancellationError() }
+                let authority = LWSourceCatalogAuthority(key:key, metadataRevision:asset.metadataRevision, variant:recipe)
+                try authority.validate()
+                let encodedAuthority=try LWSourceMetadataStorage.encode(authority,maximumBytes:1024*1024,catalogCodec:true)
+                capturedSourceAuthority=try encodedAuthority.copyData(ownedBy:encodedAuthority.owner)
+            }
             let tab = workspace.addTab()
             await tab.session.importImages([originalURL])
             // This independently admitted document remains usable if catalog scope changed.
@@ -2489,6 +2504,16 @@ final class LensWorksCatalog {
             try checkScope(scope)
             guard outputDirectory == output, selectedAsset?.id == selectedID else { throw CancellationError() }
             guard tab.session.document != nil else { error = tab.session.importError ?? "The photo could not be opened."; return }
+            if let layer = tab.session.activeLayer, var node = layer.liveSource,
+                let index = tab.session.document?.layers.firstIndex(where:{ $0.id == layer.id }) {
+                // Captured native full-key/metadata CAS remains separate from document history.
+                guard catalogSelectionEpoch == sourceEpoch, queryOwner == sourceQuery,
+                    pageAuthority == sourcePage, selectionOwner == sourceOwner, selectedAsset?.metadataRevision == asset.metadataRevision,
+                    let capturedSourceAuthority else { throw CancellationError() }
+                try node.admitMetadataMutation(additionalBytes:LWSourceMetadataStorage.sum(LWSourceMetadataStorage.product(capturedSourceAuthority.count,2),256))
+                node.catalogAuthority = capturedSourceAuthority
+                tab.session.document?.layers[index].liveSource = node
+            }
             let id = UUID()
             let name = URL(fileURLWithPath: asset.originalPath).deletingPathExtension().lastPathComponent + " – Edit"
             let project = URL(fileURLWithPath: output).appendingPathComponent("\(name)-\(id.uuidString.prefix(8)).comp")

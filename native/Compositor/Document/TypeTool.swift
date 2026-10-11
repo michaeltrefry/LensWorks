@@ -298,7 +298,7 @@ extension EditorSession {
                     transform.origin.y += anchor.y - moved.y
                 }
                 guard transform.isValid else { throw ProjectError.tooLarge }
-                beginEdit("Edit Text")
+                guard beginEdit("Edit Text") else { return false }
                 if layer.mask?.placement == nil { document?.layers[index].mask?.placement = layer.maskTransform }
                 document?.layers[index].asset = ImportedImage(image: image, thumbnail: thumbnail, name: asset.name)
                 document?.layers[index].text = text
@@ -351,7 +351,7 @@ extension EditorSession {
         style.setColor(color, in: NSRange(location: 0, length: 0))
         guard style.isValid, let image = try? Self.textImage(style), let thumbnail = try? PixelInvert.thumbnail(of: image) else { return false }
         finishOpacityEdit()
-        beginEdit("Fill Text")
+        guard beginEdit("Fill Text") else { return false }
         document?.layers[index].asset = ImportedImage(image: image, thumbnail: thumbnail, name: asset.name)
         document?.layers[index].text = LayerText(style: style, image: image)
         endEdit()
