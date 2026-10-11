@@ -30,7 +30,8 @@ nonisolated enum LWFloatFilter {
             case .gaussianBlur:
                 made=try coreImage(input,workspace:workspace) { $0.applyingGaussianBlur(sigma:settings.radius) }
             case .motionBlur:
-                made=try coreImage(input,workspace:workspace) { $0.applyingFilter("CIMotionBlur",parameters:[
+                let radius=settings.distance*PixelFilter.motionRadiusPerPixel
+                made=try coreImage(input,workspace:workspace,apron:min(1024,Int(radius.rounded(.up))+16)) { $0.applyingFilter("CIMotionBlur",parameters:[
                     kCIInputRadiusKey:settings.distance*PixelFilter.motionRadiusPerPixel,
                     kCIInputAngleKey:settings.angle * .pi/180]) }
             case .bloomGlow:
@@ -151,10 +152,10 @@ nonisolated enum LWFloatFilter {
         return try LWFloatCompositor.map(blank,workspace:workspace) { _,x,y in try sampler.pixel(x:x-stage.offsetX,y:y-stage.offsetY) }
     }
     /// Retained full-source operator semantics with bounded provider/output storage.
-    static func coreImage(_ source:LWFloatPlane,workspace:LWFloatWorkspace,
+    static func coreImage(_ source:LWFloatPlane,workspace:LWFloatWorkspace,apron:Int=0,
         operation:(CIImage)->CIImage)throws->LWFloatPlane {
         try LWFloatCoreImage.render(source,makeBuilder:{ try workspace.makeBuilder(width:$0,height:$1) },
-            cancellation:workspace.cancellation,operation:operation)
+            cancellation:workspace.cancellation,apron:apron,operation:operation)
     }
 
 }

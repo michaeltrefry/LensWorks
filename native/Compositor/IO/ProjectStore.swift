@@ -11,8 +11,11 @@ extension UTType {
 }
 
 nonisolated struct ProjectManifest: Codable, Sendable {
-    /// The format version new saves write.
+    /// The newest format version: saves write it only when the package uses version-13 content
+    /// (live RAW sources or float working samples). Every other save keeps writing `baseline`, so
+    /// projects without those features stay readable by builds that only understand version 12.
     static let current = 13
+    static let baseline = 12
     /// Every version `load` accepts. The package-header check, the manifest check and the error
     /// message all read this, so they cannot drift apart when `current` is bumped.
     static let supported = 1...ProjectManifest.current
@@ -93,6 +96,15 @@ nonisolated enum ProjectError: LocalizedError {
 
 actor ProjectStore {
     static let shared = ProjectStore()
+    /// Any field or file kind that only version 13 can express.
+    static func usesVersion13(_ manifest: ProjectManifest) -> Bool {
+        manifest.workingSpace != nil || manifest.workingSample != nil || manifest.layers.contains { layer in
+            layer.liveSource != nil || layer.liveSourceFile != nil || layer.planeArchiveReference != nil
+                || layer.maskPlaneArchiveReference != nil
+                || [".f32", ".plane"].contains { layer.imageFile?.hasSuffix($0) == true }
+                || layer.maskFile?.hasSuffix(".mask.plane") == true
+        }
+    }
     private struct Header: Decodable {
         let format: String
         let version: Int
@@ -108,9 +120,12 @@ actor ProjectStore {
         var manifest = snapshot.manifest
         manifest.workingVersionID = version?.id
         if version != nil { manifest.version = ProjectManifest.current }
-        if manifest.layers.contains(where:{$0.liveSource != nil}) || snapshot.images.values.contains(where:{$0.linear != nil || $0.linearPlane != nil}) {
+        let floatContent=manifest.layers.contains(where:{$0.liveSource != nil})
+            || snapshot.images.values.contains(where:{$0.linear != nil || $0.linearPlane != nil})
+        if floatContent {
             manifest.workingSpace="extended-linear-sRGB";manifest.workingSample="float32-straight-RGBA"
         }
+        manifest.version = Self.usesVersion13(manifest) ? ProjectManifest.current : min(manifest.version, ProjectManifest.baseline)
         try validate(manifest)
         var images: [String: FileWrapper] = [:]
         var planeAssets: [String: LWFloatPlane] = [:]

@@ -27,17 +27,19 @@ final class FloatRetouchTests: XCTestCase {
     }
 
     func testSampleAllReadsImmutableUpstreamAndSelectionOncePerOperation() throws {
-        let f = FloatRetouchFixture()
+        let f = FloatRetouchFixture(), workspace = try LWFloatWorkspace(workingSet: try LWFloatWorkingSet(limit: 64 * 1024 * 1024))
         let upstream = try f.surface(width: 4, height: 4, pixels: [SIMD4<Float>](repeating: SIMD4<Float>(0,1,0,1), count: 16))
         let selection = try f.surface(width: 4, height: 4, pixels: [SIMD4<Float>](repeating: SIMD4<Float>(0,0,0,1), count: 16))
-        let stroke = try f.stroke(kind: .clone, width: 4, height: 4, points: [CGPoint(x: 2,y:2)], sourceOffset: .zero, sampleAll: true, selection: selection)
+        let captured = try f.sampleAllNode(width: 4, height: 4, overlay: upstream, workspace: workspace)
+        let template = try f.stroke(kind: .clone, width: 4, height: 4, points: [CGPoint(x: 2,y:2)], sourceOffset: .zero, sampleAll: true, selection: selection)
+        let stroke = try f.rebound(template, to: captured.node, compositeRevision: captured.revision)
         let clear = try f.surface(width: 4, height: 4)
-        let map = try f.map(width: 4, height: 4)
-        var calls = 0
-        _ = try f.evaluate([stroke], surface: clear, map: map) { _, original in
-            calls += 1; XCTAssertEqual(original.width, clear.width); XCTAssertEqual(original.height, clear.height); XCTAssertEqual(original.pixels, clear.pixels); return upstream
-        }
-        XCTAssertEqual(calls, 1)
+        let output = try f.evaluate([stroke], surface: clear, map: try f.map(width: 4, height: 4), node: captured.node, workspace: workspace)
+        // The composite uses the document's encoded-sRGB blend; an opaque layer round-trips within float rounding.
+        assertFloatClose(output.pixels[2 * 4 + 2], SIMD4<Float>(0,1,0,1),
+                         "sample-all clones the captured upstream composite through the fully selected encoded coverage")
+        XCTAssertEqual(output.pixels[0], .zero, "pixels outside the dab keep the immutable pre-stroke plane")
+        XCTAssertEqual(clear.pixels, [SIMD4<Float>](repeating: .zero, count: 16))
     }
 
     func testSmudgeUsesPriorDabCarryAndEdgeCloneBlurAreAbsentNotFatal() throws {
@@ -55,10 +57,34 @@ final class FloatRetouchTests: XCTestCase {
 
     func testScratchAdmissionRejectsBeforeWorkingArrays() throws {
         let f = FloatRetouchFixture()
-        let tight = try LWLinearSurface(width: 2, height: 2, pixels: [SIMD4<Float>](repeating: .zero, count: 4), maximumBytes: 64)
-        let stroke = try f.stroke(kind: .paint, width: 2, height: 2, points: [CGPoint(x:1,y:1)])
-        let map = try f.map(width: 2, height: 2)
-        XCTAssertThrowsError(try f.evaluate([stroke], surface: tight, map: map))
+        let input = try f.surface(width: 2, height: 2)
+        var node = try f.node(width: 2, height: 2)
+        let stroke = try f.rebound(try f.stroke(kind: .paint, width: 2, height: 2, points: [CGPoint(x:1,y:1)]), to: node)
+        node = try f.admitted(node) { $0.retouch = [stroke] }
+        let probe = try LWFloatWorkspace(workingSet: try LWFloatWorkingSet(limit: 1024 * 1024))
+        let probePlane = try f.plane(input, workspace: probe)
+        // Paint holds an input tile, an output tile and the selection/coverage tile: 3 RGBA tiles.
+        let scratch = try LWSourceRetouch.tiledScratchBytes(node: node, plane: probePlane)
+        XCTAssertEqual(scratch, 3 * 2 * 2 * MemoryLayout<SIMD4<Float>>.stride, "paint charges its tile scratch before allocation")
+        let metadata = try XCTUnwrap(node.retouchAdmission(plane: probePlane, workspace: probe, operationScratchBytes: 0).lease).bytes
+        let charged = try XCTUnwrap(node.retouchAdmission(plane: probePlane, workspace: probe, operationScratchBytes: scratch).lease).bytes
+        XCTAssertEqual(charged, metadata + scratch, "the operation admission reserves the scratch with its metadata")
+        withExtendedLifetime(probePlane) {}
+        /// A budget holding the input plane plus `spare` bytes beyond the scratch-free admission charge.
+        func evaluate(spare: Int) throws -> Result<LWFloatPlane, Error> {
+            let workspace = try LWFloatWorkspace(workingSet: try LWFloatWorkingSet(limit: 64 * 1024 * 1024))
+            let plane = try f.plane(input, workspace: workspace)
+            let filler = try workspace.workingSet.reserve(workspace.workingSet.limit - workspace.workingSet.retainedBytes - metadata - spare)
+            defer { withExtendedLifetime(filler) {} }
+            let generations = workspace.registeredGenerationCount
+            let result = Result { try LWSourceRetouch.evaluate(node, developed: plane, map: try f.map(width: 2, height: 2), workspace: workspace) }
+            if case .failure = result { XCTAssertEqual(workspace.registeredGenerationCount, generations, "a refused admission publishes no output plane") }
+            return result
+        }
+        guard case .failure(let error) = try evaluate(spare: scratch - 1), case .tooLarge? = error as? ProjectError else {
+            return XCTFail("one byte short of the paint scratch must refuse with tooLarge")
+        }
+        guard case .success = try evaluate(spare: scratch + 16 * 1024 * 1024) else { return XCTFail("a budget with the scratch admits the stroke") }
     }
 }
 
@@ -69,7 +95,13 @@ extension FloatRetouchTests {
         let nonuniform = try f.map(width: 8, height: 8, geometry: [1,0,0, 0,0.8,0, 0,0,1])
         let stroke = try f.stroke(kind: .paint, width: 8, height: 8, points: [CGPoint(x: 7.5, y: 7.5)])
         let edge = try f.evaluate([stroke], surface: input, map: nonuniform)
-        XCTAssertEqual(edge.pixels, input.pixels,
+        // The map takes captured source y to developed 0.8y. Developed row 5 (centre 5.5) reads source
+        // y 6.875, inside the frame and within the 1.5 px hard dab at columns 6 and 7. Rows 6 and 7 read
+        // source y 8.125 and 9.375: outside the captured frame, so they are absent rather than clamped
+        // onto the dab (a clamp would paint them).
+        var expected = input.pixels
+        expected[5 * 8 + 6] = SIMD4<Float>(0, 0, 0, 1); expected[5 * 8 + 7] = SIMD4<Float>(0, 0, 0, 1)
+        XCTAssertEqual(edge.pixels, expected,
                        "a lawful captured-frame edge miss contributes no coverage or source sample")
         XCTAssertThrowsError(try f.evaluate([stroke], surface: input, map: try f.foldedMap(width: 8, height: 8)))
     }
@@ -99,15 +131,23 @@ extension FloatRetouchTests {
     }
 
     func testR5SampleAllUsesPreStrokeUpstreamAfterMutationAndSelectionZeroConserves() throws {
-        let f = FloatRetouchFixture()
+        let f = FloatRetouchFixture(), workspace = try LWFloatWorkspace(workingSet: try LWFloatWorkingSet(limit: 64 * 1024 * 1024))
         let clear = try f.surface(width: 4, height: 4)
         let map = try f.map(width: 4, height: 4)
+        let captured = try f.sampleAllNode(width: 4, height: 4, overlay: nil, workspace: workspace)
         let paint = try f.stroke(kind: .paint, width: 4, height: 4, points: [CGPoint(x: 1, y: 1)], color: [4,0,0,1])
+        func clone(_ selection: LWLinearSurface) throws -> LWSourceRetouchStroke {
+            try f.rebound(try f.stroke(kind: .clone, width: 4, height: 4, points: [CGPoint(x: 2, y: 1)], sourceOffset: CGSize(width: -1, height: 0),
+                                       sampleAll: true, selection: selection), to: captured.node, compositeRevision: captured.revision)
+        }
         let zero = try f.surface(width: 4, height: 4)
-        let clone = try f.stroke(kind: .clone, width: 4, height: 4, points: [CGPoint(x: 2, y: 1)], sourceOffset: CGSize(width: -1, height: 0), sampleAll: true, selection: zero)
-        let output = try f.evaluate([paint, clone], surface: clear, map: map) { _, upstream in upstream }
-        XCTAssertGreaterThan(output.pixels[1 * 4 + 1].x, 0)
-        XCTAssertEqual(output.pixels[1 * 4 + 2], SIMD4<Float>.zero)
+        let conserved = try f.evaluate([paint, try clone(zero)], surface: clear, map: map, node: captured.node, workspace: workspace)
+        XCTAssertGreaterThan(conserved.pixels[1 * 4 + 1].x, 0)
+        XCTAssertEqual(conserved.pixels[1 * 4 + 2], SIMD4<Float>.zero, "zero captured selection conserves the destination")
+        let full = try f.surface(width: 4, height: 4, pixels: [SIMD4<Float>](repeating: SIMD4<Float>(0,0,0,1), count: 16))
+        let sampled = try f.evaluate([paint, try clone(full)], surface: clear, map: map, node: captured.node, workspace: workspace)
+        XCTAssertGreaterThan(sampled.pixels[1 * 4 + 2].x, 0,
+                             "sample-all substitutes the immediately-prior plane, so the clone receives the completed paint stroke")
     }
 
     func testR5LiquifyRetainsOrderedPriorDabPushAndDoesNotRasterizeSource() throws {
@@ -156,8 +196,17 @@ extension FloatRetouchTests {
         let map = try f.map(width: 8, height: 8, geometry: [1.25,0,0, 0,0.8,0, 0,0,1])
         let smudge = try f.smudgeStroke(width: 8, height: 8, dabs: [CGPoint(x:2,y:3), CGPoint(x:4,y:3)])
         let liquify = try f.liquifyStroke(width: 8, height: 8, dabs: [CGPoint(x:2,y:3), CGPoint(x:4,y:3)], strength: 1)
+        // Developed (4,3) reads source (3.6, 4.375): retained cell (-1, +1) of the dab centred on (4,3).
+        // Smudge lays down that cell's captured pickup, the developed sample at the current position of
+        // source cell centre (1.5, 4.5) = (1.875, 3.6). That premultiplied bilinear sample takes
+        // 0.375 x 0.9 of the red pixel at (2,3): straight HDR red with alpha 0.3375.
+        let pickup = SIMD4<Float>(2, 0, 0, 0.375 * 0.9)
+        let smudged = try f.evaluate([smudge], surface: input, map: map)
+        assertFloatClose(smudged.pixels[3 * 8 + 4], pickup, "prior-dab pickup reference")
+        // Liquify then pushes the same cell by the 2 px dab move, back to source (1.5, 4.5): the same
+        // developed position, which Smudge left untouched (its cell (-2, +1) is outside the dab).
         let result = try f.evaluate([smudge, liquify], surface: input, map: map)
-        XCTAssertEqual(result.pixels[3 * 8 + 4], SIMD4<Float>(2,0,0,1), "prior-dab pickup reference")
+        assertFloatClose(result.pixels[3 * 8 + 4], pickup, "prior-dab Push reference")
     }
 
     func testR12LawfulTinyOwnedLinearSurfaceReachesPositiveEvaluatorPath() throws {
@@ -516,10 +565,19 @@ extension FloatRetouchTests {
         let clone = try f.pixels(try f.tiledEvaluate(cloneNode, surface: source, map: map, workspace: workspace))
         XCTAssertEqual(clone[0], source.pixels[0], "ordinary capture-frame extent misses are absent, not errors or clamped clones")
 
+        // A 2.5 px push at the left edge picks up from x = -2 in the captured frame. WarpStroke clamps
+        // that lawful edge pickup to the first captured pixel centre instead of refusing or reading
+        // transparency. Under the identity map that centre is exactly developed pixel 0.
         let (liquifyNode, _) = try f.nodeAndStroke(kind: .liquify, width: 257, height: 257,
-            points: [CGPoint(x: 1, y: 0.5)], sourceStart: CGPoint(x: 0.5, y: 0.5), radius: 4)
-        let pushed = try f.pixels(try f.tiledEvaluate(liquifyNode, surface: source, map: map, workspace: workspace))
+            points: [CGPoint(x: 3, y: 0.5)], sourceStart: CGPoint(x: 0.5, y: 0.5), radius: 4)
+        let pushed = try f.pixels(try f.tiledEvaluate(liquifyNode, surface: source, map: try f.map(width: 257, height: 257), workspace: workspace))
         XCTAssertEqual(pushed[0], SIMD4<Float>(4,0,0,1), "WarpStroke uses captured-frame clamping only for lawful edge pickup")
+        // Under the 1.2x/0.8x map the clamped captured centre (0.5, 0.5) lies at developed (0.6, 0.4):
+        // a premultiplied bilinear sample that takes 10% of the transparent neighbour.
+        let scaled = try f.pixels(try f.tiledEvaluate(liquifyNode, surface: source, map: map, workspace: workspace))
+        for (channel, expected) in [Float(4), 0, 0, 0.9].enumerated() {
+            XCTAssertEqual(scaled[0][channel], expected, accuracy: 1e-5, "the clamped pickup is resampled through the current map")
+        }
         XCTAssertThrowsError(try f.tiledEvaluate(liquifyNode, surface: source,
             map: try f.foldedMap(width: 257, height: 257), workspace: workspace),
             "folded optics/geometry remain refusals rather than regular edge samples")
@@ -847,7 +905,10 @@ extension FloatRetouchTests {
         // This crosses the actual 256-pixel tile boundary. The source control is intentionally long
         // enough to reject a one-snapshot-per-dab design, while the production evaluator keeps
         // only its typed prior/next brush-local carry pair live for each retained dab.
-        let route = (240...272).map { CGPoint(x: CGFloat($0), y: 128) }
+        // WarpStroke's carry places the pickup under each in-canvas dab centre; a dab whose centre is
+        // past the last column drags it off canvas. End the route on that last column (x = 256, in
+        // the second tile) so the carried pickup must survive every seam-crossing generation.
+        let route = (240...256).map { CGPoint(x: CGFloat($0), y: 128) }
         let stroke = try f.stroke(for: node, kind: .smear, width: 257, height: 257,
                                   points: Array(route.dropFirst()), sourceStart: route.first,
                                   radius: 3, hardness: 0.98)
@@ -884,7 +945,10 @@ extension FloatRetouchTests {
         var input = try f.surface(width: 257, height: 257)
         input.pixels[128 * 257 + 240] = SIMD4<Float>(3, 0.5, 0, 1)
         var node = try f.node(width: 257, height: 257)
-        let route = (240...272).map { CGPoint(x: CGFloat($0), y: 128) }
+        // WarpStroke's carry places the pickup under each in-canvas dab centre; a dab whose centre is
+        // past the last column drags it off canvas. End the route on that last column (x = 256, in
+        // the second tile) so the carried pickup must survive every seam-crossing generation.
+        let route = (240...256).map { CGPoint(x: CGFloat($0), y: 128) }
         let stroke = try f.stroke(for: node, kind: .liquify, width: 257, height: 257,
                                   points: Array(route.dropFirst()), sourceStart: route.first,
                                   opacity: 1, radius: 3, hardness: 0.98)

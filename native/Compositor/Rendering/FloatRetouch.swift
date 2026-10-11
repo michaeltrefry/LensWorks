@@ -114,6 +114,8 @@ nonisolated enum LWSourceRetouch {
         }
         var required = 0
         for stroke in strokes {
+            // Every mode publishes a complete successor surface before the predecessor retires.
+            required = try add(required, try mul(count, MemoryLayout<Pixel>.stride))
             switch stroke.kind {
             case .heal:
                 // role + membrane + worst-case index/window/detail storage, all before allocation.
@@ -681,7 +683,7 @@ extension LWSourceRetouch {
     /// This charges resident tile/carry/halo work only. Plane and dependency ownership are
     /// independently charged by `retouchAdmission(plane:workspace:operationScratchBytes:)`.
     /// Validate all metadata before any floating conversion or allocation.
-    private static func tiledScratchBytes(node: LWLiveSourceNode, plane: LWFloatPlane) throws -> Int {
+    static func tiledScratchBytes(node: LWLiveSourceNode, plane: LWFloatPlane) throws -> Int {
         let tilePixels = try checkedMultiply(min(plane.width, LWFloatPlane.tileSide), min(plane.height, LWFloatPlane.tileSide))
         let rgbaTileBytes = try checkedMultiply(tilePixels, MemoryLayout<Pixel>.stride)
         let roleTileBytes = try checkedMultiply(tilePixels, MemoryLayout<UInt32>.stride)

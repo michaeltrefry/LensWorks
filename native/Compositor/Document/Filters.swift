@@ -613,7 +613,8 @@ extension EditorSession {
                     let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
                     let preview = try await withTaskCancellationHandler {
                     node = try node.applyingDevelopment(settings:job.settings.cameraRaw,whiteBalance:sourceWhiteBalance,seed:job.seed,selection:job.selection,mapping:job.mapping,workspace:workspace)
-                    let made = try await LWSourceDeveloper.shared.evaluatePlane(node)
+                    // The commit/export development graph on the preview grid (at most previewLimit).
+                    let made = try await LWSourceDeveloper.shared.evaluatePreviewPlane(node,maximumSide:Int(FilterEdit.previewLimit))
                     try Task.checkCancellation()
                     let diagnostic=try LWCameraRawDiagnostics.preview(made.surface,settings:job.settings.cameraRaw,
                         clipping:job.cameraRawClipping,shadows:job.showsShadowClipping,highlights:job.showsHighlightClipping,

@@ -410,7 +410,9 @@ nonisolated extension LWFloatKernelWorkspace {
         motionRadius:Double,motionAngle:Double)throws->LWFloatPlane {
         guard gaussianSigma.map({$0.isFinite && $0>=0}) ?? true,
             motionRadius.isFinite,motionRadius>=0,motionAngle.isFinite else { throw ProjectError.invalid }
-        return try LWFloatCoreImage.render(source,makeBuilder:makeBuilder,cancellation:fileOwner?.cancellation) { input in
+        // CIMotionBlur needs a rendered apron around each tile (see LWFloatCoreImage.render).
+        let apron=gaussianSigma == nil ? min(1024,Int(motionRadius.rounded(.up))+16) : 0
+        return try LWFloatCoreImage.render(source,makeBuilder:makeBuilder,cancellation:fileOwner?.cancellation,apron:apron) { input in
             let edges=input.clampedToExtent()
             if let sigma=gaussianSigma { return edges.applyingGaussianBlur(sigma:sigma) }
             return edges.applyingFilter("CIMotionBlur",parameters:[kCIInputRadiusKey:motionRadius,kCIInputAngleKey:motionAngle])

@@ -606,6 +606,7 @@ fn run_output(worker: &Path, i: Input, cancel: &AtomicBool, register: &dyn Fn(Ar
     register(owner.0.clone());
     let start = Instant::now();
     let mut sample = Instant::now();
+    let mut unsampled = 0u32;
     let exit_result=(||->Result<std::process::ExitStatus>{loop {
         let mut held=owner.0.child.lock().unwrap_or_else(|e|e.into_inner());
         let c=held.as_mut().context("owned decode child missing before terminal observation")?;
@@ -634,10 +635,24 @@ fn run_output(worker: &Path, i: Input, cancel: &AtomicBool, register: &dyn Fn(Ar
             "decode worker diagnostic allowance"
         );
         if sample.elapsed() >= Duration::from_millis(50) {
-            ensure!(
-                rss(c.id())? <= worker_bytes,
-                "decode child resident memory exceeded watchdog allowance"
-            );
+            match rss(c.id()) {
+                Ok(resident) => ensure!(
+                    resident <= worker_bytes,
+                    "decode child resident memory exceeded watchdog allowance"
+                ),
+                // A child that exits after try_wait above loses its task info before
+                // (and while) it is an unreaped zombie, so the sample fails. That is a
+                // completing decode, not a watchdog fault: keep polling for its exit.
+                // Only a live child whose memory stays unobservable is refused.
+                Err(failure) => {
+                    if let Some(status) = c.try_wait()? { break Ok(status); }
+                    unsampled += 1;
+                    ensure!(unsampled < 10, failure.context("decode child resident memory remained unobservable"));
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+            }
+            unsampled = 0;
             sample = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -659,10 +674,18 @@ fn run_output(worker: &Path, i: Input, cancel: &AtomicBool, register: &dyn Fn(Ar
             && stderr.metadata()?.len() <= 65536,
         "final decode frame/diagnostic allowance"
     );
-    ensure!(
-        exit.success(),
-        "decode worker failed ({exit}); source mismatch, resource admission or retained decoder failure"
-    );
+    if !exit.success() {
+        // The worker reports its refusal on stderr (bounded above); forward it
+        // so the caller sees the actual cause rather than only the exit status.
+        let mut diagnostic = Vec::new();
+        let mut held = &stderr;
+        held.seek(SeekFrom::Start(0))?;
+        held.take(2048).read_to_end(&mut diagnostic)?;
+        anyhow::bail!(
+            "decode worker failed ({exit}); source mismatch, resource admission or retained decoder failure: {}",
+            String::from_utf8_lossy(&diagnostic).trim()
+        );
+    }
     ensure!(
         !cancel.load(Ordering::Acquire),
         "decode canceled after child drain"
@@ -814,6 +837,24 @@ pub(crate) fn run_source_plane(worker: &Path, source: SourceDevelopment, decode:
         limits: decode, worker_bytes, max_output_bytes: disk_bytes }, cancel, register)
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod resident_sample_tests {
+    use super::*;
+    /// The S08 acceptance flake: a decode child that exits between `try_wait` and the
+    /// 50 ms resident-memory sample has already lost its task info (before and while it
+    /// is an unreaped zombie), so the sample fails. The poll loop must keep polling for
+    /// the exit instead of refusing the decode.
+    #[test]
+    fn exited_unreaped_child_has_no_resident_sample() {
+        let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        assert!(rss(pid).is_ok() || child.try_wait().unwrap().is_some());
+        std::thread::sleep(Duration::from_millis(300));
+        let sampled = rss(pid);
+        assert!(sampled.is_err(), "an exited, unreaped child has no task info: {sampled:?}");
+        assert!(child.try_wait().unwrap().is_some_and(|status| status.success()));
+    }
+}
 #[cfg(test)]
 mod source_plane_admission_tests {
     use super::*;

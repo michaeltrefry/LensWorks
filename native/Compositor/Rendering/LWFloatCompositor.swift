@@ -241,6 +241,7 @@ nonisolated extension LWFloatCompositor {
         workspace: LWFloatWorkspace, sampling: LayerSampling = .high) throws -> LWFloatPlane {
         guard [mapping.a, mapping.b, mapping.c, mapping.d, mapping.tx, mapping.ty].allSatisfy(\.isFinite),
             mapping.a * mapping.d - mapping.b * mapping.c != 0 else { throw ProjectError.invalid }
+        if sampling == .nearest { return try projectNearest(source, mapping: mapping, width: width, height: height, workspace: workspace) }
         let provider = LWFloatPlaneImage(plane: source,cancellation: workspace.cancellation), image = try provider.image()
         let builder = try workspace.makeBuilder(width: width, height: height)
         while let range = builder.nextRange {
@@ -259,6 +260,71 @@ nonisolated extension LWFloatCompositor {
             }
         }
         try provider.check(); return try builder.finish()
+    }
+    /// Nearest-neighbour projection evaluated directly on straight f32 samples. Each destination
+    /// pixel centre maps through the inverse affine to one source pixel; centres outside the source
+    /// are transparent. CoreGraphics is not used: its float draw path drops the last source column
+    /// when it upscales an image that is exactly one row tall, and it would premultiply hidden RGB.
+    static func projectNearest(_ source: LWFloatPlane, mapping: CGAffineTransform, width: Int, height: Int,
+        workspace: LWFloatWorkspace) throws -> LWFloatPlane {
+        guard source.workingSet === workspace.workingSet else { throw ProjectError.invalid }
+        let inverse = mapping.inverted(), sampler = source.sampler(edge: .transparent)
+        let builder = try workspace.makeBuilder(width: width, height: height)
+        while let range = builder.nextRange {
+            try workspace.cancellation.check(); try Task.checkCancellation()
+            let bytes = try range.validate(frameWidth: width, frameHeight: height)
+            let lease = try workspace.workingSet.reserve(bytes)
+            var pixels = [SIMD4<Float>](); pixels.reserveCapacity(bytes / 16)
+            for y in range.y..<(range.y + range.height) { for x in range.x..<(range.x + range.width) {
+                let point = CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5).applying(inverse)
+                guard point.x.isFinite, point.y.isFinite else { throw ProjectError.invalid }
+                let sx = floor(point.x), sy = floor(point.y)
+                guard sx >= 0, sy >= 0, sx < CGFloat(source.width), sy < CGFloat(source.height) else { pixels.append(.zero); continue }
+                pixels.append(try sampler.pixel(x: Int(sx), y: Int(sy), edge: .transparent))
+            } }
+            try builder.append(LWLinearSurface(width: range.width, height: range.height, pixels: pixels, maximumBytes: bytes), at: range)
+            withExtendedLifetime(lease) {}
+        }
+        return try builder.finish()
+    }
+    /// Exact area-average reduction in premultiplied float: every output pixel is the coverage-
+    /// weighted mean of the source pixels under its footprint. Used to give the Camera Raw preview
+    /// a reduced grid of the decoded source before development.
+    static func downscale(_ source: LWFloatPlane, width: Int, height: Int, workspace: LWFloatWorkspace) throws -> LWFloatPlane {
+        guard source.workingSet === workspace.workingSet, width > 0, height > 0,
+            width <= source.width, height <= source.height else { throw ProjectError.invalid }
+        let sx = Double(source.width) / Double(width), sy = Double(source.height) / Double(height)
+        let builder = try workspace.makeBuilder(width: width, height: height)
+        while let range = builder.nextRange {
+            try workspace.cancellation.check(); try Task.checkCancellation()
+            let bytes = try range.validate(frameWidth: width, frameHeight: height)
+            let left = Int(floor(Double(range.x) * sx)), right = min(source.width, Int(ceil(Double(range.x + range.width) * sx)))
+            let top = Int(floor(Double(range.y) * sy)), bottom = min(source.height, Int(ceil(Double(range.y + range.height) * sy)))
+            let input = try source.read(LWFloatRange(x: left, y: top, width: right - left, height: bottom - top))
+            let lease = try workspace.workingSet.reserve(bytes)
+            var pixels = [SIMD4<Float>](); pixels.reserveCapacity(bytes / 16)
+            for y in range.y..<(range.y + range.height) {
+                let y0 = Double(y) * sy, y1 = y0 + sy
+                for x in range.x..<(range.x + range.width) {
+                    let x0 = Double(x) * sx, x1 = x0 + sx
+                    var sum = SIMD4<Double>.zero
+                    for iy in Int(floor(y0))..<min(source.height, Int(ceil(y1))) {
+                        let wy = min(y1, Double(iy + 1)) - max(y0, Double(iy))
+                        for ix in Int(floor(x0))..<min(source.width, Int(ceil(x1))) {
+                            let w = (min(x1, Double(ix + 1)) - max(x0, Double(ix))) * wy
+                            let p = input.surface.pixels[(iy - top) * input.range.width + ix - left]
+                            let a = Double(p.w) * w
+                            sum += SIMD4(Double(p.x) * a, Double(p.y) * a, Double(p.z) * a, a)
+                        }
+                    }
+                    let alpha = sum.w / (sx * sy)
+                    pixels.append(sum.w > 0 ? SIMD4(Float(sum.x / sum.w), Float(sum.y / sum.w), Float(sum.z / sum.w), Float(min(1, alpha))) : .zero)
+                }
+            }
+            try builder.append(LWLinearSurface(width: range.width, height: range.height, pixels: pixels, maximumBytes: bytes), at: range)
+            withExtendedLifetime(lease) {}
+        }
+        return try builder.finish()
     }
     static func intrinsicMask(_ image: CGImage, transform: LayerTransform, width: Int, height: Int,
         workspace: LWFloatWorkspace) throws -> LWFloatPlane {
@@ -369,6 +435,8 @@ nonisolated extension LWFloatCompositor {
         func applyAlpha(_ surface: LWFloatPlane, coverage: LWFloatPlane?, opacity: Float = 1) throws -> LWFloatPlane {
             guard coverage.map({ $0.width == surface.width && $0.height == surface.height }) ?? true,
                 opacity.isFinite, (0...1).contains(opacity) else { throw ProjectError.invalid }
+            // No coverage at full opacity is the identity: keep the immutable plane, do not copy it.
+            if coverage == nil, opacity == 1 { return surface }
             let sampler = coverage?.sampler()
             return try map(surface, workspace: workspace) { pixel, x, y in
                 var result = pixel; result.w *= try (sampler?.pixel(x: x, y: y).w ?? 1) * opacity; return result

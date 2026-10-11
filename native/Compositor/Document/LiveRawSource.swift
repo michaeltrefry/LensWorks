@@ -350,6 +350,30 @@ actor LWSourceDeveloper {
     // Small mathematical kernels remain independent reference controls; they do
     // not provide a second managed full-buffer decoder or job-retirement path.
     func evaluatePlane(_ node: LWLiveSourceNode) async throws -> (surface: LWFloatPlane, map: LWSourceSpatialMap) {
+        let made = try await evaluate(node, previewMaximumSide: nil)
+        return (made.surface, made.map)
+    }
+    /// Completed full-resolution developments from the original (commit, export, quick look).
+    /// Observable so tests can prove an export re-develops from source rather than reusing pixels.
+    private(set) var fullResolutionDevelopments = 0
+    /// The Camera Raw preview: the same decode and `CameraRawSettings.develop` graph evaluated on
+    /// the decoded source reduced to at most `maximumSide` (exact area average), with pixel reach
+    /// scaled to that grid. Returns the developed plane and its scale (evaluated px per original
+    /// px). A node with selected developments or replayed operations (retouch, filters,
+    /// adjustments, resamples) is evaluated at full resolution (scale 1): those operations are
+    /// recorded on the full-resolution grid.
+    func evaluatePreviewPlane(_ node: LWLiveSourceNode, maximumSide: Int) async throws -> (surface: LWFloatPlane, scale: Double) {
+        guard maximumSide > 0 else { throw ProjectError.invalid }
+        let made = try await evaluate(node, previewMaximumSide: maximumSide)
+        return (made.surface, made.scale)
+    }
+    /// Reduced preview grid, sized exactly as `FilterEdit.prepared` sizes its preview copy.
+    nonisolated static func previewExtent(width: Int, height: Int, maximumSide: Int) -> (width: Int, height: Int, scale: Double)? {
+        let factor = min(1, CGFloat(maximumSide) / CGFloat(max(width, height)))
+        guard factor < 1 else { return nil }
+        return (max(1, Int(CGFloat(width) * factor)), max(1, Int(CGFloat(height) * factor)), Double(factor))
+    }
+    private func evaluate(_ node: LWLiveSourceNode, previewMaximumSide: Int?) async throws -> (surface: LWFloatPlane, map: LWSourceSpatialMap, scale: Double) {
         try node.validate(); try Task.checkCancellation()
         let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
         return try await withTaskCancellationHandler {
@@ -357,7 +381,7 @@ actor LWSourceDeveloper {
             do {
                 // Scope complete graph readers/cache before checked collection:
                 // the published output is the only ordinary returned plane owner.
-                func developGraph() async throws -> (surface:LWFloatPlane,map:LWSourceSpatialMap) {
+                func developGraph() async throws -> (surface:LWFloatPlane,map:LWSourceSpatialMap,scale:Double) {
                 // A retained decode is reused for every same-WB development within
                 // this graph evaluation. Tile requests never restart the codec.
                 let inputOwner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.collectionBytes(
@@ -381,6 +405,16 @@ actor LWSourceDeveloper {
                     inputs.append((balance, plane)); return plane
                 }
                 let original = try await input(node.whiteBalance)
+                if let side = previewMaximumSide, node.selectedDevelopments.isEmpty, node.retouch.isEmpty, node.filters.isEmpty,
+                    node.resamples.isEmpty, node.adjustments.isEmpty,
+                    let reduced = Self.previewExtent(width: original.width, height: original.height, maximumSide: side) {
+                    let small = try LWFloatCompositor.downscale(original, width: reduced.width, height: reduced.height, workspace: workspace)
+                    let developed = try node.settings.develop(small, seed: node.grainSeed, scale: reduced.scale,
+                        makeBuilder: { try workspace.makeBuilder(width: $0, height: $1) }, makeScratchDirectory: { try workspace.makeScratchDirectory() }, fileOwner: workspace)
+                    try await closeOwner(owner)
+                    try workspace.cancellation.check(); try Task.checkCancellation()
+                    return (developed.surface, LWSourceSpatialMap(geometry: developed.map, optics: node.settings.optics, width: small.width, height: small.height), reduced.scale)
+                }
                 let developed = try node.settings.develop(original, seed: node.grainSeed,
                     makeBuilder: { try workspace.makeBuilder(width: $0, height: $1) }, makeScratchDirectory: { try workspace.makeScratchDirectory() }, fileOwner: workspace)
                 let map = LWSourceSpatialMap(geometry: developed.map, optics: node.settings.optics, width: original.width, height: original.height)
@@ -400,7 +434,7 @@ actor LWSourceDeveloper {
                 // hidden by publishing a partially developed result.
                 try await closeOwner(owner)
                 let output = try LWSourceOperationReplay.evaluate(node, developed: combined, map: map, workspace: workspace)
-                try workspace.cancellation.check(); try Task.checkCancellation(); return (output.surface, output.map)
+                try workspace.cancellation.check(); try Task.checkCancellation(); return (output.surface, output.map, 1)
                 }
                 let output=try await developGraph()
                 // All temporary decodes, samplers and kernel stages have released
@@ -408,6 +442,7 @@ actor LWSourceDeveloper {
                 // generations; an unknown member/identity remains a failure.
                 try workspace.retireReleasedGenerations()
                 try workspace.cancellation.check();try Task.checkCancellation()
+                if output.scale == 1 { fullResolutionDevelopments += 1 }
                 return output
             } catch {
                 workspace.cancellation.cancel()

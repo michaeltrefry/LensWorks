@@ -14,13 +14,19 @@ nonisolated enum ProceduralDNG {
 
     /// A smooth gradient with a block of white-level camera samples top-left. After
     /// as-shot white balance that block's red channel is twice the white level.
-    static func write(to url: URL, width: Int, height: Int, orientation: UInt16 = 1) throws {
+    /// `blockRamp`: when nonzero the white block blends into the gradient over that many pixels
+    /// (smoothstep) instead of a hard edge.
+    static func write(to url: URL, width: Int, height: Int, orientation: UInt16 = 1, blockRamp: Int = 0) throws {
         var pixels = Data(capacity: width * height * 6)
         for y in 0..<height {
             for x in 0..<width {
                 let fx = Double(x) / Double(max(1, width - 1)), fy = Double(y) / Double(max(1, height - 1))
                 var rgb = [0.05 + 0.45 * fx, 0.05 + 0.6 * fy, 0.4 - 0.3 * fx * fy]
-                if x < width / 6, y < height / 6 { rgb = [1, 1, 1] }
+                if blockRamp > 0 {
+                    let outside = Double(max(0, x - width / 6 + 1, y - height / 6 + 1)) / Double(blockRamp)
+                    let t = outside >= 1 ? 0 : 1 - outside * outside * (3 - 2 * outside)
+                    rgb = rgb.map { $0 + (1 - $0) * t }
+                } else if x < width / 6, y < height / 6 { rgb = [1, 1, 1] }
                 for value in rgb {
                     var sample = UInt16((min(1, max(0, value)) * 65535).rounded()).littleEndian
                     withUnsafeBytes(of: &sample) { pixels.append(contentsOf: $0) }
@@ -148,12 +154,43 @@ struct LiveRawAcceptanceTests {
         let originalHash = try sha256(original)
         let session = try await importedSession(original)
         let rawID = try #require(session.activeLayerID)
-        try await commitCameraRaw(session, whiteBalance: .temperatureTint(kelvin: 4800, tint: 12)) {
-            $0.exposure = 0.75; $0.contrast = 20; $0.highlights = -30; $0.shadows = 25; $0.whites = 10; $0.blacks = -5
-            $0.temperature = 8; $0.tint = -4; $0.vibrance = 15; $0.saturation = -10; $0.texture = 5; $0.clarity = 10; $0.dehaze = 5
+        // Every retained RAW/basic control group at a non-default value.
+        var expected = CameraRawSettings()
+        expected.exposure = 0.75; expected.contrast = 20; expected.highlights = -30; expected.shadows = 25; expected.whites = 10; expected.blacks = -5
+        expected.temperature = 8; expected.tint = -4; expected.vibrance = 15; expected.saturation = -10
+        expected.texture = 5; expected.clarity = 10; expected.dehaze = 5
+        expected.curve.rgb = CameraRawCurveSettings.mediumContrast; expected.curve.shadows = 7; expected.curve.refineSaturation = -13
+        expected.mixer.hue[1] = 31; expected.mixer.saturation[5] = -27; expected.mixer.luminance[6] = 18
+        expected.grading.shadows.hue = 35; expected.grading.shadows.saturation = 12; expected.grading.global.luminance = 9
+        expected.detail.sharpenAmount = 71; expected.detail.sharpenRadius = 74; expected.detail.sharpenDetail = 49; expected.detail.sharpenMasking = 38
+        expected.detail.noiseLuminance = 77; expected.detail.noiseLuminanceDetail = 81; expected.detail.noiseColor = 72
+        expected.optics.distortion = 28; expected.optics.removeChromaticAberration = true; expected.optics.purpleAmount = 23
+        expected.geometry.horizontal = 21; expected.geometry.vertical = -16; expected.geometry.rotate = 4; expected.geometry.constrainCrop = true
+        expected.calibration.process = .version2; expected.calibration.redHue = 28; expected.calibration.blueSaturation = -17; expected.calibration.shadowTint = 9
+        expected.vignetteAmount = -43; expected.vignetteMidpoint = 36; expected.vignetteRoundness = 21
+        expected.grainAmount = 67; expected.grainSize = 39; expected.grainRoughness = 82
+        expected.glow = 65; expected.glowSpread = 63; expected.glowRange = 24; expected.glowWarmth = -31
+        func expectEveryGroup(_ actual: CameraRawSettings, _ wanted: CameraRawSettings, _ stage: String) {
+            #expect([actual.exposure, actual.contrast, actual.highlights, actual.shadows, actual.whites, actual.blacks,
+                     actual.temperature, actual.tint, actual.vibrance, actual.saturation, actual.texture, actual.clarity, actual.dehaze]
+                    == [wanted.exposure, wanted.contrast, wanted.highlights, wanted.shadows, wanted.whites, wanted.blacks,
+                        wanted.temperature, wanted.tint, wanted.vibrance, wanted.saturation, wanted.texture, wanted.clarity, wanted.dehaze], "basic \(stage)")
+            #expect(actual.curve == wanted.curve, "curve \(stage)"); #expect(actual.mixer == wanted.mixer, "mixer \(stage)")
+            #expect(actual.grading == wanted.grading, "grading \(stage)"); #expect(actual.detail == wanted.detail, "detail \(stage)")
+            #expect(actual.optics == wanted.optics, "optics \(stage)"); #expect(actual.geometry == wanted.geometry, "geometry \(stage)")
+            #expect(actual.calibration == wanted.calibration, "calibration \(stage)")
+            #expect([actual.vignetteAmount, actual.vignetteMidpoint, actual.vignetteRoundness] == [wanted.vignetteAmount, wanted.vignetteMidpoint, wanted.vignetteRoundness], "vignette \(stage)")
+            #expect([actual.grainAmount, actual.grainSize, actual.grainRoughness] == [wanted.grainAmount, wanted.grainSize, wanted.grainRoughness], "grain \(stage)")
+            #expect([actual.glow, actual.glowSpread, actual.glowRange, actual.glowWarmth] == [wanted.glow, wanted.glowSpread, wanted.glowRange, wanted.glowWarmth], "glow \(stage)")
+            #expect(actual == wanted, "every retained control \(stage)")
         }
+        let defaults = CameraRawSettings()
+        #expect(expected.curve != defaults.curve && expected.mixer != defaults.mixer && expected.grading != defaults.grading
+                && expected.detail != defaults.detail && expected.optics != defaults.optics && expected.geometry != defaults.geometry
+                && expected.calibration != defaults.calibration, "every group is set away from its default")
+        try await commitCameraRaw(session, whiteBalance: .temperatureTint(kelvin: 4800, tint: 12)) { $0 = expected }
         let developed = try #require(session.activeLayer?.liveSource)
-        #expect(developed.settings.exposure == 0.75 && developed.settings.clarity == 10)
+        expectEveryGroup(developed.settings, expected, "after commit")
         // An editable document layer above the RAW source.
         session.addBlankLayer()
         let overlay = try #require(session.activeLayerID)
@@ -167,6 +204,7 @@ struct LiveRawAcceptanceTests {
         restored.installProject(reopened, from: file)
         #expect(restored.document?.layers.map(\.id) == [rawID, overlay])
         let source = try #require(restored.document?.layers.first?.liveSource)
+        expectEveryGroup(source.settings, expected, "after save and reopen")
         #expect(source == developed)
         #expect(source.whiteBalance == .temperatureTint(kelvin: 4800, tint: 12))
 
@@ -175,8 +213,9 @@ struct LiveRawAcceptanceTests {
         let before = try pixels(try #require(restored.activeLayer?.asset?.linearPlane))
         try await commitCameraRaw(restored, whiteBalance: .asShot) { $0.exposure = -0.5 }
         let edited = try #require(restored.activeLayer)
-        #expect(edited.liveSource?.settings.exposure == -0.5 && edited.liveSource?.whiteBalance == .asShot)
-        #expect(edited.liveSource?.settings.clarity == 10)
+        #expect(edited.liveSource?.whiteBalance == .asShot)
+        var reedited = expected; reedited.exposure = -0.5
+        expectEveryGroup(try #require(edited.liveSource?.settings), reedited, "after editing exposure on the reopened layer")
         #expect(try pixels(try #require(edited.asset?.linearPlane)) != before)
         #expect(restored.document?.layers.map(\.id) == [rawID, overlay])
         restored.undo()
@@ -186,17 +225,48 @@ struct LiveRawAcceptanceTests {
     }
 
     // AC2: float working data keeps highlight latitude; orientation applies; profile provenance survives save/reopen.
-    @Test(arguments: [UInt16(1), 6])
+    /// EXIF orientation: the displayed (u, v) of stored pixel (x, y) in a stored w x h image.
+    private static func displayed(_ orientation: UInt16, x: Int, y: Int, w: Int, h: Int) -> (u: Int, v: Int) {
+        switch orientation {
+        case 2: return (w - 1 - x, y)          // mirrored horizontally
+        case 3: return (w - 1 - x, h - 1 - y)  // rotated 180
+        case 4: return (x, h - 1 - y)          // mirrored vertically
+        case 5: return (y, x)                  // transposed
+        case 6: return (h - 1 - y, x)          // rotated 90 clockwise
+        case 7: return (h - 1 - y, w - 1 - x)  // transversed
+        case 8: return (y, w - 1 - x)          // rotated 90 counter-clockwise
+        default: return (x, y)
+        }
+    }
+
+    @Test(arguments: [UInt16(1), 2, 3, 4, 5, 6, 7, 8])
     func floatWorkingDataKeepsLatitudeOrientationAndProfileProvenance(_ orientation: UInt16) async throws {
         let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        let (w, h) = (60, 36)
+        // The same stored samples with orientation 1 give the unrotated reference development.
+        let upright = root.appendingPathComponent("upright.dng")
+        try ProceduralDNG.write(to: upright, width: w, height: h)
+        let reference = try pixels(try #require(try await importedSession(upright).activeLayer?.asset?.linearPlane))
         let original = root.appendingPathComponent("oriented-\(orientation).dng")
-        try ProceduralDNG.write(to: original, width: 60, height: 36, orientation: orientation)
+        try ProceduralDNG.write(to: original, width: w, height: h, orientation: orientation)
         let session = try await importedSession(original)
         let layer = try #require(session.activeLayer)
         let node = try #require(layer.liveSource)
         let plane = try #require(layer.asset?.linearPlane)
-        let expected = orientation == 6 ? (36, 60) : (60, 36)
-        #expect(plane.width == expected.0 && plane.height == expected.1)
+        let transposed = orientation >= 5
+        #expect(plane.width == (transposed ? h : w) && plane.height == (transposed ? w : h))
+        // Pixel placement: every stored sample lands where EXIF orientation puts it, mirrored cases included.
+        let oriented = try pixels(plane)
+        var misplaced = 0
+        for y in 0..<h { for x in 0..<w {
+            let target = Self.displayed(orientation, x: x, y: y, w: w, h: h)
+            let a = oriented[target.v * plane.width + target.u], e = reference[y * w + x]
+            if (0..<4).contains(where: { abs(a[$0] - e[$0]) > 1e-5 }) { misplaced += 1 }
+        } }
+        #expect(misplaced == 0, "orientation \(orientation): \(misplaced) of \(w * h) samples misplaced")
+        // The bright block sits at the stored top-left; it must appear at the oriented corner.
+        let corner = Self.displayed(orientation, x: 0, y: 0, w: w, h: h)
+        #expect(max(oriented[corner.v * plane.width + corner.u].x, 0) > 1, "orientation \(orientation) block corner")
         #expect(plane.manifest.sample == "float32-le" && plane.manifest.colorSpace == "extended-linear-sRGB" && plane.manifest.alpha == "straight")
         #expect(try pixels(plane).contains { max($0.x, $0.y, $0.z) > 1.0 }, "white-level samples keep over-one headroom after as-shot white balance")
         // Pulling exposure down recovers the bright block from retained float headroom.
@@ -285,17 +355,22 @@ struct LiveRawAcceptanceTests {
         try await LWSourceDeveloper.shared.drainRetainedSessions()
     }
 
-    // AC3: preview and full resolution share one development, agreeing within the declared tolerance; the export
-    // develops the original at full size rather than reusing a browse preview.
+    // AC3: the Camera Raw preview the user sees and the full-resolution export come from one development
+    // code path. The preview is developed on a reduced grid; the export re-develops the original at full
+    // size; after the export is reduced to the preview grid the two agree within the declared tolerance.
     @Test func previewAndFullResolutionAgreeAndExportIsNotTheBrowsePreview() async throws {
         let tolerance = try JSONDecoder().decode(Tolerance.self, from: Data(contentsOf: Self.repository.appendingPathComponent("RAW_PREVIEW_TOLERANCE.json")))
         #expect(tolerance.schema == 1 && tolerance.per_channel_max_abs > 0)
         let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
         var fixtures = try Self.checkedInDNGs.map { try checkedIn($0, into: root) }
+        // Two fixtures larger than the preview limit exercise the reduced preview grid. Development is
+        // nonlinear, so it does not commute with resampling across a discontinuity (a pixel straddling
+        // a hard white edge differs by ~0.2 whichever path is used); their bright block therefore meets
+        // the gradient over a 128 px ramp, and the comparison measures the shared code path.
         let large = root.appendingPathComponent("procedural-large.dng")
-        try ProceduralDNG.write(to: large, width: 2200, height: 1240)
+        try ProceduralDNG.write(to: large, width: 2200, height: 1240, blockRamp: 128)
         let rotated = root.appendingPathComponent("procedural-rotated.dng")
-        try ProceduralDNG.write(to: rotated, width: 2100, height: 1180, orientation: 6)
+        try ProceduralDNG.write(to: rotated, width: 2100, height: 1180, orientation: 6, blockRamp: 128)
         fixtures += [large, rotated]
         for url in fixtures {
             let session = try await importedSession(url)
@@ -304,20 +379,41 @@ struct LiveRawAcceptanceTests {
             }
             let layer = try #require(session.activeLayer)
             let node = try #require(layer.liveSource)
-            let shown = try #require(layer.asset)
-            // Preview: the developed layer as the Camera Raw panel shows it, reduced to the preview limit.
-            let preview = try FilterEdit.prepared(kind: .cameraRaw, from: shown.image, placed: layer.transform).previewSource
-            // Full resolution: the export path develops the original again at full size.
+            // Preview: open Camera Raw on the committed layer and let the live preview render; this is the
+            // image the canvas shows (FilterEdit.preparedPreview), developed by the product preview task.
+            session.beginFilter(.cameraRaw)
+            let edit = try #require(session.filterEdit)
+            session.updateFilter(edit.settings, preview: true)
+            for _ in 0..<8 { guard let task = edit.previewTask else { break }; await task.value }
+            #expect(edit.previewTask == nil && !edit.preparing)
+            #expect(edit.previewError == nil, "\(edit.previewError ?? "")")
+            let shown = try #require(edit.preparedPreview, "the preview task published a displayed image")
+            let previewSurface = try #require(edit.livePreviewSurface)
+            session.cancelFilter()
+            let expectedGrid = LWSourceDeveloper.previewExtent(width: node.originalWidth, height: node.originalHeight,
+                                                              maximumSide: Int(FilterEdit.previewLimit))
+            #expect(shown.width == (expectedGrid?.width ?? node.originalWidth) && shown.height == (expectedGrid?.height ?? node.originalHeight),
+                    "the preview is developed on the preview grid, not reduced from a full-size development: \(url.lastPathComponent)")
+            #expect(previewSurface.width == shown.width && previewSurface.height == shown.height)
+            // Full resolution: the export re-develops the original from source.
+            let before = await LWSourceDeveloper.shared.fullResolutionDevelopments
             let full = try await ImageExporter.shared.renderPlane(try #require(session.projectSnapshot()))
+            let after = await LWSourceDeveloper.shared.fullResolutionDevelopments
+            #expect(after == before + 1, "export develops the original again instead of reusing layer pixels: \(url.lastPathComponent)")
             #expect(full.width == node.originalWidth && full.height == node.originalHeight,
                     "export is the full-resolution development: \(url.lastPathComponent)")
-            let reduced = try FilterEdit.prepared(kind: .cameraRaw, from: LWFloatPlaneImage(plane: full).image(), placed: layer.transform).previewSource
-            #expect(reduced.width == preview.width && reduced.height == preview.height)
-            if max(full.width, full.height) > Int(FilterEdit.previewLimit) { #expect(max(preview.width, preview.height) == Int(FilterEdit.previewLimit)) }
-            let a = try LWLinearSurface.read(preview, maximumBytes: LWSourceDeveloper.maximumResultBytes)
-            let b = try LWLinearSurface.read(reduced, maximumBytes: LWSourceDeveloper.maximumResultBytes)
+            // Reduce the export to the preview grid with the same exact area average the preview applies to its source.
+            let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+            let reduced = shown.width == full.width && shown.height == full.height ? full
+                : try LWFloatCompositor.downscale(full, width: shown.width, height: shown.height, workspace: workspace)
+            let a = try LWLinearSurface.read(shown, maximumBytes: LWSourceDeveloper.maximumResultBytes)
+            let b = try pixels(reduced)
+            #expect(a.pixels.count == b.count)
             var worst: Float = 0
-            for (p, q) in zip(a.pixels, b.pixels) { worst = max(worst, abs(p.x - q.x), abs(p.y - q.y), abs(p.z - q.z), abs(p.w - q.w)) }
+            for (p, q) in zip(a.pixels, b) where p.w > 0 || q.w > 0 {
+                worst = max(worst, abs(p.x * p.w - q.x * q.w), abs(p.y * p.w - q.y * q.w), abs(p.z * p.w - q.z * q.w), abs(p.w - q.w))
+            }
+            print("AC3 \(url.lastPathComponent): preview \(shown.width)x\(shown.height), worst per-channel \(worst)")
             #expect(Double(worst) <= tolerance.per_channel_max_abs, "\(url.lastPathComponent): \(worst)")
             // The exported plane keeps float headroom a quantized browse preview cannot carry.
             if url == large { #expect(try pixels(full).contains { max($0.x, $0.y, $0.z) > 1 }) }

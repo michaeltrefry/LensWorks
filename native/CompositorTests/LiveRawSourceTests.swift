@@ -628,6 +628,16 @@ extension LiveRawSourceTests {
 
 
 extension LiveRawSourceTests {
+    /// Straight source-over in extended (sign-mirrored) encoded sRGB, returned as straight linear.
+    static func encodedSourceOver(_ top:SIMD4<Float>,over bottom:SIMD4<Float>)->SIMD4<Float> {
+        func encode(_ v:Double)->Double { let a=abs(v);let e=a <= 0.0031308 ? 12.92*a:1.055*pow(a,1/2.4)-0.055;return v<0 ? -e:e }
+        func decode(_ v:Double)->Double { let a=abs(v);let d=a <= 0.04045 ? a/12.92:pow((a+0.055)/1.055,2.4);return v<0 ? -d:d }
+        let ta=Double(top.w),ba=Double(bottom.w),alpha=ta+ba*(1-ta)
+        guard alpha>0 else { return .zero }
+        var out=SIMD4<Float>(0,0,0,Float(alpha))
+        for c in 0..<3 { out[c]=Float(decode((encode(Double(top[c]))*ta+encode(Double(bottom[c]))*ba*(1-ta))/alpha)) }
+        return out
+    }
     private func expectInvalid(_ operation: () throws -> Void) {
         do { try operation(); Issue.record("Invalid owned-custody operation was accepted") }
         catch {
@@ -1108,16 +1118,23 @@ extension LiveRawSourceTests {
         try source.appendRetouch(stroke)
         let admission=try source.retouchAdmission(plane:before,workspace:workspace,operationScratchBytes:0)
         let made=try source.sampleAllCompositePlane(for:stroke,before:before,admission:admission,workspace:workspace)
-        let values=try made.read(made.globalExtent).surface.pixels
-        for (actual,expected) in zip(values,[SIMD4<Float>(1.125,-0.25,0.625,1),SIMD4(0.25,1.5,2.25,1)]) {
-            for channel in 0..<4 { #expect(abs(actual[channel]-expected[channel]) < 1e-5) }
+        // The capture composites with the document's blend definition: source-over in extended
+        // encoded sRGB (LWFloatCompositor.blend), not in linear light. Core Image evaluates that
+        // transfer in float; 2e-4 covers its rounding at these HDR magnitudes.
+        let otherValues=[SIMD4<Float>(0.25,0.5,0.75,0.5),SIMD4(1,0,0,0.25)]
+        func expectComposite(_ made:LWFloatPlane,over bottom:[SIMD4<Float>]) throws {
+            let values=try made.read(made.globalExtent).surface.pixels
+            for (index,actual) in values.enumerated() {
+                let expected=Self.encodedSourceOver(otherValues[index],over:bottom[index])
+                for channel in 0..<4 { #expect(abs(actual[channel]-expected[channel]) < 2e-4,"\(index) \(actual) \(expected)") }
+            }
         }
+        try expectComposite(made,over:[SIMD4<Float>(2,-1,0.5,1),SIMD4(0,2,3,1)])
         let changed=try tiledFixture([SIMD4<Float>(4,-2,1,1),SIMD4(0,4,6,1)],width:2,workspace:workspace)
         expectInvalid { _ = try source.sampleAllCompositePlane(for:stroke,before:changed,admission:admission,workspace:workspace) }
         let nextAdmission=try source.retouchAdmission(plane:changed,workspace:workspace,operationScratchBytes:0)
         let next=try source.sampleAllCompositePlane(for:stroke,before:changed,admission:nextAdmission,workspace:workspace)
-        let newer=try next.read(next.globalExtent).surface.pixels
-        #expect(abs(newer[0].x-2.125) < 1e-5 && abs(newer[1].z-4.5) < 1e-5)
+        try expectComposite(next,over:[SIMD4<Float>(4,-2,1,1),SIMD4(0,4,6,1)])
         var stale=source;stale.revision=UUID();stale.sourceLineage.append(stale.revision)
         expectInvalid { _ = try stale.sampleAllCompositePlane(for:stroke,before:before,admission:admission,workspace:workspace) }
         let stranger=try LWFloatWorkspace(workingSet:LWFloatWorkingSet())

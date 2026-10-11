@@ -101,10 +101,58 @@ struct FloatRetouchFixture {
                      maximumDabs: maximumDabs, surfaceBytes: surface.byteLength, operationScratchBytes: 0)
     }
 
+    /// Every behavioural control runs the production evaluator: the strokes are bound to a real
+    /// admitted node and `LWSourceRetouch.evaluate(_:developed:map:workspace:)` develops a tiled
+    /// plane, exactly as `LWSourceOperationReplay` does for a live RAW layer.
     func evaluate(_ strokes: [LWSourceRetouchStroke], surface: LWLinearSurface, map: LWSourceSpatialMap,
-                  sampleAll: @escaping (LWSourceRetouchStroke, LWLinearSurface) throws -> LWLinearSurface = { _, upstream in upstream }) throws -> LWLinearSurface {
-        try LWSourceRetouch.evaluateReference(strokes: strokes, sourceID: sourceID, developed: surface, map: map,
-                                     admission: try admittedFixture(surface, strokes: strokes), sampleAll: sampleAll)
+                  node prepared: LWLiveSourceNode? = nil, workspace supplied: LWFloatWorkspace? = nil) throws -> LWLinearSurface {
+        let workspace = try supplied ?? LWFloatWorkspace(workingSet: try LWFloatWorkingSet(limit: 64 * 1024 * 1024))
+        var node = try prepared ?? self.node(width: surface.width, height: surface.height)
+        let bound = try strokes.map { try rebound($0, to: node) }
+        node = try admitted(node) { $0.retouch = bound }
+        let output = try LWSourceRetouch.evaluate(node, developed: plane(surface, workspace: workspace), map: map, workspace: workspace)
+        return try LWLinearSurface(width: surface.width, height: surface.height, pixels: pixels(output), maximumBytes: surface.maximumBytes)
+    }
+
+    /// The same captured stroke, owned by `node` (its source identity and upstream revision).
+    func rebound(_ stroke: LWSourceRetouchStroke, to node: LWLiveSourceNode,
+                 compositeRevision: UUID? = nil) throws -> LWSourceRetouchStroke {
+        let revision = stroke.sampleAllLayers ? (compositeRevision ?? stroke.sampleAllLayersCompositeRevision) : nil
+        var made = LWSourceRetouchStroke(sourceID: node.id, upstreamRevision: node.revision, captureFrame: stroke.captureFrame,
+            kind: stroke.kind, seed: stroke.seed, healMode: stroke.healMode, sampleAllLayers: stroke.sampleAllLayers,
+            aligned: stroke.aligned, sampleAllLayersCompositeRevision: revision, blurRadius: stroke.blurRadius,
+            radius: stroke.radius, hardness: stroke.hardness, opacity: stroke.opacity, points: stroke.points,
+            sourceOffset: stroke.sourceOffset, color: stroke.color, pointsAreDabs: stroke.pointsAreDabs,
+            selectionSourceCoverage: stroke.selectionSourceCoverage)
+        made.selectionPlaneID = stroke.selectionPlaneID; made.selectionFrame = stroke.selectionFrame
+        made.sourceStart = stroke.sourceStart
+        return made
+    }
+
+    /// Captures a real sample-all composite: the source layer (substituted at evaluation time by
+    /// the immediately-prior plane) under an optional retained overlay layer.
+    func sampleAllNode(width: Int, height: Int, overlay: LWLinearSurface?,
+                       workspace: LWFloatWorkspace) throws -> (node: LWLiveSourceNode, revision: UUID) {
+        var node = try self.node(width: width, height: height)
+        let sourceLayer = UUID(), overlayLayer = UUID()
+        let transform = LayerTransform(origin: .zero, size: CGSize(width: width, height: height))
+        var layers = [ProjectLayerRecord(id: sourceLayer, name: "Captured source", isVisible: true, transform: transform,
+            imageFile: sourceLayer.uuidString + ".plane", liveSource: node)]
+        var images = [sourceLayer: try ImportedImage(plane: plane(try surface(width: width, height: height), workspace: workspace), name: "Source")]
+        if let overlay {
+            layers.append(ProjectLayerRecord(id: overlayLayer, name: "Retained overlay", isVisible: true, transform: transform,
+                imageFile: overlayLayer.uuidString + ".plane"))
+            images[overlayLayer] = try ImportedImage(plane: plane(overlay, workspace: workspace), name: "Overlay")
+        }
+        let manifest = ProjectManifest(workingSpace: "extended-linear-sRGB", workingSample: "float32-straight-RGBA",
+            documentID: UUID(), width: width, height: height, activeLayerID: sourceLayer, layers: layers)
+        let captured = try LWSourceSampleComposite.capturePlane(ProjectSnapshot(manifest: manifest, images: images),
+            sourceLayer: sourceLayer, node: node, workspace: workspace)
+        node = try admitted(node) { value in
+            value.sampleComposites.append(captured.composite)
+            value.planeAssets.merge(captured.assets) { _, current in current }
+        }
+        return (node, captured.composite.revision)
     }
 }
 

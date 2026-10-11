@@ -12,6 +12,14 @@ nonisolated final class LWFloatPlaneImage: @unchecked Sendable {
     private let consumerCancellation: LWFloatCancellation?
     private let lock = NSLock()
     private var failure: Error?
+    /// Core Graphics requests a row or a few rows at a time. Without this, every request re-read
+    /// and re-verified whole backing tiles to serve one row of each (256 verified tile reads per
+    /// tile). One decoded band of `bandRows` rows per tile column stays here, charged through its
+    /// own surface lease, until a request leaves that band or reaches the end of the image.
+    static let bandRows = 32
+    private let cacheLock = NSLock()
+    private var cachedBand = -1
+    private var cachedTiles: [Int: LWFloatTile] = [:]
     init(plane: LWFloatPlane, format: Format = .rgba32, cancellation: LWFloatCancellation? = nil) {
         self.plane = plane; self.format = format; consumerCancellation = cancellation
     }
@@ -60,7 +68,18 @@ nonisolated final class LWFloatPlaneImage: @unchecked Sendable {
 
     /// Handles unaligned byte requests without a full-frame intermediate. Each
     /// borrowed tile and the small encoded pixel remain charged while in use.
+    private func band(column: Int, y: Int) throws -> LWFloatTile {
+        let band = y / Self.bandRows
+        if band != cachedBand { cachedTiles.removeAll(); cachedBand = band }
+        if let tile = cachedTiles[column] { return tile }
+        let x = column * LWFloatPlane.tileSide, top = band * Self.bandRows
+        let tile = try plane.read(LWFloatRange(x: x, y: top, width: min(LWFloatPlane.tileSide, plane.width - x),
+                                               height: min(Self.bandRows, plane.height - top)))
+        cachedTiles[column] = tile; return tile
+    }
+
     func copy(into output: UnsafeMutableRawPointer, position: off_t, count: Int) throws -> Int {
+        cacheLock.lock(); defer { cacheLock.unlock() }
         try check()
         _ = try plane.globalExtent.validate(frameWidth: plane.width, frameHeight: plane.height)
         let extent = plane.width * plane.height * format.pixelBytes
@@ -75,11 +94,13 @@ nonisolated final class LWFloatPlaneImage: @unchecked Sendable {
             let pixelIndex = absolute / format.pixelBytes
             let x = pixelIndex % plane.width, y = pixelIndex / plane.width
             let blockEnd = min(plane.width, ((x / LWFloatPlane.tileSide) + 1) * LWFloatPlane.tileSide)
-            let tile = try plane.read(range: LWFloatRange(x: x, y: y, width: blockEnd - x, height: 1))
+            let held = try band(column: x / LWFloatPlane.tileSide, y: y)
+            let first = (y - held.range.y) * held.range.width + x - held.range.x
+            let row = held.surface.pixels[first..<(first + blockEnd - x)]
             let offset = absolute % format.pixelBytes
             switch format {
             case .rgba32:
-                for (index, pixel) in tile.surface.pixels.enumerated() {
+                for (index, pixel) in row.enumerated() {
                     var value = SIMD4(pixel.x * pixel.w, pixel.y * pixel.w, pixel.z * pixel.w, pixel.w)
                     let skip = index == 0 ? offset : 0, taken = min(16 - skip, length - copied)
                     withUnsafeBytes(of: &value) { raw in
@@ -88,24 +109,26 @@ nonisolated final class LWFloatPlaneImage: @unchecked Sendable {
                     copied += taken; if copied == length { break }
                 }
             case .coverage8:
-                for pixel in tile.surface.pixels {
+                for pixel in row {
                     var value = UInt8((max(0, min(1, pixel.x)) * 255).rounded())
                     withUnsafeBytes(of: &value) { output.advanced(by: copied).copyMemory(from: $0.baseAddress!, byteCount: 1) }
                     copied += 1; if copied == length { break }
                 }
             case .rgba16SRGB, .rgba8SRGB:
-                let bytes = tile.surface.byteLength, lease = try plane.workingSet.reserve(bytes * 4)
-                let surface = try LWLinearSurface(width: tile.surface.width, height: 1, pixels: Array(tile.surface.pixels), maximumBytes: bytes * 3)
+                let bytes = row.count * 16, lease = try plane.workingSet.reserve(bytes * 4)
+                let surface = try LWLinearSurface(width: row.count, height: 1, pixels: Array(row), maximumBytes: bytes * 3)
                 guard let color = CGColorSpace(name: CGColorSpace.sRGB) else { throw ProjectError.invalid }
                 let image = try surface.integerOutput(bits: format.pixelBytes == 8 ? 16 : 8, colorSpace: color)
                 guard image.bitsPerPixel == format.pixelBytes * 8, let raw = image.dataProvider?.data,
-                    CFDataGetLength(raw) >= tile.surface.width * format.pixelBytes,
+                    CFDataGetLength(raw) >= row.count * format.pixelBytes,
                     let input = CFDataGetBytePtr(raw) else { throw ProjectError.invalid }
-                let taken = min(tile.surface.width * format.pixelBytes - offset, length - copied)
+                let taken = min(row.count * format.pixelBytes - offset, length - copied)
                 output.advanced(by: copied).copyMemory(from: input.advanced(by: offset), byteCount: taken)
                 copied += taken; withExtendedLifetime(lease) {}
             }
         }
+        // A complete pass ends here; do not keep a tile row resident behind an idle image.
+        if start + copied >= extent { cachedTiles.removeAll(); cachedBand = -1 }
         try check()
         return copied
     }

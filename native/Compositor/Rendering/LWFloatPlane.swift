@@ -219,17 +219,18 @@ nonisolated struct LWFloatPlane: Sendable {
             let data = try backing.read(entry)
             let left = max(range.x, entry.range.x), right = min(range.x + range.width, entry.range.x + entry.range.width)
             let top = max(range.y, entry.range.y), bottom = min(range.y + range.height, entry.range.y + entry.range.height)
-            for y in top..<bottom { for x in left..<right {
-                let source = ((y - entry.range.y) * entry.range.width + x - entry.range.x) * 16
-                func word(_ channel: Int) -> Float {
-                    let offset = source + channel * 4
-                    let bits = (0..<4).reduce(UInt32(0)) { $0 | UInt32(data[offset + $1]) << ($1 * 8) }
-                    return Float(bitPattern: bits)
-                }
-                let pixel = SIMD4(word(0), word(1), word(2), word(3))
-                guard pixel.x.isFinite, pixel.y.isFinite, pixel.z.isFinite, pixel.w.isFinite, (0...1).contains(pixel.w) else { throw ProjectError.invalid }
-                pixels[(y - range.y) * range.width + x - range.x] = pixel
-            } }
+            guard data.count == entry.range.width * entry.range.height * 16 else { throw ProjectError.invalid }
+            try data.withUnsafeBytes { raw in
+                for y in top..<bottom { for x in left..<right {
+                    let source = ((y - entry.range.y) * entry.range.width + x - entry.range.x) * 16
+                    func word(_ channel: Int) -> Float {
+                        Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: source + channel * 4, as: UInt32.self)))
+                    }
+                    let pixel = SIMD4(word(0), word(1), word(2), word(3))
+                    guard pixel.x.isFinite, pixel.y.isFinite, pixel.z.isFinite, pixel.w.isFinite, (0...1).contains(pixel.w) else { throw ProjectError.invalid }
+                    pixels[(y - range.y) * range.width + x - range.x] = pixel
+                } }
+            }
         } }
         // The temporary decode/entry buffers retire here. Published immutable
         // samples own a separate exact allocation charge through every escaped
@@ -359,11 +360,13 @@ nonisolated struct LWFloatPlane: Sendable {
             guard !overflow,pixels.count == bytes/16 else { throw ProjectError.tooLarge }
             let lease=try workingSet.reserve(charge)
             defer { withExtendedLifetime(lease) {} }
-            var data=Data();data.reserveCapacity(bytes)
-            for pixel in pixels { for channel in 0..<4 {
-                var bits=pixel[channel].bitPattern.littleEndian
-                withUnsafeBytes(of:&bits) { data.append(contentsOf:$0) }
-            } }
+            var data=Data(count:bytes)
+            data.withUnsafeMutableBytes { raw in
+                var offset=0
+                for pixel in pixels { for channel in 0..<4 {
+                    raw.storeBytes(of:pixel[channel].bitPattern.littleEndian,toByteOffset:offset,as:UInt32.self);offset+=4
+                } }
+            }
             let file=String(format:"%08d.f32",entries.count)
             let entry=Entry(range:range,file:file,bytes:bytes,sha256:Self.digest(data))
             try backing.write(data,entry:entry);entries.append(entry)

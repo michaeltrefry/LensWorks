@@ -442,11 +442,14 @@ impl Job {
         *lock(&self.retained_decoder)=Some(owner);
     }
     fn decode_failure(&self, failure:anyhow::Error)->Error {
+        // Forward the complete context chain: the outer refusal alone hides the
+        // worker cause (exit status, stderr diagnostic, frame or admission error).
+        let message=format!("{failure:#}");
         if let Some(retained)=failure.downcast_ref::<crate::full_decode::RetainedDecodeFailure>() {
             *lock(&self.retained_decoder)=Some(retained.owner.clone());
-            return error("draining",failure);
+            return error("draining",message);
         }
-        if self.local_cancel.load(Ordering::Acquire){error("canceled",failure)}else{native(failure)}
+        if self.local_cancel.load(Ordering::Acquire){error("canceled",message)}else{native(message)}
     }
     fn finish(&self, result: Result<Buffer>) {
         *lock(&self.cancel) = None;
@@ -1730,6 +1733,7 @@ mod tests {
     use super::*;
     #[test]
     fn retained_decoder_refuses_job_session_release_and_worker_readmission_until_checked_exit() {
+        let _serial = crate::test_serial();
         let request=|value:Value|execute(&serde_json::to_vec(&value).unwrap());
         for unwind in [false,true] {
         let session=empty_session();
@@ -1765,6 +1769,7 @@ mod tests {
     }
     #[test]
     fn managed_source_plane_handle_binds_owner_and_retains_inflight_file() {
+        let _serial = crate::test_serial();
         let initial = PAYLOAD_BYTES.load(Ordering::Acquire);
         let buffer = Buffer {
             bytes: Bytes::SourcePlane { plane: crate::full_decode::source_tile_tests::held_plane(), session: 123 },

@@ -618,12 +618,15 @@ extension EditorSession {
         return CGPoint(x: pixel.x / CGFloat(image.width), y: pixel.y / CGFloat(image.height))
     }
 
-    /// The retained full-resolution developed float plane is sampled, never the
-    /// browse/quantized preview or its transient clipping/point-color overlay.
+    /// The developed float preview plane is sampled, never the browse/quantized
+    /// preview or its transient clipping/point-color overlay. The preview may be a
+    /// reduced grid of the layer, so layer pixels scale onto it.
     private func liveCameraRawSample(at point:CGPoint) -> (tone:Double,hue:Double,saturation:Double,luminance:Double)? {
         guard let edit=filterEdit,edit.liveSource != nil,let surface=edit.livePreviewSurface,
               point.x.isFinite,point.y.isFinite else { return nil }
-        let pixel=point.applying(edit.mapping.inverted())
+        let layer=point.applying(edit.mapping.inverted())
+        let pixel=CGPoint(x:layer.x*CGFloat(surface.width)/CGFloat(edit.original.image.width),
+                          y:layer.y*CGFloat(surface.height)/CGFloat(edit.original.image.height))
         guard pixel.x >= 0,pixel.y >= 0,pixel.x < CGFloat(surface.width),pixel.y < CGFloat(surface.height) else { return nil }
         guard let tile=try? surface.read(LWFloatRange(x:Int(floor(pixel.x)),y:Int(floor(pixel.y)),width:1,height:1)) else { return nil }
         let p=tile.surface.pixels[0]

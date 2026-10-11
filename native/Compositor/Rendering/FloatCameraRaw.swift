@@ -558,13 +558,18 @@ nonisolated extension CameraRawSettings {
 
 nonisolated extension CameraRawSettings {
 
-    private func floatEffects(_ plane: LWFloatPlane, workspace: LWFloatKernelWorkspace, seed: UInt32) throws -> LWFloatPlane {
+    /// Pixel reach at the evaluated grid. `scale` is evaluated pixels per full-resolution pixel: 1 for
+    /// commit/export (unchanged radii), below 1 when the preview develops a reduced grid.
+    private static func reach(_ radius: Int, _ scale: Double) -> Int {
+        scale == 1 ? radius : max(1, Int((Double(radius) * scale).rounded()))
+    }
+    private func floatEffects(_ plane: LWFloatPlane, workspace: LWFloatKernelWorkspace, seed: UInt32, scale: Double) throws -> LWFloatPlane {
         typealias K = FloatImageAdjustmentPixels
         let width = plane.width, height = plane.height
         let luma = try workspace.scalar(plane) { p in p.w == 0 ? 0 : K.luminance(K.RGB(K.encode(Double(p.x)), K.encode(Double(p.y)), K.encode(Double(p.z)))) }
         let lum = luma.reader()
-        let fine = texture != 0 ? try workspace.blur(luma, radius: 1).reader() : nil
-        let coarse = clarity != 0 ? try workspace.blur(luma, radius: 4).reader() : nil
+        let fine = texture != 0 ? try workspace.blur(luma, radius: Self.reach(1, scale)).reader() : nil
+        let coarse = clarity != 0 ? try workspace.blur(luma, radius: Self.reach(4, scale)).reader() : nil
         var halo: LWFloatDoubleRows.Reader?
         if glow > 0 {
             let threshold = 0.55 + 0.4 * glowRange / 100
@@ -573,7 +578,7 @@ nonisolated extension CameraRawSettings {
                 let row = try luma.read(y)
                 return row.values.map { K.unit(($0 - threshold) / max(0.05, 1 - threshold)) }
             }
-            halo = try workspace.blur(field, radius: Int(((glowStyle == .bloom ? 2.0 : 5.0) * (1 + glowSpread / 100)).rounded())).reader()
+            halo = try workspace.blur(field, radius: Self.reach(Int(((glowStyle == .bloom ? 2.0 : 5.0) * (1 + glowSpread / 100)).rounded()), scale)).reader()
         }
         return try workspace.rgb(plane) { linear, x, y in
             var c = K.RGB(K.encode(linear.x), K.encode(linear.y), K.encode(linear.z))
@@ -602,7 +607,7 @@ nonisolated extension CameraRawSettings {
                 if vignetteStyle == .colorPriority { let lum = K.luminance(c); c = K.RGB(repeating: lum) + (c - K.RGB(repeating: lum))*(1 - 0.75*mask*abs(vignetteAmount / 100)) }
             }
             if grainAmount > 0 {
-                let size = grainKernelSize
+                let size = grainKernelSize * scale
                 let smooth = try K.grain(Double(x) + 0.5, Double(y) + 0.5, size: size, seed: seed)
                 let detail = try K.grain(Double(x) + 0.5, Double(y) + 0.5, size: max(0.5, size*0.35), seed: K.mix32(seed ^ 0xa511e9b3))
                 let noise = smooth + (detail - smooth)*grainRoughness / 100, level = K.unit(K.luminance(c))
@@ -612,7 +617,7 @@ nonisolated extension CameraRawSettings {
         }
     }
 
-    private func floatOptics(_ plane: LWFloatPlane, workspace: LWFloatKernelWorkspace) throws -> LWFloatPlane {
+    private func floatOptics(_ plane: LWFloatPlane, workspace: LWFloatKernelWorkspace, scale: Double) throws -> LWFloatPlane {
         typealias K = FloatImageAdjustmentPixels
         let s = optics, width = plane.width, height = plane.height
         var result = plane
@@ -627,7 +632,7 @@ nonisolated extension CameraRawSettings {
             result = try workspace.map(result) { pixel, x, y, sampler in
                 guard pixel.w > 0 else { return pixel }
                 let radial = hypot(Double(x) + 0.5 - cx, Double(y) + 0.5 - cy)/maxRadius
-                let shift = 0.45*radial*radial*2.5
+                let shift = 0.45*radial*radial*2.5*scale
                 let rx = min(width - 1, max(0, Int((Double(x) - shift).rounded())))
                 let bx = min(width - 1, max(0, Int((Double(x) + shift).rounded())))
                 let red = try sampler.pixel(x: rx, y: y), blue = try sampler.pixel(x: bx, y: y)
@@ -658,7 +663,7 @@ nonisolated extension CameraRawSettings {
 }
 
 nonisolated extension CameraRawSettings {
-    private func floatDetail(_ plane: LWFloatPlane, workspace: LWFloatKernelWorkspace) throws -> LWFloatPlane {
+    private func floatDetail(_ plane: LWFloatPlane, workspace: LWFloatKernelWorkspace, scale: Double) throws -> LWFloatPlane {
         typealias K = FloatImageAdjustmentPixels
         let width = plane.width, height = plane.height, s = detail
         var result = plane
@@ -667,7 +672,7 @@ nonisolated extension CameraRawSettings {
         }
         if s.noiseLuminance > 0 {
             let source = try luminance(result)
-            let blurred = try workspace.blur(source, radius: Int((1 + s.noiseLuminance / 50).rounded()))
+            let blurred = try workspace.blur(source, radius: Self.reach(Int((1 + s.noiseLuminance / 50).rounded()), scale))
             // The inherited pass updates its scalar field in global row-major order. A
             // tiled map would reorder dependencies; retain just the prior updated row.
             let previousLease = try plane.workingSet.reserve(try LWFloatDoubleRows.rowBytes(width))
@@ -712,7 +717,7 @@ nonisolated extension CameraRawSettings {
         if s.noiseColor > 0 {
             let chromaField = try workspace.scalar(result) { p in p.w == 0 ? 0 : K.ColorEnvelope(K.RGB(K.encode(Double(p.x)), K.encode(Double(p.y)), K.encode(Double(p.z)))).s }
             let chroma = chromaField.reader()
-            let blurred = try workspace.blur(chromaField, radius: Int((1 + s.noiseColorSmoothness / 40).rounded())).reader()
+            let blurred = try workspace.blur(chromaField, radius: Self.reach(Int((1 + s.noiseColorSmoothness / 40).rounded()), scale)).reader()
             result = try workspace.rgb(result) { linear, x, y in
                 let before = try chroma.value(x: x, y: y), soft = try blurred.value(x: x, y: y)
                 let local = s.noiseColor / 100*(1 - s.noiseColorDetail / 100*min(1, abs(before - soft)*4))
@@ -722,7 +727,7 @@ nonisolated extension CameraRawSettings {
             }
         }
         if s.sharpenAmount > 0 {
-            let field = try luminance(result), radius = max(1, Int((0.5 + s.sharpenRadius / 100*2.5).rounded()))
+            let field = try luminance(result), radius = Self.reach(max(1, Int((0.5 + s.sharpenRadius / 100*2.5).rounded())), scale)
             let luma = field.reader(), blurred = try workspace.blur(field, radius: radius).reader()
             result = try workspace.rgb(result) { linear, x, y in
                 let before = try luma.value(x: x, y: y), soft = try blurred.value(x: x, y: y)
@@ -741,11 +746,12 @@ nonisolated extension CameraRawSettings {
                makeScratchDirectory: @escaping () throws -> URL, fileOwner: LWFloatWorkspace? = nil) throws -> LWFloatPlane {
         try develop(plane, seed: seed, makeBuilder: makeBuilder, makeScratchDirectory: makeScratchDirectory, fileOwner: fileOwner).surface
     }
-    func develop(_ plane: LWFloatPlane, seed: UInt32 = 0,
+    func develop(_ plane: LWFloatPlane, seed: UInt32 = 0, scale: Double = 1,
                  makeBuilder: @escaping (Int, Int) throws -> LWFloatPlane.Builder,
                  makeScratchDirectory: @escaping () throws -> URL, fileOwner: LWFloatWorkspace? = nil) throws -> (surface: LWFloatPlane, map: LWSourceCoordinateMap) {
         try validateFloatControls(); try Task.checkCancellation()
         try LWFloatPlane.validateExtent(width: plane.width, height: plane.height)
+        guard scale.isFinite, scale > 0, scale <= 1 else { throw ProjectError.invalid }
         guard !isIdentity else { return (plane, .identity) }
         let workspace = LWFloatKernelWorkspace(makeBuilder: makeBuilder, makeScratchDirectory: makeScratchDirectory, fileOwner: fileOwner)
         var result = plane
@@ -754,9 +760,9 @@ nonisolated extension CameraRawSettings {
         if calibration.adjusts { result = try floatCalibration(result, workspace: workspace) }
         if adjustsLight || adjustsColor { result = try floatLight(result, workspace: workspace) }
         if curve.adjusts || mixer.adjusts || grading.adjusts { result = try floatColor(result, workspace: workspace) }
-        if adjustsEffects { result = try floatEffects(result, workspace: workspace, seed: seed) }
-        if optics.adjusts { result = try floatOptics(result, workspace: workspace) }
-        if detail.adjusts { result = try floatDetail(result, workspace: workspace) }
+        if adjustsEffects { result = try floatEffects(result, workspace: workspace, seed: seed, scale: scale) }
+        if optics.adjusts { result = try floatOptics(result, workspace: workspace, scale: scale) }
+        if detail.adjusts { result = try floatDetail(result, workspace: workspace, scale: scale) }
         return (result, map)
     }
     /// Full-frame row-major reduction; no per-tile white balance or preview-byte solve.

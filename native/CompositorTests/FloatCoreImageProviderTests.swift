@@ -30,7 +30,8 @@ import CoreImage
             let edges=image.clampedToExtent()
             return kind == "gaussian" ? edges.applyingGaussianBlur(sigma:80):edges.applyingFilter("CIMotionBlur",parameters:[kCIInputRadiusKey:80,kCIInputAngleKey:0.3])
         }
-        let actual=try LWFloatCoreImage.render(before,makeBuilder:{ try workspace.makeBuilder(width:$0,height:$1) },operation:operation)
+        // Motion renders each tile inside the same apron the product uses (TiledFloatKernelWorkspace.coreImage).
+        let actual=try LWFloatCoreImage.render(before,makeBuilder:{ try workspace.makeBuilder(width:$0,height:$1) },apron:kind == "motion" ? 96:0,operation:operation)
         let color=try #require(CGColorSpace(name:CGColorSpace.extendedLinearSRGB))
         let source=LWFloatPlaneImage(plane:before),image=try source.image()
         // Same official operator rendered whole as the deterministic reference.
@@ -39,14 +40,18 @@ import CoreImage
         let expected=try LWLinearSurface.render(operation(CIImage(cgImage:image,options:[.colorSpace:color])),
             width:width,height:height,maximumBytes:width*height*16)
         try source.check()
+        // Within the declared Core Image blur tolerance (CoreImageBlurTolerance).
+        var mismatches=0,worst:Float=0
         try actual.forEachTile { range in
             let tile=try actual.read(range:range)
-            #expect(tile.surface.pixels.enumerated().allSatisfy { index,a in
+            for (index,a) in tile.surface.pixels.enumerated() {
                 let x=index%range.width,y=index/range.width
                 let e=expected.pixels[(range.y+y)*width+range.x+x]
-                return (0..<4).allSatisfy { a[$0].bitPattern==e[$0].bitPattern }
-            })
+                for c in 0..<4 { worst=max(worst,abs(a[c]-e[c])/max(1,abs(e[c]))) }
+                if !CoreImageBlurTolerance.agrees(a,e) { mismatches+=1 }
+            }
         }
+        #expect(mismatches==0,"\(kind): \(mismatches) samples exceed the declared tolerance; worst relative error \(worst)")
     }
     @Test func fullSourceCoreImageCallbackCancellationStopsBeforeOutputPublication() throws {
         let workspace=try LWFloatWorkspace(workingSet:LWFloatWorkingSet())

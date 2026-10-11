@@ -310,3 +310,47 @@ struct ProjectTests {
         #expect(centerPixel.redComponent > 0.9)
     }
 }
+
+extension ProjectTests {
+    /// A package exactly as version-12 builds (main / PR #4) write it: a JSONEncoder manifest
+    /// without working-sample keys and a PNG layer image. This build must keep opening it.
+    @Test func aVersion12PackageFromTheIntegerBuildStillLoads() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let layerID = UUID(), documentID = UUID()
+        let manifest = ProjectManifest(version: 12, documentID: documentID, width: 64, height: 32, activeLayerID: layerID,
+            layers: [ProjectLayerRecord(id: layerID, name: "Background", isVisible: true,
+                transform: LayerTransform(origin: .zero, size: CGSize(width: 64, height: 32)), imageFile: "\(layerID.uuidString).png")])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let json = try encoder.encode(manifest)
+        let text = try #require(String(data: json, encoding: .utf8))
+        #expect(!text.contains("workingSpace") && !text.contains("workingSample") && text.contains("\"version\" : 12"))
+        let package = root.appendingPathComponent("Integer.comp"), images = package.appendingPathComponent("images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        try json.write(to: package.appendingPathComponent("manifest.json"))
+        try FileManager.default.copyItem(at: try ImageImportTests().fixture(.png), to: images.appendingPathComponent("\(layerID.uuidString).png"))
+        let loaded = try await ProjectStore.shared.load(from: package)
+        #expect(loaded.manifest.version == 12 && loaded.manifest.documentID == documentID)
+        #expect(loaded.manifest.workingSpace == nil && loaded.manifest.workingSample == nil)
+        let image = try #require(loaded.images[layerID]?.image)
+        #expect(image.width == 64 && image.height == 32)
+    }
+
+    /// Saving keeps the version-12 format unless the document actually uses version-13 content.
+    @Test func integerOnlySavesKeepWritingVersion12() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = EditorSession()
+        await session.importImages([try ImageImportTests().fixture(.png)])
+        let snapshot = try #require(session.projectSnapshot())
+        #expect(snapshot.manifest.version == ProjectManifest.current)
+        let url = root.appendingPathComponent("Integer.comp")
+        try await ProjectStore.shared.save(snapshot, to: url)
+        let header = try JSONSerialization.jsonObject(with: Data(contentsOf: url.appendingPathComponent("manifest.json"))) as? [String: Any]
+        #expect(header?["version"] as? Int == ProjectManifest.baseline)
+        #expect(header?["workingSpace"] == nil && header?["workingSample"] == nil)
+        let loaded = try await ProjectStore.shared.load(from: url)
+        #expect(loaded.manifest.version == ProjectManifest.baseline)
+        #expect(!ProjectStore.usesVersion13(loaded.manifest))
+    }
+}

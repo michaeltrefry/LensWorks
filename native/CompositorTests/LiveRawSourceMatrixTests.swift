@@ -312,7 +312,10 @@ import Darwin
         node=try fixture.admitted(node) { $0.retouch=[stroke] }
         let admission=try node.retouchAdmission(plane:plane,workspace:workspace,operationScratchBytes:0)
         let lawful=try node.sampleAllCompositePlane(for:stroke,before:plane,admission:admission,workspace:workspace)
-        #expect(try lawful.sampler().pixel(x:3,y:3)==SIMD4<Float>(0,3,0,1))
+        // An opaque overlay composited in the document's encoded-sRGB blend round-trips HDR 3.0
+        // through the extended transfer and back; Core Image's float evaluation rounds at ~1e-6 relative.
+        let sampled=try lawful.sampler().pixel(x:3,y:3)
+        #expect((0..<4).allSatisfy { abs(sampled[$0]-SIMD4<Float>(0,3,0,1)[$0]) <= 1e-5 },"\(sampled)")
         let foreign=try LWFloatWorkspace(workingSet:LWFloatWorkingSet(limit:64*1024*1024))
         #expect(throws:ProjectError.self) { _=try node.sampleAllCompositePlane(for:stroke,before:plane,admission:admission,workspace:foreign) }
         workspace.cancellation.cancel()

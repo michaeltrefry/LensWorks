@@ -35,6 +35,22 @@ nonisolated struct LWLinearSurface: Sendable {
             throw ProjectError.invalid
         }
     }
+    /// Premultiplied float transport for Core Image operators. CIMotionBlur does not premultiply a
+    /// straight-alpha float CGImage: it blurs the stored RGB, so hidden RGB under zero alpha leaks
+    /// into visible pixels. Range-backed planes already reach Core Image premultiplied
+    /// (LWFloatPlaneImage); whole-surface operators use this so both paths read the same samples.
+    func premultipliedCGImage() throws -> CGImage {
+        try validate(maximumBytes: maximumBytes)
+        let premultiplied = pixels.map { SIMD4($0.x * $0.w, $0.y * $0.w, $0.z * $0.w, $0.w) }
+        let data = premultiplied.withUnsafeBytes { Data($0) }
+        guard let provider = CGDataProvider(data: data as CFData),
+            let color = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+            let image = CGImage(width:width, height:height, bitsPerComponent:32, bitsPerPixel:128,
+                bytesPerRow:width * 16, space:color,
+                bitmapInfo:CGBitmapInfo(rawValue:CGImageAlphaInfo.premultipliedLast.rawValue).union(.floatComponents).union(.byteOrder32Little),
+                provider:provider, decode:nil, shouldInterpolate:false, intent:.relativeColorimetric) else { throw ProjectError.encode }
+        return image
+    }
     func cgImage() throws -> CGImage {
         try validate(maximumBytes: maximumBytes)
         let data = pixels.withUnsafeBytes { Data($0) }
@@ -57,9 +73,14 @@ nonisolated struct LWLinearSurface: Sendable {
                 bounds:CGRect(x:0,y:0,width:width,height:height), format:.RGBAf, colorSpace:color)
         }
         // Core Image returns premultiplied RGBA. Only this explicit boundary unpremultiplies.
+        // Convolutions (motion/Gaussian blur over opaque input) sum many weighted alphas in float
+        // and can land a few ulps above one; that rounding is clamped, a real excess still refuses.
         for index in pixels.indices {
             let alpha = pixels[index].w
-            if alpha > 0 { pixels[index].x /= alpha; pixels[index].y /= alpha; pixels[index].z /= alpha }
+            if alpha > 0 {
+                pixels[index].x /= alpha; pixels[index].y /= alpha; pixels[index].z /= alpha
+                if alpha > 1, alpha <= 1 + 1e-4 { pixels[index].w = 1 }
+            }
             else { pixels[index] = .zero }
         }
         return try Self(width:width, height:height, pixels:pixels, maximumBytes:maximumBytes)

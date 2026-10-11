@@ -225,7 +225,7 @@ nonisolated extension LayerAdjustment {
             // float provider. Admit source/provider/result/output extents before conversion.
             try K.checkedBytes(count: surface.pixels.count, bytesPerPixel: 80, maximumBytes: surface.maximumBytes)
             guard let color = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) else { throw ProjectError.invalid }
-            let input = CIImage(cgImage: try surface.cgImage(), options: [.colorSpace: color])
+            let input = CIImage(cgImage: try surface.premultipliedCGImage(), options: [.colorSpace: color])
             let extent = CGRect(x: 0, y: 0, width: surface.width, height: surface.height)
             let edges = input.clampedToExtent()
             let result: CIImage
