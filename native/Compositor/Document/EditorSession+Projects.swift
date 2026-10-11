@@ -18,6 +18,8 @@ extension EditorSession {
 
     /// Called only after the entire package has successfully validated and loaded.
     func installProject(_ snapshot: ProjectSnapshot, from url: URL) {
+        commandContextEpoch &+= 1
+        commandInteraction = nil; opacityEditLayerID = nil
         collapsedGroupIDs = []
         isMaskSelected = false
         cancelCrop()
@@ -36,6 +38,7 @@ extension EditorSession {
         projectURL = url
         renamingLayerID = nil
         history.reset()
+        commandInteraction = nil; opacityEditLayerID = nil
         viewport.fit(documentSize: document!.size)
     }
 
@@ -59,6 +62,8 @@ extension EditorSession {
     }
 
     func clearProject() {
+        commandContextEpoch &+= 1
+        commandInteraction = nil; opacityEditLayerID = nil
         collapsedGroupIDs = []
         isMaskSelected = false
         cancelCrop()
@@ -69,6 +74,7 @@ extension EditorSession {
         renamingLayerID = nil
         projectURL = nil
         history.reset()
+        commandInteraction = nil; opacityEditLayerID = nil
     }
 
     func createNewProject(width: Int, height: Int) {

@@ -20,10 +20,10 @@ notice_root = args.notices.resolve()
 notice_report = json.loads((notice_root / 'inventory.json').read_text())
 if notice_report.get('missing'):
     raise SystemExit('Missing notice records prevent installation')
-for name in ('adapters/catalog/Cargo.lock', 'vendor/PhotoCatalog/Cargo.lock'):
+for name in ('adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock'):
     if notice_report.get('native_input_locks', {}).get(name) != hashlib.sha256((root / name).read_bytes()).hexdigest():
         raise SystemExit('Notice inventory does not match current payload lock: ' + name)
-for name in ('adapters/catalog/Cargo.toml', 'vendor/PhotoCatalog/Cargo.toml'):
+for name in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml'):
     if notice_report.get('native_input_manifests', {}).get(name) != hashlib.sha256((root / name).read_bytes()).hexdigest():
         raise SystemExit('Notice inventory does not match current payload manifest: ' + name)
 notice_manifest = json.loads((notice_root / 'manifest.json').read_text())
@@ -35,7 +35,7 @@ test_frameworks = {'XCTest.framework', 'XCTestCore.framework', 'XCTestSupport.fr
                    'libXCTestBundleInject.dylib', 'libXCTestSwiftSupport.dylib'}
 if any(path.name in test_frameworks or path.suffix == '.xctest' for path in source.rglob('*')):
     raise SystemExit('Test-injected application cannot be installed; use scripts/build-native.sh')
-spec = importlib.util.spec_from_file_location('photocatalog_packaging', root / 'vendor/PhotoCatalog/scripts/package_desktop.py')
+spec = importlib.util.spec_from_file_location('photocatalog_packaging', root / 'engines/catalog/scripts/package_desktop.py')
 packaging = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packaging)
 info = plistlib.loads((source / 'Contents/Info.plist').read_bytes())

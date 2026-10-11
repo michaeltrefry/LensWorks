@@ -22,7 +22,7 @@ if output.exists():
 output.mkdir(parents=True)
 media = output / 'Photos'; media.mkdir()
 source = media / 'Original.png'
-shutil.copy2(root / 'vendor/PhotoCatalog/tests/fixtures/generated-swatches.png', source)
+shutil.copy2(root / 'engines/catalog/tests/fixtures/generated-swatches.png', source)
 before = hashlib.sha256(source.read_bytes()).hexdigest()
 executable = args.app.resolve() / 'Contents/MacOS/LensWorks'
 common = [str(executable), '--lensworks-catalog', str(output / 'Catalog'), '--lensworks-output', str(media)]

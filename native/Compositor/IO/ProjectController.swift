@@ -238,9 +238,6 @@ final class ProjectController {
                 if var version = savedVersion {
                     version.projectPath = destination.path
                     workingVersion = version
-                    var paths = UserDefaults.standard.stringArray(forKey: "LensWorks.workingVersions") ?? []
-                    if !paths.contains(destination.path) { paths.append(destination.path) }
-                    UserDefaults.standard.set(paths, forKey: "LensWorks.workingVersions")
                     UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion")
                 }
                 session.projectURL = destination
@@ -249,6 +246,10 @@ final class ProjectController {
                 RecentProjects.shared.note(destination)
                 await rememberProjectDigest(for: destination)
                 watchProject(at: destination)
+                if savedVersion != nil {
+                    do { guard try await LensWorksCatalogIndex.shared.register(destination) else { throw LensWorksCatalogError.message("The saved package no longer contains its LensWorks source record.") } }
+                    catch { await showError("The project was saved; its catalog registration needs reconciliation", error: error) }
+                }
                 return true
             } catch {
                 await showError("Couldn’t save the project", error: error)

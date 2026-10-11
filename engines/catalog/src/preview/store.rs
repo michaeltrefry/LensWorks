@@ -1,0 +1,2605 @@
+//! Rebuildable preview manifest. Main-catalog generations remain authoritative.
+#[path = "store_paths.rs"]
+mod paths;
+use paths::{encode_path, read_path, validate_paths};
+
+#[path = "store_custody.rs"]
+pub(crate) mod custody;
+#[path = "relocation.rs"]
+mod relocation;
+use super::{CodecSettings, PREPARATION_VERSION};
+use anyhow::{Context, Result, bail, ensure};
+use fs2::FileExt;
+pub use relocation::{RelocationProgress, RelocationSnapshot};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fs::{self, File},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tier {
+    Thumbnail,
+    Large,
+}
+impl Tier {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Thumbnail => "thumbnail",
+            Self::Large => "large",
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PreviewKey {
+    pub asset_id: String,
+    pub variant_id: String,
+    /// Obtained from Catalog::render_identity, never advanced by this manifest.
+    pub generation: u64,
+    /// Image-local pixel revision. Absent only on pre-image-scope cache keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_pixel_generation: Option<u64>,
+    pub fingerprint: String,
+    pub edit_revision: u64,
+    pub renderer_version: String,
+    pub preparation_version: String,
+    pub tier: Tier,
+    pub edge: u32,
+    pub encoding: CodecSettings,
+}
+impl PreviewKey {
+    fn channel(&self) -> &'static str {
+        if self.renderer_version.ends_with(":proxy1600") {
+            "interactive"
+        } else {
+            "refined"
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.asset_id.is_empty() && self.asset_id.len() <= 256 && self.variant_id.len() <= 256,
+            "invalid stable identity"
+        );
+        ensure!(
+            self.generation <= i64::MAX as u64
+                && self.edit_revision <= i64::MAX as u64
+                && self
+                    .image_pixel_generation
+                    .is_none_or(|value| value <= i64::MAX as u64),
+            "revision overflow"
+        );
+        ensure!(
+            self.fingerprint.len() == 64 && self.fingerprint.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid source fingerprint"
+        );
+        ensure!(
+            !self.renderer_version.is_empty()
+                && self.renderer_version.len() <= 128
+                && self.preparation_version == PREPARATION_VERSION,
+            "render/preparation identity mismatch"
+        );
+        ensure!((1..=8192).contains(&self.edge), "preview edge limit");
+        self.encoding.validate()
+    }
+    pub fn digest(&self) -> Result<String> {
+        self.validate()?;
+        Ok(blake3::hash(&serde_json::to_vec(self)?)
+            .to_hex()
+            .to_string())
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Layout {
+    Flat,
+    HashPrefix,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreConfig {
+    pub manifest_root: PathBuf,
+    pub layout: Layout,
+    pub thumbnail_root: PathBuf,
+    pub large_root: PathBuf,
+    /// Encoded object bytes, including pending writes; database/filesystem overhead is reported separately.
+    pub thumbnail_bytes: u64,
+    pub large_bytes: u64,
+}
+/// The metadata/provenance belong to these pixels, including an explicitly stale
+/// retained fallback. General catalog metadata can independently be newer.
+/// Observed input used by the successful editing worker, bound to its preview key.
+/// A prepared hit is recorded only after the complete proxy checksum and identity
+/// have been validated. Older cached records have no such evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum EditInputProvenance {
+    OriginalDecoded,
+    PreparedProxy {
+        receipt: crate::edit::PreparedProxyReceipt,
+        source_instance_digest: String,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderRecord {
+    #[serde(default)]
+    pub edit_input: Option<EditInputProvenance>,
+    pub width: u32,
+    pub height: u32,
+    pub metadata: crate::media::Metadata,
+    pub provenance: crate::media::RenderProvenance,
+}
+impl RenderRecord {
+    fn encoded(&self, key: &PreviewKey) -> Result<String> {
+        ensure!(
+            self.width > 0 && self.height > 0 && self.width <= key.edge && self.height <= key.edge,
+            "render record dimensions exceed tier"
+        );
+        encoded_descriptor(self, "render record serialization changed")
+    }
+}
+/// Both durable preview records and jobs have the same existing 64KiB JSON cap.
+/// Count the immutable value before allocating the encoded destination.
+pub(super) fn encoded_descriptor(value: &impl Serialize, mismatch: &'static str) -> Result<String> {
+    let mut count = RecordSize(0);
+    serde_json::to_writer(&mut count, value)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(count.0)?;
+    serde_json::to_writer(&mut bytes, value)?;
+    ensure!(bytes.len() == count.0, mismatch);
+    Ok(String::from_utf8(bytes)?)
+}
+struct RecordSize(usize);
+impl Write for RecordSize {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|size| *size <= 64 * 1024)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "render record size limit")
+            })?;
+        self.0 = next;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+#[derive(Debug)]
+pub struct CachedPreview {
+    pub key: PreviewKey,
+    pub bytes: Vec<u8>,
+    pub stale: bool,
+    pub record: Option<RenderRecord>,
+}
+/// SQL-selected immutable read authority. This value contains no connection.
+pub(crate) struct ManagedSelection {
+    pub cached: CachedPreview,
+    pub expected: crate::catalog_session::preview_io::Expected,
+    pub files: std::sync::Arc<dyn AdmittedStoreFiles>,
+}
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StoreUsage {
+    pub thumbnail_bytes: u64,
+    pub large_bytes: u64,
+    pub pending_objects: u64,
+    pub objects: u64,
+}
+#[derive(Debug, Clone)]
+pub(crate) struct OriginalRootReview {
+    pub roots: Vec<PathBuf>,
+    pub storage_epoch: Option<u64>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publication {
+    Attached,
+    AlreadyPresent,
+    Stale,
+}
+#[derive(Debug)]
+pub struct CacheQuotaExceeded(pub &'static str);
+impl std::fmt::Display for CacheQuotaExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for CacheQuotaExceeded {}
+
+// Schema3 briefly supported scoped object/job keys without a wanted-scope
+// column. Recover that exact namespace from hash-bound descriptors, including
+// queued jobs with no object yet. Keep memory bounded to one journal record.
+fn restore_image_scopes(db: &Connection) -> Result<()> {
+    let apply = |key: PreviewKey| -> Result<()> {
+        if let Some(image) = key.image_pixel_generation {
+            db.execute("UPDATE wanted SET image_pixel_generation=?1 WHERE desired=?2 AND asset=?3 AND variant=?4 AND tier=?5 AND channel=?6 AND generation=?7",rusqlite::params![i64::try_from(image)?,key.digest()?,key.asset_id,key.variant_id,key.tier.name(),key.channel(),i64::try_from(key.generation)?])?;
+        }
+        Ok(())
+    };
+    let mut objects =
+        db.prepare("SELECT descriptor FROM objects WHERE key IN (SELECT desired FROM wanted)")?;
+    let mut rows = objects.query([])?;
+    while let Some(row) = rows.next()? {
+        let descriptor = custody::object_text(row, 0)?;
+        ensure!(
+            descriptor.len() <= 64 * 1024,
+            "cached descriptor migration bound"
+        );
+        apply(serde_json::from_str(descriptor)?)?;
+    }
+    let mut jobs = db.prepare("SELECT descriptor FROM render_jobs ORDER BY created,id")?;
+    let mut rows = jobs.query([])?;
+    while let Some(row) = rows.next()? {
+        let descriptor = custody::object_text(row, 0)?;
+        ensure!(descriptor.len() <= 64 * 1024, "cached job migration bound");
+        let value: serde_json::Value = serde_json::from_str(descriptor)?;
+        let keys = value
+            .get("request")
+            .and_then(|v| v.get("keys"))
+            .context("cached job keys missing")?;
+        for key in serde_json::from_value::<Vec<PreviewKey>>(keys.clone())? {
+            apply(key)?;
+        }
+    }
+    Ok(())
+}
+
+// Created only after successful acquisition: a failed contender must not unlock.
+// Duplicated or fork-inherited descriptors must not extend lexical ownership.
+struct AcquiredPreviewLock(File);
+impl Drop for AcquiredPreviewLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManifestOrigin {
+    Existing,
+    CreatedByAdmission,
+}
+/// Supplied by the separately owned F lease group. The callback receives only
+/// exact SQL-derived config/identity and returns retained opaque ownership.
+pub(crate) trait AdmittedStoreFiles: Send + Sync {
+    fn stage_calls(&self) -> Option<std::sync::Arc<super::stage_io::Calls>> {
+        None
+    }
+    #[cfg(test)]
+    fn cache_status(&self) -> Result<crate::catalog_session::store::Status> {
+        bail!("managed cache status unsupported")
+    }
+    fn cache_root(&self, _path: &Path) -> Result<crate::catalog_session::LeaseId> {
+        bail!("managed cache object root unsupported")
+    }
+    fn cache_call(
+        &self,
+        _action: crate::catalog_session::preview_io::Action,
+    ) -> Result<crate::catalog_session::preview_io::Value> {
+        bail!("managed cache object IO unsupported")
+    }
+    fn cache_read(
+        &self,
+        _expected: crate::catalog_session::preview_io::Expected,
+        _allowance: u64,
+    ) -> Result<(crate::catalog_session::preview_io::Integrity, Vec<u8>)> {
+        bail!("managed cache read unsupported")
+    }
+    fn cache_read_cancel(
+        &self,
+        expected: crate::catalog_session::preview_io::Expected,
+        allowance: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(crate::catalog_session::preview_io::Integrity, Vec<u8>)> {
+        ensure!(
+            !cancel.load(std::sync::atomic::Ordering::Acquire),
+            "cache read canceled"
+        );
+        self.cache_read(expected, allowance)
+    }
+    fn cache_write(
+        &self,
+        _expected: crate::catalog_session::preview_io::Expected,
+        _temporary: &str,
+        _bytes: &[u8],
+    ) -> Result<()> {
+        bail!("managed cache write unsupported")
+    }
+
+    fn lock_tiers(
+        &self,
+        config: &StoreConfig,
+        identity: &str,
+    ) -> Result<std::sync::Arc<dyn Send + Sync>>;
+    fn lock_tiers_recovering(
+        &self,
+        config: &StoreConfig,
+        identity: &str,
+        relocation: Option<crate::catalog_session::store::Relocation>,
+    ) -> Result<std::sync::Arc<dyn Send + Sync>> {
+        ensure!(relocation.is_none(), "managed preview recovery unavailable");
+        self.lock_tiers(config, identity)
+    }
+    fn recovered_root(&self) -> Option<crate::catalog_session::store::Lease> {
+        None
+    }
+    fn reserve_root(&self, _: &Path, _: Tier) -> Result<crate::catalog_session::store::Lease> {
+        bail!("managed preview relocation reservation unavailable")
+    }
+    fn lock_reserved(&self, _: &crate::catalog_session::store::Lease) -> Result<()> {
+        bail!("managed preview relocation lock unavailable")
+    }
+    fn promote_root(
+        &self,
+        _: &crate::catalog_session::store::Lease,
+    ) -> Result<crate::catalog_session::store::Lease> {
+        bail!("managed preview relocation promotion unavailable")
+    }
+    fn retire_root(&self, _: &crate::catalog_session::store::Lease) -> Result<()> {
+        bail!("managed preview relocation retirement unavailable")
+    }
+    fn abandon_root(&self, _: &crate::catalog_session::store::Lease) -> Result<()> {
+        bail!("managed preview reservation cleanup unavailable")
+    }
+}
+
+/// One owner serializes filesystem/manifest mutations; workers return encoded
+/// data to that owner. The process lock is released automatically on crash.
+pub struct PreviewStore {
+    db: crate::catalog_session::SqlConnection,
+    config: StoreConfig,
+    _lock: Option<AcquiredPreviewLock>,
+    _tier_locks: [Option<AcquiredPreviewLock>; 2],
+    _managed_lease: Option<std::sync::Arc<dyn Send + Sync>>,
+    managed_files: Option<std::sync::Arc<dyn AdmittedStoreFiles>>,
+    managed_relocation: Option<crate::catalog_session::store::Lease>,
+    _relocation_lock: Option<AcquiredPreviewLock>,
+    identity: String,
+    clock: Cell<i64>,
+    touches: RefCell<HashMap<String, i64>>,
+}
+
+fn validate_original_roots(roots: &[PathBuf]) -> Result<()> {
+    ensure!(!roots.is_empty(), "at least one original root is required");
+    ensure!(roots.len() <= 1024, "original root count exceeds bound");
+    let mut bytes = 0usize;
+    for (index, root) in roots.iter().enumerate() {
+        ensure!(root.is_absolute(), "original root must be absolute");
+        let encoded = encode_path(root)?;
+        ensure!(
+            encoded.len() <= 256 * 1024,
+            "original root exceeds byte bound"
+        );
+        bytes = bytes
+            .checked_add(encoded.len())
+            .filter(|value| *value <= 2 * 1024 * 1024)
+            .context("original root bytes exceed bound")?;
+        ensure!(!roots[..index].contains(root), "duplicate original root");
+    }
+    Ok(())
+}
+
+impl PreviewStore {
+    /// Enforce separation from authoritative and in-flight owned cache roots,
+    /// even when a library caller omitted a source from its configured root list.
+    pub(crate) fn ensure_original_separate(&self, source: &Path) -> Result<()> {
+        let source = match fs::canonicalize(source) {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let parent = source.parent().context("original has no parent")?;
+                crate::prospective_directory(parent)?
+                    .join(source.file_name().context("original has no filename")?)
+            }
+            Err(error) => {
+                return Err(error).context("resolve original location for cache separation");
+            }
+        };
+        self.ensure_resolved_original_separate(&source)
+    }
+    fn ensure_resolved_original_separate(&self, source: &Path) -> Result<()> {
+        ensure!(
+            source.is_absolute(),
+            "observed original root must be absolute"
+        );
+        let mut roots = vec![
+            self.config.manifest_root.clone(),
+            self.config.thumbnail_root.clone(),
+            self.config.large_root.clone(),
+        ];
+        let mut statement = self
+            .db
+            .prepare("SELECT CASE WHEN length(CAST(source AS BLOB))<=1048576 THEN source ELSE NULL END,CASE WHEN length(CAST(target AS BLOB))<=1048576 THEN target ELSE NULL END FROM relocations LIMIT 2")?;
+        let relocations =
+            statement.query_map([], |row| Ok((read_path(row, 0)?, read_path(row, 1)?)))?;
+        for row in relocations {
+            let (old, new) = row?;
+            roots.extend([old, new]);
+        }
+        for root in roots {
+            ensure!(
+                !source.starts_with(&root) && !root.starts_with(source),
+                "original overlaps preview storage"
+            );
+        }
+        Ok(())
+    }
+    pub fn open(mut config: StoreConfig, original_roots: &[PathBuf]) -> Result<Self> {
+        ensure!(
+            config.thumbnail_bytes > 0
+                && config.large_bytes > 0
+                && config.thumbnail_bytes <= i64::MAX as u64
+                && config.large_bytes <= i64::MAX as u64,
+            "invalid cache quotas"
+        );
+        if !original_roots.is_empty() {
+            validate_original_roots(original_roots)?;
+        }
+        let roots = [
+            prospective(&config.manifest_root)?,
+            prospective(&config.thumbnail_root)?,
+            prospective(&config.large_root)?,
+        ];
+        #[cfg(windows)]
+        ensure!(
+            roots[0].to_str().is_some(),
+            "preview SQLite manifest path must be valid Unicode; choose another manifest directory"
+        );
+        for source in original_roots {
+            let source = prospective(source)?;
+            for root in &roots {
+                ensure!(
+                    !root.starts_with(&source) && !source.starts_with(root),
+                    "preview storage overlaps originals"
+                );
+            }
+        }
+        for (index, left) in roots.iter().enumerate() {
+            for right in &roots[index + 1..] {
+                ensure!(
+                    !left.starts_with(right) && !right.starts_with(left),
+                    "manifest, thumbnail and large storage must be separate"
+                );
+            }
+        }
+        for root in &roots {
+            fs::create_dir_all(root)?;
+        }
+        config.manifest_root = fs::canonicalize(&roots[0])?;
+        config.thumbnail_root = fs::canonicalize(&roots[1])?;
+        config.large_root = fs::canonicalize(&roots[2])?;
+        let lock = File::options()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(config.manifest_root.join("preview.lock"))?;
+        lock.try_lock_exclusive()
+            .context("preview service already owns this cache")?;
+        let lock = AcquiredPreviewLock(lock);
+        let db = Connection::open(config.manifest_root.join("previews.sqlite3"))?;
+        Self::initialize(config, db.into(), Some(lock), None, original_roots)
+    }
+    pub(crate) fn open_admitted(
+        config: StoreConfig,
+        db: crate::catalog_session::SqlConnection,
+        origin: ManifestOrigin,
+        files: std::sync::Arc<dyn AdmittedStoreFiles>,
+    ) -> Result<Self> {
+        custody::saved_paths(&db)?;
+        let mut config = Self::current_configuration_on(&db, config, origin)?;
+        config.manifest_root = custody::normalized(&config.manifest_root, "manifest")?;
+        config.thumbnail_root = custody::normalized(&config.thumbnail_root, "thumbnail")?;
+        config.large_root = custody::normalized(&config.large_root, "large")?;
+        ensure!(
+            config.thumbnail_bytes > 0
+                && config.large_bytes > 0
+                && config.thumbnail_bytes <= i64::MAX as u64
+                && config.large_bytes <= i64::MAX as u64,
+            "invalid cache quotas"
+        );
+        Self::initialize(config, db, None, Some(files), &[])
+    }
+    fn initialize(
+        config: StoreConfig,
+        db: crate::catalog_session::SqlConnection,
+        lock: Option<AcquiredPreviewLock>,
+        files: Option<std::sync::Arc<dyn AdmittedStoreFiles>>,
+        original_roots: &[PathBuf],
+    ) -> Result<Self> {
+        let app: i64 = db.pragma_query_value(None, "application_id", |r| r.get(0))?;
+        let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version == 0 {
+            let count: i64 = db.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |r| r.get(0),
+            )?;
+            ensure!(count == 0 && app == 0, "unrelated preview manifest");
+        } else {
+            ensure!(
+                (1..=6).contains(&version) && app == 0x50435056,
+                "unsupported preview manifest"
+            );
+        }
+        if version > 0 {
+            validate_paths(&db)?;
+        }
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA fullfsync=ON; PRAGMA cache_size=-8192; PRAGMA mmap_size=0; BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS usage(tier TEXT PRIMARY KEY,bytes INTEGER NOT NULL CHECK(bytes>=0),objects INTEGER NOT NULL CHECK(objects>=0),pending INTEGER NOT NULL CHECK(pending>=0));
+            INSERT OR IGNORE INTO usage VALUES('thumbnail',0,0,0),('large',0,0,0);
+            CREATE TABLE IF NOT EXISTS objects(key TEXT PRIMARY KEY,descriptor TEXT NOT NULL,tier TEXT NOT NULL,bytes INTEGER NOT NULL CHECK(bytes>0),checksum TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','ready','orphan')),temporary TEXT NOT NULL,touched INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS render_jobs(id TEXT PRIMARY KEY,descriptor TEXT NOT NULL,created INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS render_jobs_created ON render_jobs(created,id);
+            CREATE TABLE IF NOT EXISTS store_identity(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS budgets(tier TEXT PRIMARY KEY,bytes INTEGER NOT NULL CHECK(bytes>0));
+            CREATE TABLE IF NOT EXISTS relocations(tier TEXT PRIMARY KEY,id TEXT NOT NULL,source TEXT NOT NULL,target TEXT NOT NULL,phase TEXT NOT NULL,cursor TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS relocation_progress(tier TEXT PRIMARY KEY REFERENCES relocations(tier) ON DELETE CASCADE,objects INTEGER NOT NULL CHECK(objects>=0),bytes INTEGER NOT NULL CHECK(bytes>=0),total_objects INTEGER NOT NULL CHECK(total_objects>=objects),total_bytes INTEGER NOT NULL CHECK(total_bytes>=bytes));
+            CREATE TABLE IF NOT EXISTS original_roots(id INTEGER PRIMARY KEY,path BLOB NOT NULL UNIQUE);
+            CREATE TABLE IF NOT EXISTS original_root_review(id INTEGER PRIMARY KEY CHECK(id=1),storage_epoch INTEGER CHECK(storage_epoch IS NULL OR storage_epoch>=0));
+            INSERT OR IGNORE INTO original_root_review VALUES(1,NULL);
+            CREATE TABLE IF NOT EXISTS render_records(key TEXT PRIMARY KEY REFERENCES objects(key) ON DELETE CASCADE,record TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS objects_eviction ON objects(tier,status,touched,key);
+            CREATE INDEX IF NOT EXISTS objects_recovery ON objects(status,key);
+            CREATE TABLE IF NOT EXISTS counter(id INTEGER PRIMARY KEY CHECK(id=1),value INTEGER NOT NULL);
+            INSERT OR IGNORE INTO counter VALUES(1,0);
+            CREATE TABLE IF NOT EXISTS locations(tier TEXT PRIMARY KEY,path TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS layout(name TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS wanted(asset TEXT NOT NULL,variant TEXT NOT NULL,tier TEXT NOT NULL,generation INTEGER NOT NULL,desired TEXT NOT NULL,current TEXT,PRIMARY KEY(asset,variant,tier));
+            CREATE INDEX IF NOT EXISTS wanted_current ON wanted(current);
+            CREATE TRIGGER IF NOT EXISTS render_job_added AFTER INSERT ON render_jobs BEGIN UPDATE counter SET value=max(value,NEW.created) WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS object_added AFTER INSERT ON objects BEGIN UPDATE usage SET bytes=bytes+NEW.bytes,objects=objects+1,pending=pending+(NEW.status='pending') WHERE tier=NEW.tier; UPDATE counter SET value=max(value,NEW.touched) WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS object_touched AFTER UPDATE OF touched ON objects BEGIN UPDATE counter SET value=max(value,NEW.touched) WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS object_removed AFTER DELETE ON objects BEGIN UPDATE usage SET bytes=bytes-OLD.bytes,objects=objects-1,pending=pending-(OLD.status='pending') WHERE tier=OLD.tier; END;
+            CREATE TRIGGER IF NOT EXISTS object_status AFTER UPDATE OF status ON objects BEGIN UPDATE usage SET pending=pending+(NEW.status='pending')-(OLD.status='pending') WHERE tier=NEW.tier; END;
+            PRAGMA application_id=1346588758;")?;
+        // Under the manifest lease and the same transaction as table creation:
+        // old desired/current pointers retain refined-channel meaning exactly.
+        let migration = (|| -> Result<()> {
+            if version < 3 {
+                db.execute_batch("ALTER TABLE wanted RENAME TO wanted_v2;
+                    DROP INDEX wanted_current;
+                    CREATE TABLE wanted(asset TEXT NOT NULL,variant TEXT NOT NULL,tier TEXT NOT NULL,
+                        generation INTEGER NOT NULL,desired TEXT NOT NULL,current TEXT,
+                        channel TEXT NOT NULL DEFAULT 'refined' CHECK(channel IN ('refined','interactive')),
+                        PRIMARY KEY(asset,variant,tier,channel));
+                    INSERT INTO wanted(asset,variant,tier,generation,desired,current)
+                        SELECT asset,variant,tier,generation,desired,current FROM wanted_v2;
+                    DROP TABLE wanted_v2;
+                    CREATE INDEX wanted_current ON wanted(current);")?;
+            }
+            if version < 4 {
+                db.execute_batch("ALTER TABLE wanted ADD COLUMN image_pixel_generation INTEGER CHECK(image_pixel_generation IS NULL OR image_pixel_generation>=0)")?;
+                restore_image_scopes(&db)?;
+            }
+            for source in original_roots {
+                let inserted = db.execute(
+                    "INSERT OR IGNORE INTO original_roots(path) VALUES(?1)",
+                    [encode_path(source)?],
+                )?;
+                if inserted != 0 {
+                    db.execute(
+                        "UPDATE original_root_review SET storage_epoch=NULL WHERE id=1",
+                        [],
+                    )?;
+                }
+            }
+            db.execute_batch("PRAGMA user_version=6")?;
+            Ok(())
+        })();
+        finish(&db, migration)?;
+        let clock = db.query_row("SELECT value FROM counter WHERE id=1", [], |r| r.get(0))?;
+        db.execute(
+            "INSERT OR IGNORE INTO store_identity VALUES(1,?1)",
+            [uuid::Uuid::new_v4().to_string()],
+        )?;
+        let identity: String = if files.is_some() {
+            custody::identity(&db, config.layout)?
+        } else {
+            db.query_row("SELECT value FROM store_identity WHERE id=1", [], |r| {
+                r.get(0)
+            })?
+        };
+        let (tier_locks, managed_lease) = if let Some(files) = &files {
+            (
+                [None, None],
+                Some(db.retain_opaque_owner(|| {
+                    files.lock_tiers_recovering(&config, &identity, custody::relocation(&db)?)
+                })?),
+            )
+        } else {
+            (
+                [
+                    Some(relocation::lock_root(
+                        &config.thumbnail_root,
+                        &identity,
+                        Tier::Thumbnail,
+                        config.layout,
+                    )?),
+                    Some(relocation::lock_root(
+                        &config.large_root,
+                        &identity,
+                        Tier::Large,
+                        config.layout,
+                    )?),
+                ],
+                None,
+            )
+        };
+        let mut store = Self {
+            db,
+            config,
+            _lock: lock,
+            _tier_locks: tier_locks,
+            _managed_lease: managed_lease,
+            managed_files: files,
+            managed_relocation: None,
+            _relocation_lock: None,
+            identity,
+            clock: Cell::new(clock),
+            touches: RefCell::new(HashMap::new()),
+        };
+        let layout = serde_json::to_string(&store.config.layout)?;
+        let existing: Option<String> = store
+            .db
+            .query_row("SELECT name FROM layout", [], |r| r.get(0))
+            .optional()?;
+        if let Some(existing) = existing {
+            ensure!(
+                existing == layout,
+                "cache layout changed; explicit migration required"
+            );
+        } else {
+            store
+                .db
+                .execute("INSERT INTO layout VALUES(?1)", [layout])?;
+        }
+        for tier in [Tier::Thumbnail, Tier::Large] {
+            let path = store.root(tier);
+            let saved: Option<PathBuf> = store
+                .db
+                .query_row(
+                    "SELECT CASE WHEN length(CAST(path AS BLOB))<=1048576 THEN path ELSE NULL END FROM locations WHERE tier=?1",
+                    [tier.name()],
+                    |r| read_path(r, 0),
+                )
+                .optional()?;
+            if let Some(saved) = saved {
+                ensure!(
+                    saved == path,
+                    "cache location changed; relocate the retained objects explicitly before reopening"
+                );
+            } else {
+                store.db.execute(
+                    "INSERT INTO locations VALUES(?1,?2)",
+                    params![tier.name(), encode_path(path)?],
+                )?;
+            }
+        }
+        store.db.execute(
+            "INSERT OR IGNORE INTO budgets VALUES('thumbnail',?1)",
+            [store.config.thumbnail_bytes as i64],
+        )?;
+        store.db.execute(
+            "INSERT OR IGNORE INTO budgets VALUES('large',?1)",
+            [store.config.large_bytes as i64],
+        )?;
+        store.recover_relocation_lock()?;
+        store.recover(128)?;
+        Ok(store)
+    }
+    pub(crate) fn stage_calls(&self) -> Option<std::sync::Arc<super::stage_io::Calls>> {
+        self.managed_files.as_ref().and_then(|f| f.stage_calls())
+    }
+    /// Install a source-owned admitted-files adapter for service unit fixtures.
+    #[cfg(test)]
+    pub(crate) fn set_admitted_files_for_test(
+        &mut self,
+        files: std::sync::Arc<dyn AdmittedStoreFiles>,
+    ) {
+        self.managed_files = Some(files);
+    }
+    pub(crate) fn return_managed_sql(&mut self) {
+        self.db.return_managed();
+    }
+    pub fn configuration(&self) -> &StoreConfig {
+        &self.config
+    }
+    pub(crate) fn original_root_review(&self) -> Result<OriginalRootReview> {
+        let storage_epoch = self
+            .db
+            .query_row(
+                "SELECT storage_epoch FROM original_root_review WHERE id=1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )?
+            .map(u64::try_from)
+            .transpose()?;
+        let mut statement = self.db.prepare(
+            "SELECT CASE WHEN length(CAST(path AS BLOB))<=262144 THEN path ELSE NULL END FROM original_roots ORDER BY id LIMIT 1025",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut roots = Vec::new();
+        let mut bytes = 0usize;
+        while let Some(row) = rows.next()? {
+            ensure!(roots.len() < 1024, "original root count exceeds bound");
+            let root = read_path(row, 0)?;
+            bytes = bytes
+                .checked_add(encode_path(&root)?.len())
+                .filter(|value| *value <= 2 * 1024 * 1024)
+                .context("original root bytes exceed bound")?;
+            roots.push(root);
+        }
+        Ok(OriginalRootReview {
+            roots,
+            storage_epoch,
+        })
+    }
+    pub(crate) fn replace_original_root_review(
+        &mut self,
+        roots: &[PathBuf],
+        storage_epoch: u64,
+    ) -> Result<()> {
+        validate_original_roots(roots)?;
+        ensure!(storage_epoch <= i64::MAX as u64, "storage epoch overflow");
+        let encoded = roots
+            .iter()
+            .map(|root| encode_path(root))
+            .collect::<Result<Vec<_>>>()?;
+        let tx = self.db.transaction()?;
+        tx.execute("DELETE FROM original_roots", [])?;
+        for root in encoded {
+            tx.execute("INSERT INTO original_roots(path) VALUES(?1)", [root])?;
+        }
+        tx.execute(
+            "UPDATE original_root_review SET storage_epoch=?1 WHERE id=1",
+            [i64::try_from(storage_epoch)?],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn register_original_root(&mut self, root: &Path) -> Result<()> {
+        let root = root.to_path_buf();
+        validate_original_roots(std::slice::from_ref(&root))?;
+        self.ensure_original_separate(&root)?;
+        self.persist_original_root(&root)
+    }
+    /// F already canonicalized and retained this root before returning it.
+    /// C compares that fact with its saved cache namespace and performs only
+    /// the manifest transaction; it never reopens the caller-supplied path.
+    pub(crate) fn register_observed_original_root(&mut self, root: &Path) -> Result<()> {
+        let root = root.to_path_buf();
+        validate_original_roots(std::slice::from_ref(&root))?;
+        self.ensure_resolved_original_separate(&root)?;
+        self.persist_original_root(&root)
+    }
+    fn persist_original_root(&mut self, root: &Path) -> Result<()> {
+        let mut roots = self.original_root_review()?.roots;
+        if roots.iter().any(|existing| existing == root) {
+            return Ok(());
+        }
+        roots.push(root.to_path_buf());
+        validate_original_roots(&roots)?;
+        let encoded = encode_path(root)?;
+        let tx = self.db.transaction()?;
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO original_roots(path) VALUES(?1)",
+            [&encoded],
+        )?;
+        if inserted != 0 {
+            tx.execute(
+                "UPDATE original_root_review SET storage_epoch=NULL WHERE id=1",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    fn root(&self, tier: Tier) -> &Path {
+        match tier {
+            Tier::Thumbnail => &self.config.thumbnail_root,
+            Tier::Large => &self.config.large_root,
+        }
+    }
+    fn path(&self, key: &str, tier: Tier) -> Result<PathBuf> {
+        ensure!(
+            key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid manifest object key"
+        );
+        Ok(match self.config.layout {
+            Layout::Flat => self.root(tier).join(key),
+            Layout::HashPrefix => self.root(tier).join(&key[..2]).join(&key[2..4]).join(key),
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn test_object_path(&self, key: &PreviewKey) -> Result<PathBuf> {
+        key.validate()?;
+        self.path(&key.digest()?, key.tier)
+    }
+    fn cache_object(
+        &self,
+        key: &str,
+        tier: Tier,
+    ) -> Result<crate::catalog_session::preview_io::Object> {
+        let files = self
+            .managed_files
+            .as_ref()
+            .context("managed cache filesystem missing")?;
+        let object = crate::catalog_session::preview_io::Object {
+            root: files.cache_root(self.root(tier))?,
+            key: key.into(),
+        };
+        object.validate()?;
+        Ok(object)
+    }
+    fn cache_expected(
+        &self,
+        key: &str,
+        tier: Tier,
+        bytes: u64,
+        checksum: &str,
+    ) -> Result<crate::catalog_session::preview_io::Expected> {
+        Ok(crate::catalog_session::preview_io::Expected {
+            object: self.cache_object(key, tier)?,
+            bytes: crate::application::U64(bytes),
+            checksum: checksum.into(),
+        })
+    }
+    fn ensure_parent(&self, tier: Tier, key: &str) -> Result<()> {
+        if self.managed_files.is_some() {
+            return Ok(());
+        }
+        if self.config.layout == Layout::Flat {
+            return Ok(());
+        }
+        let mut parent = self.root(tier).to_owned();
+        for part in [&key[..2], &key[2..4]] {
+            let next = parent.join(part);
+            match fs::create_dir(&next) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    File::open(&parent)?.sync_all()?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => ensure!(
+                    fs::symlink_metadata(&next)?.file_type().is_dir(),
+                    "cache shard is not a real directory"
+                ),
+                Err(error) => return Err(error.into()),
+            }
+            parent = next;
+        }
+        Ok(())
+    }
+    fn clock(&self) -> Result<i64> {
+        let next = self
+            .clock
+            .get()
+            .checked_add(1)
+            .context("cache clock overflow")?;
+        self.clock.set(next);
+        Ok(next)
+    }
+    /// Recency is auxiliary and batched, never one durable write per thumbnail.
+    /// Service maintenance flushes at page boundaries; eviction flushes first.
+    pub fn flush_touches(&self) -> Result<()> {
+        if self.touches.borrow().is_empty() {
+            return Ok(());
+        }
+        self.db.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<()> {
+            let mut update = self
+                .db
+                .prepare("UPDATE objects SET touched=?2 WHERE key=?1")?;
+            for (key, touched) in self.touches.borrow().iter() {
+                update.execute(params![key, touched])?;
+            }
+            Ok(())
+        })();
+        finish(&self.db, result)?;
+        self.touches.borrow_mut().clear();
+        Ok(())
+    }
+    /// The service owner registers a fresh catalog identity and its currently
+    /// selected preview policy. Workers may publish, but must never register keys.
+    /// Policy changes can replace the desired key without inventing a photo edit.
+    pub(crate) fn scoped_desired(&self, key: &PreviewKey) -> Result<bool> {
+        Ok(self.db.query_row(
+            "SELECT image_pixel_generation IS NOT NULL FROM wanted WHERE asset=?1 AND variant=?2 AND tier=?3 AND channel=?4",
+            params![key.asset_id, key.variant_id, key.tier.name(), key.channel()],
+            |row| row.get(0),
+        ).optional()?.unwrap_or(false))
+    }
+    pub fn desire(&self, key: &PreviewKey, authority: impl Fn() -> Result<bool>) -> Result<()> {
+        let digest = key.digest()?;
+        ensure!(authority()?, "stale catalog identity");
+        let old: Option<(i64, Option<i64>)> = self
+            .db
+            .query_row(
+                "SELECT generation,image_pixel_generation FROM wanted WHERE asset=?1 AND variant=?2 AND tier=?3 AND channel=?4",
+                params![key.asset_id, key.variant_id, key.tier.name(), key.channel()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((generation, image)) = old {
+            let current = match (image, key.image_pixel_generation) {
+                (None, None) => key.generation >= generation as u64,
+                (None, Some(_)) => true, // Explicit one-way namespace upgrade.
+                (Some(_), None) => false,
+                (Some(old), Some(new)) => {
+                    key.generation > generation as u64
+                        || (key.generation == generation as u64 && new >= old as u64)
+                }
+            };
+            ensure!(
+                current,
+                "stale catalog generation or image namespace downgrade"
+            );
+        }
+        self.db.execute("INSERT INTO wanted(asset,variant,tier,generation,desired,current,channel,image_pixel_generation) VALUES(?1,?2,?3,?4,?5,NULL,?6,?7) ON CONFLICT(asset,variant,tier,channel) DO UPDATE SET generation=excluded.generation,desired=excluded.desired,image_pixel_generation=excluded.image_pixel_generation",params![key.asset_id,key.variant_id,key.tier.name(),key.generation as i64,digest,key.channel(),key.image_pixel_generation.map(|n|n as i64)])?;
+        Ok(())
+    }
+    fn desired(&self, key: &PreviewKey, digest: &str) -> Result<bool> {
+        Ok(self.db.query_row("SELECT desired=?4 AND generation=?5 FROM wanted WHERE asset=?1 AND variant=?2 AND tier=?3 AND channel=?6",params![key.asset_id,key.variant_id,key.tier.name(),digest,key.generation as i64,key.channel()],|r|r.get::<_,bool>(0)).optional()?.unwrap_or(false))
+    }
+    pub fn usage(&self) -> Result<StoreUsage> {
+        let used = |tier: &str| {
+            self.db
+                .query_row("SELECT bytes FROM usage WHERE tier=?1", [tier], |r| {
+                    unsigned(r, 0)
+                })
+        };
+        Ok(StoreUsage {
+            thumbnail_bytes: used("thumbnail")?,
+            large_bytes: used("large")?,
+            pending_objects: self.db.query_row(
+                "SELECT coalesce(sum(pending),0) FROM usage",
+                [],
+                |r| unsigned(r, 0),
+            )?,
+            objects: self
+                .db
+                .query_row("SELECT coalesce(sum(objects),0) FROM usage", [], |r| {
+                    unsigned(r, 0)
+                })?,
+        })
+    }
+    fn make_room(&self, tier: Tier, bytes: u64) -> Result<()> {
+        if tier == Tier::Large {
+            self.flush_touches()?;
+        }
+        let budget = match tier {
+            Tier::Thumbnail => self.config.thumbnail_bytes,
+            Tier::Large => self.config.large_bytes,
+        };
+        if bytes > budget {
+            return Err(CacheQuotaExceeded("preview exceeds tier quota").into());
+        }
+        for _ in 0..128 {
+            let used: u64 = self.db.query_row(
+                "SELECT bytes FROM usage WHERE tier=?1",
+                [tier.name()],
+                |r| unsigned(r, 0),
+            )?;
+            if used <= budget - bytes {
+                return Ok(());
+            }
+            if tier != Tier::Large {
+                return Err(CacheQuotaExceeded(
+                    "retained thumbnail quota exhausted; previous thumbnails preserved",
+                )
+                .into());
+            }
+            let oldest:Option<String>=self.db.query_row("SELECT key FROM objects WHERE tier='large' AND status='ready' ORDER BY touched,key LIMIT 1",[],|r|r.get(0)).optional()?;
+            let Some(oldest) = oldest else {
+                return Err(
+                    CacheQuotaExceeded("large-preview quota reserved by pending work").into(),
+                );
+            };
+            self.remove(&oldest, tier)?;
+        }
+        Err(CacheQuotaExceeded(
+            "large-cache eviction batch exhausted; retry on a later service tick",
+        )
+        .into())
+    }
+    fn remove(&self, digest: &str, tier: Tier) -> Result<()> {
+        self.touches.borrow_mut().remove(digest);
+        let temporary: Option<String> = if self.managed_files.is_some() {
+            let mut statement = self
+                .db
+                .prepare("SELECT temporary FROM objects WHERE key=?1")?;
+            let mut rows = statement.query([digest])?;
+            rows.next()?
+                .map(|row| custody::object_text(row, 0).map(str::to_owned))
+                .transpose()?
+        } else {
+            self.db
+                .query_row(
+                    "SELECT temporary FROM objects WHERE key=?1",
+                    [digest],
+                    |row| row.get(0),
+                )
+                .optional()?
+        };
+        if let Some(files) = &self.managed_files {
+            files.cache_call(crate::catalog_session::preview_io::Action::Remove {
+                object: self.cache_object(digest, tier)?,
+                temporary,
+            })?;
+        } else {
+            if let Some(temporary) = temporary {
+                ensure!(
+                    temporary.starts_with(digest)
+                        && temporary.ends_with(".pending")
+                        && !temporary.contains('/')
+                        && !temporary.contains('\\'),
+                    "invalid temporary object name"
+                );
+                let destination = self.path(digest, tier)?;
+                match fs::remove_file(destination.parent().unwrap().join(temporary)) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            match fs::remove_file(self.path(digest, tier)?) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        self.db.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<()> {
+            self.db
+                .execute("UPDATE wanted SET current=NULL WHERE current=?1", [digest])?;
+            self.db
+                .execute("DELETE FROM objects WHERE key=?1", [digest])?;
+            Ok(())
+        })();
+        finish(&self.db, result)
+    }
+    /// Stage outside catalog locks, then ask the catalog authority to run a short
+    /// attachment closure while holding its revision transaction. The authority
+    /// must return Stale without calling the closure if the identity changed.
+    /// This avoids a check-then-attach race between independent SQLite stores.
+    pub fn publish(
+        &self,
+        key: &PreviewKey,
+        bytes: &[u8],
+        authorize: impl FnOnce(&mut dyn FnMut() -> Result<Publication>) -> Result<Publication>,
+    ) -> Result<Publication> {
+        self.publish_controlled(key, bytes, authorize, || Ok(()))
+    }
+    pub fn publish_record(
+        &self,
+        key: &PreviewKey,
+        bytes: &[u8],
+        record: &RenderRecord,
+        authorize: impl FnOnce(&mut dyn FnMut() -> Result<Publication>) -> Result<Publication>,
+    ) -> Result<Publication> {
+        self.publish_inner(key, bytes, Some(record), authorize, || Ok(()))
+    }
+    fn publish_controlled(
+        &self,
+        key: &PreviewKey,
+        bytes: &[u8],
+        authorize: impl FnOnce(&mut dyn FnMut() -> Result<Publication>) -> Result<Publication>,
+        before_write: impl FnOnce() -> Result<()>,
+    ) -> Result<Publication> {
+        self.publish_inner(key, bytes, None, authorize, before_write)
+    }
+    fn publish_inner(
+        &self,
+        key: &PreviewKey,
+        bytes: &[u8],
+        record: Option<&RenderRecord>,
+        authorize: impl FnOnce(&mut dyn FnMut() -> Result<Publication>) -> Result<Publication>,
+        before_write: impl FnOnce() -> Result<()>,
+    ) -> Result<Publication> {
+        ensure!(!self.relocation_pending()?, "cache relocation in progress");
+        let digest = key.digest()?;
+        let record = record.map(|record| record.encoded(key)).transpose()?;
+        ensure!(
+            !bytes.is_empty() && bytes.len() <= 256 * 1024 * 1024,
+            "encoded preview size limit"
+        );
+        if !self.desired(key, &digest)? {
+            return Ok(Publication::Stale);
+        }
+        if self.current_is_intact(key)? && (record.is_none() || self.render_record(key)?.is_some())
+        {
+            return authorize(&mut || {
+                if self.desired(key, &digest)? {
+                    Ok(Publication::AlreadyPresent)
+                } else {
+                    Ok(Publication::Stale)
+                }
+            });
+        }
+        let status: Option<String> = self
+            .db
+            .query_row("SELECT status FROM objects WHERE key=?1", [&digest], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if status.is_some() {
+            self.remove(&digest, key.tier)?;
+        }
+        let destination = self.path(&digest, key.tier)?;
+        let parent = destination.parent().unwrap();
+        self.ensure_parent(key.tier, &digest)?;
+        ensure!(
+            !destination.exists(),
+            "untracked immutable destination requires recovery"
+        );
+        self.make_room(key.tier, bytes.len() as u64)?;
+        let temporary = format!("{}.{}.pending", digest, uuid::Uuid::new_v4());
+        let temporary_path = parent.join(&temporary);
+        let checksum = blake3::hash(bytes).to_hex().to_string();
+        self.db.execute(
+            "INSERT INTO objects VALUES(?1,?2,?3,?4,?5,'pending',?6,?7)",
+            params![
+                digest,
+                serde_json::to_string(key)?,
+                key.tier.name(),
+                bytes.len() as i64,
+                checksum,
+                temporary,
+                self.clock()?
+            ],
+        )?;
+        let written = if let Some(files) = &self.managed_files {
+            (|| -> Result<()> {
+                before_write()?;
+                let _timing = crate::import_timing::Span::start(crate::import_timing::Stage::CacheWrite);
+                files.cache_write(
+                    self.cache_expected(&digest, key.tier, bytes.len() as u64, &checksum)?,
+                    &temporary,
+                    bytes,
+                )
+            })()
+        } else {
+            (|| -> Result<()> {
+                let mut file = File::options()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary_path)?;
+                before_write()?;
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                ensure!(
+                    !destination.exists(),
+                    "immutable preview destination already exists"
+                );
+                fs::rename(&temporary_path, &destination)?;
+                #[cfg(unix)]
+                File::open(parent)?.sync_all()?;
+                Ok(())
+            })()
+        };
+        if let Err(error) = written {
+            if self.managed_files.is_none() {
+                let _ = fs::remove_file(&temporary_path);
+            }
+            self.remove(&digest, key.tier)?;
+            return Err(error.context("preview staging failed; prior current thumbnail retained"));
+        }
+        let mut previous = None;
+        let mut called = false;
+        let mut attachment = || -> Result<Publication> {
+            ensure!(!called, "attachment may run only once");
+            called = true;
+            if !self.desired(key, &digest)? {
+                return Ok(Publication::Stale);
+            }
+            previous = self.db.query_row(
+                "SELECT current FROM wanted WHERE asset=?1 AND variant=?2 AND tier=?3 AND channel=?4",
+                params![key.asset_id, key.variant_id, key.tier.name(), key.channel()],
+                |r| r.get::<_, Option<String>>(0),
+            )?;
+            self.db.execute_batch("BEGIN IMMEDIATE")?;
+            let result = (|| -> Result<()> {
+                if let Some(old) = &previous
+                    && old != &digest
+                {
+                    self.db
+                        .execute("UPDATE objects SET status='orphan' WHERE key=?1", [old])?;
+                }
+                if let Some(record) = &record {
+                    self.db.execute(
+                        "INSERT INTO render_records VALUES(?1,?2)",
+                        params![digest, record],
+                    )?;
+                }
+                self.db
+                    .execute("UPDATE objects SET status='ready' WHERE key=?1", [&digest])?;
+                let changed=self.db.execute("UPDATE wanted SET current=?4 WHERE asset=?1 AND variant=?2 AND tier=?3 AND desired=?4 AND generation=?5 AND channel=?6",params![key.asset_id,key.variant_id,key.tier.name(),digest,key.generation as i64,key.channel()])?;
+                ensure!(changed == 1, "stale preview attachment");
+                Ok(())
+            })();
+            finish(&self.db, result)?;
+            Ok(Publication::Attached)
+        };
+        let outcome = authorize(&mut attachment);
+        match outcome {
+            Ok(Publication::Attached) => {
+                ensure!(called, "authority did not run attachment");
+                // Cleanup is outside the short catalog authority transaction.
+                if let Some(old) = previous
+                    && old != digest
+                {
+                    let _ = self.remove(&old, key.tier);
+                }
+                Ok(Publication::Attached)
+            }
+            other => {
+                // A catalog commit failure after attachment must not delete the
+                // newly attached file: current-key validation remains mandatory.
+                let ready: bool = self.db.query_row(
+                    "SELECT status='ready' FROM objects WHERE key=?1",
+                    [&digest],
+                    |r| r.get(0),
+                )?;
+                if !ready {
+                    self.remove(&digest, key.tier)?;
+                }
+                other
+            }
+        }
+    }
+    /// Durable queue records are bounded by the service's request admission. An
+    /// import job is removed only after its catalog ready transaction commits.
+    pub(crate) fn save_job(&self, id: &str, descriptor: &str, limit: usize) -> Result<()> {
+        ensure!(
+            id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid job identity"
+        );
+        ensure!(
+            descriptor.len() <= 64 * 1024 && (1..=100_000).contains(&limit),
+            "job journal limit"
+        );
+        let exists: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM render_jobs WHERE id=?1)",
+            [id],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            let count: u64 = self
+                .db
+                .query_row("SELECT count(*) FROM render_jobs", [], |r| unsigned(r, 0))?;
+            ensure!(count < limit as u64, "durable preview queue full");
+        }
+        self.db.execute("INSERT INTO render_jobs VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET descriptor=excluded.descriptor",params![id,descriptor,self.clock()?])?;
+        Ok(())
+    }
+    pub(crate) fn saved_jobs(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<(i64, String, String)>> {
+        ensure!((1..=1000).contains(&limit), "job recovery page limit");
+        let mut statement=self.db.prepare("SELECT created,id,descriptor FROM render_jobs WHERE created>?1 ORDER BY created,id LIMIT ?2")?;
+        let mut rows = statement.query(params![after, limit as i64])?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id = custody::object_text(row, 1)?;
+            ensure!(
+                id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid saved job identity"
+            );
+            let descriptor = custody::object_text(row, 2)?;
+            ensure!(
+                descriptor.len() <= 64 * 1024,
+                "saved job descriptor size limit"
+            );
+            result.push((row.get(0)?, id.to_owned(), descriptor.to_owned()));
+        }
+        Ok(result)
+    }
+    pub(crate) fn finish_job(&self, id: &str) -> Result<()> {
+        self.db
+            .execute("DELETE FROM render_jobs WHERE id=?1", [id])?;
+        Ok(())
+    }
+    pub fn render_record(&self, key: &PreviewKey) -> Result<Option<RenderRecord>> {
+        let value: Option<String> = if self.managed_files.is_some() {
+            let mut statement=self.db.prepare("SELECT r.record FROM render_records r JOIN objects o ON o.key=r.key WHERE r.key=?1 AND o.status='ready'")?;
+            let mut rows = statement.query([key.digest()?])?;
+            rows.next()?
+                .map(|row| -> Result<String> {
+                    let value = custody::object_text(row, 0)?;
+                    ensure!(value.len() <= 64 * 1024, "render record size limit");
+                    Ok(value.to_owned())
+                })
+                .transpose()?
+        } else {
+            self.db.query_row("SELECT r.record FROM render_records r JOIN objects o ON o.key=r.key WHERE r.key=?1 AND o.status='ready'",[key.digest()?],|r|r.get(0)).optional()?
+        };
+        value
+            .map(|value| {
+                ensure!(value.len() <= 64 * 1024, "render record size limit");
+                let record: RenderRecord = serde_json::from_str(&value)?;
+                record.encoded(key)?;
+                Ok(record)
+            })
+            .transpose()
+    }
+    /// Invalid image data cannot remain a permanent cache hit. The service passes
+    /// the actual returned key, including when an old fallback failed decoding.
+    pub fn invalidate(&self, key: &PreviewKey) -> Result<()> {
+        self.remove(&key.digest()?, key.tier)
+    }
+    /// Check immutable current-object integrity with fixed-size scratch. Duplicate
+    /// publication must not allocate a second encoded object beside the incoming one.
+    pub fn current_is_intact(&self, expected: &PreviewKey) -> Result<bool> {
+        let digest = expected.digest()?;
+        let row: Option<(u64, String)> = self.db.query_row(
+            "SELECT o.bytes,o.checksum FROM wanted w JOIN objects o ON o.key=w.current WHERE w.asset=?1 AND w.variant=?2 AND w.tier=?3 AND w.channel=?5 AND o.key=?4 AND o.status='ready'",
+            params![expected.asset_id, expected.variant_id, expected.tier.name(), digest, expected.channel()],
+            |r| Ok((unsigned(r, 0)?, r.get(1)?)),
+        ).optional()?;
+        let Some((len, checksum)) = row else {
+            return Ok(false);
+        };
+        let valid = if let Some(files) = &self.managed_files {
+            if len > 256 * 1024 * 1024 {
+                Ok(false)
+            } else {
+                match files.cache_call(crate::catalog_session::preview_io::Action::Check(
+                    self.cache_expected(&digest, expected.tier, len, &checksum)?,
+                ))? {
+                    crate::catalog_session::preview_io::Value::Integrity(value) => {
+                        Ok(value == crate::catalog_session::preview_io::Integrity::Intact)
+                    }
+                    _ => bail!("unexpected cache integrity result"),
+                }
+            }
+        } else {
+            (|| -> Result<bool> {
+                let mut file = File::open(self.path(&digest, expected.tier)?)?;
+                if len > 256 * 1024 * 1024 || file.metadata()?.len() != len {
+                    return Ok(false);
+                }
+                let mut hash = blake3::Hasher::new();
+                let mut scratch = [0; 16384];
+                let mut total = 0u64;
+                loop {
+                    let count = file.read(&mut scratch)?;
+                    if count == 0 {
+                        break;
+                    }
+                    total += count as u64;
+                    if total > len {
+                        return Ok(false);
+                    }
+                    hash.update(&scratch[..count]);
+                }
+                Ok(total == len && hash.finalize().to_hex().as_str() == checksum)
+            })()
+        };
+        match valid {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                self.remove(&digest, expected.tier)?;
+                Ok(false)
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                self.remove(&digest, expected.tier)?;
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    /// Only a thumbnail may be returned as an explicitly stale offline fallback.
+    /// The caller provides a fresh catalog identity on each visible request.
+    pub fn read(&self, expected: &PreviewKey, allow_stale: bool) -> Result<Option<CachedPreview>> {
+        self.read_limited(expected, allow_stale, 256 * 1024 * 1024)
+    }
+    /// Reject over-budget objects before allocating their bytes. A serial service
+    /// reader passes its remaining encoded staging allowance here.
+    pub fn read_limited(
+        &self,
+        expected: &PreviewKey,
+        allow_stale: bool,
+        max_bytes: u64,
+    ) -> Result<Option<CachedPreview>> {
+        expected.validate()?;
+        let row:Option<(String,String,u64,String)>=self.db.query_row("SELECT o.key,o.descriptor,o.bytes,o.checksum FROM wanted w JOIN objects o ON o.key=w.current WHERE w.asset=?1 AND w.variant=?2 AND w.tier=?3 AND w.channel=?4 AND o.status='ready'",params![expected.asset_id,expected.variant_id,expected.tier.name(),expected.channel()],|r|Ok((r.get(0)?,r.get(1)?,unsigned(r,2)?,r.get(3)?))).optional()?;
+        let Some((digest, descriptor, len, checksum)) = row else {
+            return Ok(None);
+        };
+        let key: PreviewKey = serde_json::from_str(&descriptor)?;
+        let stale = key != *expected;
+        if stale && !(allow_stale && expected.tier == Tier::Thumbnail) {
+            return Ok(None);
+        }
+        ensure!(
+            key.digest()? == digest
+                && key.asset_id == expected.asset_id
+                && key.variant_id == expected.variant_id
+                && key.channel() == expected.channel()
+                && key.tier == expected.tier,
+            "manifest descriptor identity mismatch"
+        );
+        let bytes = if let Some(files) = &self.managed_files {
+            if len > 256 * 1024 * 1024 {
+                self.remove(&digest, key.tier)?;
+                bail!("cached preview length mismatch; entry invalidated");
+            }
+            let (integrity, bytes) = files.cache_read(
+                self.cache_expected(&digest, key.tier, len, &checksum)?,
+                max_bytes,
+            )?;
+            match integrity {
+                crate::catalog_session::preview_io::Integrity::Missing => {
+                    self.remove(&digest, key.tier)?;
+                    return Ok(None);
+                }
+                crate::catalog_session::preview_io::Integrity::Corrupt => {
+                    self.remove(&digest, key.tier)?;
+                    bail!("cached preview length mismatch; entry invalidated");
+                }
+                crate::catalog_session::preview_io::Integrity::Intact => bytes,
+            }
+        } else {
+            let mut file = match File::open(self.path(&digest, key.tier)?) {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    self.remove(&digest, key.tier)?;
+                    return Ok(None);
+                }
+                Err(e) => return Err(e.into()),
+            };
+            if len > 256 * 1024 * 1024 || file.metadata()?.len() != len {
+                drop(file);
+                self.remove(&digest, key.tier)?;
+                bail!("cached preview length mismatch; entry invalidated");
+            }
+            if len > max_bytes {
+                return Err(super::EncodedBudgetExceeded.into());
+            }
+            let mut bytes = vec![0; len as usize];
+            let read = file.read_exact(&mut bytes);
+            let mut extra = [0];
+            if read.is_err()
+                || file.read(&mut extra)? != 0
+                || blake3::hash(&bytes).to_hex().as_str() != checksum
+            {
+                self.remove(&digest, key.tier)?;
+                bail!("cached preview checksum mismatch; entry invalidated");
+            }
+            bytes
+        };
+        self.touches.borrow_mut().insert(digest, self.clock()?);
+        if self.touches.borrow().len() >= 256 {
+            self.flush_touches()?;
+        }
+        let record = self.render_record(&key)?;
+        Ok(Some(CachedPreview {
+            key,
+            bytes,
+            stale,
+            record,
+        }))
+    }
+    pub(crate) fn select_managed_read(
+        &self,
+        expected: &PreviewKey,
+        allow_stale: bool,
+        max_bytes: u64,
+    ) -> Result<Option<ManagedSelection>> {
+        expected.validate()?;
+        let (digest, key, len, checksum) = {
+            let mut statement=self.db.prepare("SELECT o.key,o.descriptor,o.bytes,o.checksum FROM wanted w JOIN objects o ON o.key=w.current WHERE w.asset=?1 AND w.variant=?2 AND w.tier=?3 AND w.channel=?4 AND o.status='ready'")?;
+            let mut rows = statement.query(params![
+                expected.asset_id,
+                expected.variant_id,
+                expected.tier.name(),
+                expected.channel()
+            ])?;
+            let Some(row) = rows.next()? else {
+                return Ok(None);
+            };
+            let digest = custody::object_text(row, 0)?;
+            let descriptor = custody::object_text(row, 1)?;
+            let checksum = custody::object_text(row, 3)?;
+            crate::catalog_session::preview_io::hex(digest)?;
+            crate::catalog_session::preview_io::hex(checksum)?;
+            let key: PreviewKey = serde_json::from_str(descriptor)?;
+            (
+                digest.to_owned(),
+                key,
+                unsigned(row, 2)?,
+                checksum.to_owned(),
+            )
+        };
+        let stale = key != *expected;
+        if stale && !(allow_stale && expected.tier == Tier::Thumbnail) {
+            return Ok(None);
+        }
+        ensure!(
+            key.digest()? == digest
+                && key.asset_id == expected.asset_id
+                && key.variant_id == expected.variant_id
+                && key.channel() == expected.channel()
+                && key.tier == expected.tier,
+            "manifest descriptor identity mismatch"
+        );
+        if len > 256 * 1024 * 1024 {
+            self.db
+                .execute("UPDATE objects SET status='orphan' WHERE key=?1", [&digest])?;
+            anyhow::bail!("cached preview length mismatch; entry invalidated");
+        }
+        if len > max_bytes {
+            return Err(
+                anyhow::Error::new(super::EncodedBudgetExceeded).context(format!(
+                    "selected cache requires {len} encoded bytes; admitted {max_bytes}"
+                )),
+            );
+        }
+        let record = self.render_record(&key)?;
+        Ok(Some(ManagedSelection {
+            expected: self.cache_expected(&digest, key.tier, len, &checksum)?,
+            files: self
+                .managed_files
+                .as_ref()
+                .context("managed cache filesystem missing")?
+                .clone(),
+            cached: CachedPreview {
+                key,
+                bytes: Vec::new(),
+                stale,
+                record,
+            },
+        }))
+    }
+    pub(crate) fn finish_managed_read(
+        &self,
+        key: &PreviewKey,
+        integrity: crate::catalog_session::preview_io::Integrity,
+    ) -> Result<bool> {
+        let digest = key.digest()?;
+        if integrity != crate::catalog_session::preview_io::Integrity::Intact {
+            // SQL invalidation is immediate; existing bounded recovery owns the
+            // eventual F removal. Actor ticks do not wait for object cleanup IO.
+            self.db
+                .execute("UPDATE objects SET status='orphan' WHERE key=?1", [&digest])?;
+            self.touches.borrow_mut().remove(&digest);
+            ensure!(
+                integrity == crate::catalog_session::preview_io::Integrity::Missing,
+                "cached preview checksum mismatch; entry invalidated"
+            );
+            return Ok(false);
+        }
+        self.touches.borrow_mut().insert(digest, self.clock()?);
+        if self.touches.borrow().len() >= 256 {
+            self.flush_touches()?;
+        }
+        Ok(true)
+    }
+    /// Bounded maintenance; startup performs one batch, subsequent service ticks
+    /// can finish remaining pending/orphan cleanup without loading the catalog.
+    pub fn recover(&self, limit: usize) -> Result<usize> {
+        ensure!((1..=1024).contains(&limit), "recovery batch limit");
+        let mut query=self.db.prepare("SELECT o.key,o.descriptor,o.temporary FROM objects o WHERE o.status IN ('pending','orphan') ORDER BY o.status,o.key LIMIT ?1")?;
+        let rows = if self.managed_files.is_some() {
+            // First pass validates borrowed cells and aggregate retained row bytes.
+            // No name/String allocation or filesystem effect precedes admission.
+            let mut count = 0usize;
+            let mut retained = 0usize;
+            {
+                let mut cursor = query.query([limit as i64])?;
+                while let Some(row) = cursor.next()? {
+                    count += 1;
+                    retained = retained
+                        .checked_add(std::mem::size_of::<(String, String, String)>())
+                        .context("cache recovery count overflow")?;
+                    for column in 0..3 {
+                        retained = retained
+                            .checked_add(custody::object_text(row, column)?.len())
+                            .context("cache recovery byte overflow")?;
+                    }
+                    ensure!(
+                        retained <= crate::catalog_session::ENVELOPE_BYTES,
+                        crate::catalog_session::store::ResourceLimit(
+                            "Cache recovery batch exceeds 1 MiB metadata admission; retry a smaller batch; no filesystem effect occurred"
+                        )
+                    );
+                }
+            }
+            let mut values = Vec::new();
+            values.try_reserve_exact(count)?;
+            let mut cursor = query.query([limit as i64])?;
+            let mut second_bytes = 0usize;
+            while let Some(row) = cursor.next()? {
+                let cells = [
+                    custody::object_text(row, 0)?,
+                    custody::object_text(row, 1)?,
+                    custody::object_text(row, 2)?,
+                ];
+                second_bytes = second_bytes
+                    .checked_add(
+                        std::mem::size_of::<(String, String, String)>()
+                            + cells.iter().map(|v| v.len()).sum::<usize>(),
+                    )
+                    .context("cache recovery byte overflow")?;
+                ensure!(
+                    second_bytes <= retained,
+                    crate::catalog_session::store::ResourceLimit(
+                        "Cache recovery metadata grew after admission; retry the batch; no filesystem effect occurred"
+                    )
+                );
+                ensure!(
+                    values.len() < count,
+                    "cache recovery rows changed during admission"
+                );
+                values.push((
+                    cells[0].to_owned(),
+                    cells[1].to_owned(),
+                    cells[2].to_owned(),
+                ));
+            }
+            ensure!(
+                values.len() == count,
+                "cache recovery rows changed during admission"
+            );
+            values
+        } else {
+            query
+                .query_map([limit as i64], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        drop(query);
+        for (digest, descriptor, temporary) in &rows {
+            let key: PreviewKey = serde_json::from_str(descriptor)?;
+            ensure!(
+                !temporary.contains('/') && !temporary.contains('\\'),
+                "invalid temporary cache name"
+            );
+            if let Some(files) = &self.managed_files {
+                files.cache_call(crate::catalog_session::preview_io::Action::Remove {
+                    object: self.cache_object(digest, key.tier)?,
+                    temporary: Some(temporary.clone()),
+                })?;
+            } else {
+                let parent = self.path(digest, key.tier)?.parent().unwrap().to_owned();
+                match fs::remove_file(parent.join(temporary)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            self.remove(digest, key.tier)?;
+        }
+        Ok(rows.len())
+    }
+}
+fn unsigned(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(index)?;
+    value.try_into().map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })
+}
+
+fn finish(db: &Connection, result: Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => match db.execute_batch("COMMIT") {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // Deferred constraints and some I/O failures leave the
+                // transaction open. Never leak provisional state into reuse.
+                if !db.is_autocommit() {
+                    let _ = db.execute_batch("ROLLBACK");
+                }
+                Err(error.into())
+            }
+        },
+        Err(e) => {
+            let _ = db.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+fn prospective(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut base = absolute.as_path();
+    let mut missing = Vec::new();
+    while !base.exists() {
+        missing.push(base.file_name().context("invalid cache path")?.to_owned());
+        base = base.parent().context("invalid cache ancestor")?;
+    }
+    let mut resolved = fs::canonicalize(base)?;
+    for part in missing.into_iter().rev() {
+        ensure!(
+            part != ".." && part != ".",
+            "cache path contains unresolved traversal"
+        );
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn managed_recovery_admits_long_legacy_temporary_but_rejects_sql_overbudget_before_effects()
+    -> Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct RemoveFiles {
+            root: PathBuf,
+            calls: AtomicUsize,
+        }
+        impl AdmittedStoreFiles for RemoveFiles {
+            fn lock_tiers(&self, _: &StoreConfig, _: &str) -> Result<Arc<dyn Send + Sync>> {
+                bail!("unused")
+            }
+            fn cache_root(&self, _: &Path) -> Result<crate::catalog_session::LeaseId> {
+                Ok(crate::catalog_session::LeaseId::new())
+            }
+            fn cache_call(
+                &self,
+                action: crate::catalog_session::preview_io::Action,
+            ) -> Result<crate::catalog_session::preview_io::Value> {
+                let crate::catalog_session::preview_io::Action::Remove { object, temporary } =
+                    action
+                else {
+                    bail!("unexpected fixture call")
+                };
+                let parent = self.root.join(&object.key[..2]).join(&object.key[2..4]);
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                for path in temporary
+                    .iter()
+                    .map(|name| parent.join(name))
+                    .chain(std::iter::once(parent.join(&object.key)))
+                {
+                    match fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+                Ok(crate::catalog_session::preview_io::Value::Unit)
+            }
+        }
+        let root = tempfile::tempdir()?;
+        let config = config(root.path(), 100, 100);
+        let mut store = PreviewStore::open(config.clone(), &[])?;
+        let key = key(1, Tier::Thumbnail);
+        let digest = key.digest()?;
+        store.desire(&key, || Ok(true))?;
+        store.publish(&key, b"original", authority)?;
+        let long = format!("{}.{}.pending", digest, "legacy".repeat(20));
+        assert!(long.len() > 128 && long.len() < 255);
+        let object = store.path(&digest, key.tier)?;
+        let temporary = object.parent().unwrap().join(&long);
+        fs::write(&temporary, b"pending")?;
+        store.db.execute(
+            "UPDATE objects SET status='pending',temporary=?1 WHERE key=?2",
+            params![long, digest],
+        )?;
+        let files = Arc::new(RemoveFiles {
+            root: config.thumbnail_root,
+            calls: AtomicUsize::new(0),
+        });
+        store.managed_files = Some(files.clone());
+        assert_eq!(store.recover(1)?, 1);
+        assert!(!temporary.exists() && !object.exists());
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT count(*) FROM objects", [], |r| r.get::<_, i64>(0))?,
+            0
+        );
+        store.managed_files = None;
+        store.publish(&key, b"original", authority)?;
+        store.db.execute(
+            "UPDATE objects SET status='pending',temporary=?1 WHERE key=?2",
+            params![
+                "x".repeat(crate::catalog_session::ENVELOPE_BYTES + 1),
+                digest
+            ],
+        )?;
+        store.managed_files = Some(files.clone());
+        let before = files.calls.load(Ordering::SeqCst);
+        assert!(
+            store
+                .recover(1)
+                .unwrap_err()
+                .is::<crate::catalog_session::store::ResourceLimit>()
+        );
+        assert!(
+            store
+                .invalidate(&key)
+                .unwrap_err()
+                .is::<crate::catalog_session::store::ResourceLimit>()
+        );
+        assert_eq!(files.calls.load(Ordering::SeqCst), before);
+        assert_eq!(fs::read(&object)?, b"original");
+        store.db.execute(
+            "UPDATE objects SET temporary=zeroblob(64) WHERE key=?1",
+            [&digest],
+        )?;
+        assert!(store.recover(1).is_err());
+        assert!(store.invalidate(&key).is_err());
+        assert_eq!(files.calls.load(Ordering::SeqCst), before);
+        assert_eq!(fs::read(object)?, b"original");
+        Ok(())
+    }
+    #[test]
+    fn managed_unlink_failure_retains_sql_current_and_quota_until_success() -> Result<()> {
+        struct Denied;
+        impl AdmittedStoreFiles for Denied {
+            fn lock_tiers(
+                &self,
+                _: &StoreConfig,
+                _: &str,
+            ) -> Result<std::sync::Arc<dyn Send + Sync>> {
+                bail!("unused")
+            }
+            fn cache_root(&self, _: &Path) -> Result<crate::catalog_session::LeaseId> {
+                Ok(crate::catalog_session::LeaseId::new())
+            }
+            fn cache_call(
+                &self,
+                _: crate::catalog_session::preview_io::Action,
+            ) -> Result<crate::catalog_session::preview_io::Value> {
+                Err(crate::filesystem_worker::wire::Failure::new(
+                    crate::filesystem_worker::wire::FailureKind::Unknown,
+                    "injected unlink failure",
+                )
+                .into())
+            }
+        }
+        let root = tempfile::tempdir()?;
+        let mut store = PreviewStore::open(config(root.path(), 100, 100), &[])?;
+        let key = key(1, Tier::Thumbnail);
+        store.desire(&key, || Ok(true))?;
+        store.publish(&key, b"unchanged", authority)?;
+        store.managed_files = Some(std::sync::Arc::new(Denied));
+        assert!(store.invalidate(&key).is_err());
+        let row: (String, u64) = store.db.query_row(
+            "SELECT status,bytes FROM objects WHERE key=?1",
+            [key.digest()?],
+            |r| Ok((r.get(0)?, unsigned(r, 1)?)),
+        )?;
+        assert_eq!(row, ("ready".into(), 9));
+        let current: Option<String> =
+            store
+                .db
+                .query_row("SELECT current FROM wanted", [], |r| r.get(0))?;
+        assert_eq!(current, Some(key.digest()?));
+        store.managed_files = None;
+        assert_eq!(store.read(&key, false)?.unwrap().bytes, b"unchanged");
+        store.invalidate(&key)?;
+        assert!(store.read(&key, false)?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn failed_commit_rolls_back_provisional_state_and_allows_reuse() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON;
+            CREATE TABLE parent(id INTEGER PRIMARY KEY);
+            CREATE TABLE publication(id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED,state TEXT);
+            CREATE TABLE job(id INTEGER PRIMARY KEY);
+            INSERT INTO job VALUES(1);
+            BEGIN IMMEDIATE;
+            INSERT INTO publication VALUES(42,'ready');
+            DELETE FROM job;").unwrap();
+        let error = finish(&db, Ok(())).unwrap_err();
+        assert!(error.to_string().contains("FOREIGN KEY"));
+        assert!(db.is_autocommit());
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM publication", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM job", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        db.execute_batch("BEGIN IMMEDIATE; INSERT INTO parent VALUES(42); INSERT INTO publication VALUES(42,'ready'); DELETE FROM job;").unwrap();
+        finish(&db, Ok(())).unwrap();
+        assert!(db.is_autocommit());
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM publication", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn every_pair_of_cache_roots_must_be_disjoint_before_creation() {
+        for left in 0..3 {
+            for right in 0..3 {
+                if left == right {
+                    continue;
+                }
+                for nested in [false, true] {
+                    let root = tempfile::tempdir().unwrap();
+                    let mut roots = [
+                        root.path().join("manifest"),
+                        root.path().join("thumb"),
+                        root.path().join("large"),
+                    ];
+                    roots[right] = if nested {
+                        roots[left].join("nested")
+                    } else {
+                        roots[left].clone()
+                    };
+                    let cfg = StoreConfig {
+                        manifest_root: roots[0].clone(),
+                        thumbnail_root: roots[1].clone(),
+                        large_root: roots[2].clone(),
+                        layout: Layout::HashPrefix,
+                        thumbnail_bytes: 100,
+                        large_bytes: 100,
+                    };
+                    assert!(PreviewStore::open(cfg, &[]).is_err());
+                    assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+                }
+            }
+        }
+    }
+    fn config(root: &Path, thumb: u64, large: u64) -> StoreConfig {
+        StoreConfig {
+            manifest_root: root.join("manifest"),
+            layout: Layout::HashPrefix,
+            thumbnail_root: root.join("thumb"),
+            large_root: root.join("large"),
+            thumbnail_bytes: thumb,
+            large_bytes: large,
+        }
+    }
+    fn key(generation: u64, tier: Tier) -> PreviewKey {
+        PreviewKey {
+            image_pixel_generation: None,
+            asset_id: "asset".into(),
+            variant_id: "master".into(),
+            generation,
+            fingerprint: "a".repeat(64),
+            edit_revision: generation,
+            renderer_version: "test-1".into(),
+            preparation_version: PREPARATION_VERSION.into(),
+            tier,
+            edge: 256,
+            encoding: CodecSettings {
+                codec: super::super::Codec::Jpeg,
+                quality: 65,
+            },
+        }
+    }
+    fn authority(attach: &mut dyn FnMut() -> Result<Publication>) -> Result<Publication> {
+        attach()
+    }
+    #[test]
+    fn relocation_progress_survives_reopen_and_tracks_copy_and_cleanup() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let cfg = config(root.path(), 1000, 1000);
+        let mut store = PreviewStore::open(cfg.clone(), &[])?;
+        for asset in ["one", "two"] {
+            let mut key = key(1, Tier::Thumbnail);
+            key.asset_id = asset.into();
+            store.desire(&key, || Ok(true))?;
+            store.publish(&key, b"preview", authority)?;
+        }
+        store.begin_relocation(Tier::Thumbnail, &root.path().join("moved"), &[])?;
+        let first = store.relocation_step(Tier::Thumbnail, 1, 1024)?;
+        assert_eq!(first.processed, 1);
+        drop(store);
+        let cfg = PreviewStore::current_configuration(cfg)?;
+        let mut store = PreviewStore::open(cfg, &[])?;
+        let state = store.relocation_snapshot()?.unwrap();
+        assert_eq!(state.phase, "copy");
+        assert_eq!(
+            (
+                state.objects,
+                state.bytes,
+                state.total_objects,
+                state.total_bytes
+            ),
+            (Some(1), Some(7), Some(2), Some(14))
+        );
+        store.relocation_step(Tier::Thumbnail, 10, 1024)?;
+        let state = store.relocation_snapshot()?.unwrap();
+        assert_eq!(state.phase, "cleanup");
+        assert_eq!((state.objects, state.bytes), (Some(0), Some(0)));
+        store.relocation_step(Tier::Thumbnail, 1, 1024)?;
+        let state = store.relocation_snapshot()?.unwrap();
+        assert_eq!((state.objects, state.bytes), (Some(1), Some(7)));
+        store.relocation_step(Tier::Thumbnail, 10, 1024)?;
+        assert!(store.relocation_snapshot()?.is_none());
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT count(*) FROM relocation_progress", [], |r| r
+                    .get::<_, i64>(0))?,
+            0
+        );
+        Ok(())
+    }
+    #[test]
+    fn version_five_inflight_relocation_retains_unknown_counts_without_backfill() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let cfg = config(root.path(), 1000, 1000);
+        let mut store = PreviewStore::open(cfg.clone(), &[])?;
+        store.begin_relocation(Tier::Large, &root.path().join("moved"), &[])?;
+        store
+            .db
+            .execute_batch("DROP TABLE relocation_progress; PRAGMA user_version=5;")?;
+        drop(store);
+        let mut store = PreviewStore::open(cfg, &[])?;
+        assert_eq!(
+            store
+                .db
+                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
+            6
+        );
+        let state = store.relocation_snapshot()?.unwrap();
+        assert_eq!(state.phase, "copy");
+        assert!(state.objects.is_none());
+        store.relocation_step(Tier::Large, 1, 1024)?;
+        store.relocation_step(Tier::Large, 1, 1024)?;
+        assert!(store.relocation_snapshot()?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn offline_fallback_and_quota_preserve_previous_thumbnail() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), 10, 10);
+        let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+        let old = key(1, Tier::Thumbnail);
+        store.desire(&old, || Ok(true)).unwrap();
+        assert_eq!(
+            store.publish(&old, b"oldbytes", authority).unwrap(),
+            Publication::Attached
+        );
+        let new = key(2, Tier::Thumbnail);
+        store.desire(&new, || Ok(true)).unwrap();
+        assert!(store.read(&new, false).unwrap().is_none());
+        let fallback = store.read(&new, true).unwrap().unwrap();
+        assert!(fallback.stale);
+        assert_eq!(fallback.bytes, b"oldbytes");
+        assert!(store.publish(&new, b"newbytes", authority).is_err());
+        assert_eq!(store.read(&new, true).unwrap().unwrap().bytes, b"oldbytes");
+        drop(store);
+        let store = PreviewStore::open(cfg, &[]).unwrap();
+        assert!(store.read(&new, true).unwrap().unwrap().stale);
+        assert_eq!(store.usage().unwrap().thumbnail_bytes, 8);
+        assert!(store.desire(&old, || Ok(true)).is_err());
+    }
+    fn record(label: &str) -> RenderRecord {
+        RenderRecord {
+            edit_input: None,
+            width: 2,
+            height: 1,
+            metadata: crate::media::Metadata {
+                format: "test".into(),
+                width: 20,
+                height: 10,
+                orientation: 1,
+                camera_make: None,
+                camera_model: None,
+                captured_at: None,
+                lens: None,
+                preview_source: label.into(),
+            },
+            provenance: crate::media::RenderProvenance {
+                pipeline_version: label.into(),
+                decoder: "test".into(),
+                source_bits_per_channel: 16,
+                source_color: "linear".into(),
+                working_color: "linear sRGB".into(),
+                alpha: "straight".into(),
+                calibration: None,
+                spatial_calibration: None,
+                notes: vec![],
+            },
+        }
+    }
+    #[test]
+    fn render_record_count_preserves_json_and_enforces_encoded_boundary() -> Result<()> {
+        let key = key(1, Tier::Thumbnail);
+        let normal = record("quoted \" newline\n Unicode é");
+        assert_eq!(normal.encoded(&key)?, serde_json::to_string(&normal)?);
+        let mut value = record("");
+        let fixed = serde_json::to_vec(&value)?.len();
+        value.metadata.preview_source = "a".repeat(64 * 1024 - fixed);
+        let boundary = value.encoded(&key)?;
+        assert_eq!(boundary.len(), 64 * 1024);
+        assert_eq!(boundary, serde_json::to_string(&value)?);
+        value.metadata.preview_source.push('a');
+        assert!(
+            value
+                .encoded(&key)
+                .unwrap_err()
+                .to_string()
+                .contains("render record size limit")
+        );
+        // The input is well below 64KiB, but escaping expands it over the cap.
+        value.metadata.preview_source = "\0".repeat((64 * 1024 - fixed) / 6 + 1);
+        assert!(value.metadata.preview_source.len() < 64 * 1024);
+        assert!(serde_json::to_vec(&value)?.len() > 64 * 1024);
+        assert!(
+            value
+                .encoded(&key)
+                .unwrap_err()
+                .to_string()
+                .contains("render record size limit")
+        );
+        value.metadata.preview_source = "retry".into();
+        assert_eq!(value.encoded(&key)?, serde_json::to_string(&value)?);
+        Ok(())
+    }
+    #[test]
+    fn fallback_keeps_its_own_render_record_through_interrupted_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), 100, 100);
+        let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+        let old = key(1, Tier::Thumbnail);
+        store.desire(&old, || Ok(true)).unwrap();
+        store
+            .publish_record(&old, b"old", &record("old renderer"), authority)
+            .unwrap();
+        let new = key(2, Tier::Thumbnail);
+        store.desire(&new, || Ok(true)).unwrap();
+        assert!(
+            store
+                .publish_record(&new, b"new", &record("new renderer"), |_| bail!(
+                    "owner interrupted"
+                ))
+                .is_err()
+        );
+        drop(store);
+        let store = PreviewStore::open(cfg, &[]).unwrap();
+        let fallback = store.read(&new, true).unwrap().unwrap();
+        assert!(fallback.stale);
+        assert_eq!(
+            fallback.record.unwrap().provenance.pipeline_version,
+            "old renderer"
+        );
+        assert!(store.render_record(&new).unwrap().is_none());
+        store
+            .publish_record(&new, b"new", &record("new renderer"), authority)
+            .unwrap();
+        assert_eq!(
+            store
+                .read(&new, false)
+                .unwrap()
+                .unwrap()
+                .record
+                .unwrap()
+                .metadata
+                .preview_source,
+            "new renderer"
+        );
+        assert!(store.render_record(&old).unwrap().is_none());
+    }
+    #[test]
+    fn manifest_record_migration_retains_old_opaque_objects_without_inventing_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), 100, 100);
+        let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+        let key = key(1, Tier::Thumbnail);
+        store.desire(&key, || Ok(true)).unwrap();
+        store.publish(&key, b"old", authority).unwrap();
+        store
+            .db
+            .execute_batch(
+                "DROP TABLE render_records; DROP TABLE render_jobs;
+                ALTER TABLE wanted RENAME TO current_wanted; DROP INDEX wanted_current;
+                CREATE TABLE wanted(asset TEXT NOT NULL,variant TEXT NOT NULL,tier TEXT NOT NULL,generation INTEGER NOT NULL,desired TEXT NOT NULL,current TEXT,PRIMARY KEY(asset,variant,tier));
+                INSERT INTO wanted SELECT asset,variant,tier,generation,desired,current FROM current_wanted;
+                DROP TABLE current_wanted; CREATE INDEX wanted_current ON wanted(current);
+                PRAGMA user_version=1;",
+            )
+            .unwrap();
+        drop(store);
+        let store = PreviewStore::open(cfg, &[]).unwrap();
+        let old = store.read(&key, false).unwrap().unwrap();
+        assert_eq!(old.bytes, b"old");
+        assert!(old.record.is_none());
+    }
+    #[test]
+    fn channels_migrate_atomically_and_preserve_refined_objects() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), 1000, 1000);
+        let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+        let refined = key(1, Tier::Thumbnail);
+        store.desire(&refined, || Ok(true)).unwrap();
+        store
+            .publish(&refined, b"original-preview", authority)
+            .unwrap();
+        store.db.execute_batch("ALTER TABLE wanted RENAME TO wanted_v3; DROP INDEX wanted_current;
+            CREATE TABLE wanted(asset TEXT NOT NULL,variant TEXT NOT NULL,tier TEXT NOT NULL,generation INTEGER NOT NULL,desired TEXT NOT NULL,current TEXT,PRIMARY KEY(asset,variant,tier));
+            INSERT INTO wanted SELECT asset,variant,tier,generation,desired,current FROM wanted_v3;
+            DROP TABLE wanted_v3; CREATE INDEX wanted_current ON wanted(current);
+            PRAGMA user_version=2;
+            CREATE TABLE wanted_v2(blocker INTEGER);").unwrap();
+        drop(store);
+        assert!(PreviewStore::open(cfg.clone(), &[]).is_err());
+        let db = Connection::open(cfg.manifest_root.join("previews.sqlite3")).unwrap();
+        assert_eq!(
+            db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.query_row("SELECT current FROM wanted", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            refined.digest().unwrap()
+        );
+        db.execute_batch("DROP TABLE wanted_v2").unwrap();
+        drop(db);
+        let store = PreviewStore::open(cfg, &[]).unwrap();
+        assert_eq!(
+            store.read(&refined, false).unwrap().unwrap().bytes,
+            b"original-preview"
+        );
+        let mut interactive = refined.clone();
+        interactive.renderer_version = "test-renderer:proxy1600".into();
+        store.desire(&interactive, || Ok(true)).unwrap();
+        store
+            .publish(&interactive, b"interactive-preview", authority)
+            .unwrap();
+        assert_eq!(
+            store.read(&refined, false).unwrap().unwrap().bytes,
+            b"original-preview"
+        );
+        assert_eq!(
+            store.read(&interactive, false).unwrap().unwrap().bytes,
+            b"interactive-preview"
+        );
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT count(*) FROM wanted", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+    #[test]
+    fn encoded_read_budget_rejects_without_invalidating_retained_thumbnail() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreviewStore::open(config(root.path(), 100, 100), &[]).unwrap();
+        let key = key(1, Tier::Thumbnail);
+        store.desire(&key, || Ok(true)).unwrap();
+        store.publish(&key, b"eightbit", authority).unwrap();
+        let error = store.read_limited(&key, false, 7).err().unwrap();
+        assert!(
+            error
+                .downcast_ref::<super::super::EncodedBudgetExceeded>()
+                .is_some()
+        );
+        assert_eq!(store.usage().unwrap().thumbnail_bytes, 8);
+        assert_eq!(
+            store.read_limited(&key, false, 8).unwrap().unwrap().bytes,
+            b"eightbit"
+        );
+    }
+    #[test]
+    fn sqlite_full_preserves_retained_state_and_allows_journal_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreviewStore::open(config(root.path(), 100, 100), &[]).unwrap();
+        let old = key(1, Tier::Thumbnail);
+        store.desire(&old, || Ok(true)).unwrap();
+        store.publish(&old, b"old", authority).unwrap();
+        let pages: i64 = store
+            .db
+            .query_row("PRAGMA page_count", [], |r| r.get(0))
+            .unwrap();
+        store
+            .db
+            .pragma_update(None, "max_page_count", pages)
+            .unwrap();
+        let id = "a".repeat(64);
+        let error = store.save_job(&id, &"x".repeat(64000), 10).unwrap_err();
+        assert!(
+            matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if code.extended_code == rusqlite::ffi::SQLITE_FULL)
+        );
+        assert!(store.db.is_autocommit());
+        assert!(store.saved_jobs(0, 10).unwrap().is_empty());
+        assert_eq!(store.read(&old, false).unwrap().unwrap().bytes, b"old");
+        assert_eq!(store.usage().unwrap().pending_objects, 0);
+        let integrity: String = store
+            .db
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        store
+            .db
+            .pragma_update(None, "max_page_count", pages + 128)
+            .unwrap();
+        store.save_job(&id, &"x".repeat(64000), 10).unwrap();
+        assert_eq!(store.saved_jobs(0, 10).unwrap().len(), 1);
+    }
+    #[test]
+    fn failed_write_and_stale_catalog_authority_do_not_attach() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreviewStore::open(config(root.path(), 100, 100), &[]).unwrap();
+        let old = key(1, Tier::Thumbnail);
+        store.desire(&old, || Ok(true)).unwrap();
+        store.publish(&old, b"old", authority).unwrap();
+        let new = key(2, Tier::Thumbnail);
+        store.desire(&new, || Ok(true)).unwrap();
+        assert!(
+            store
+                .publish_controlled(&new, b"new", authority, || {
+                    // Write a real partial staging file before injecting ENOSPC.
+                    let destination = store.path(&new.digest()?, new.tier)?;
+                    let pending = fs::read_dir(destination.parent().unwrap())?
+                        .map(|entry| entry.map(|e| e.path()))
+                        .collect::<std::io::Result<Vec<_>>>()?
+                        .into_iter()
+                        .find(|p| p.extension().is_some_and(|e| e == "pending"))
+                        .context("created staging file missing")?;
+                    fs::write(pending, b"par")?;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::StorageFull,
+                        "injected disk full after partial staging write",
+                    )
+                    .into())
+                })
+                .is_err()
+        );
+        assert_eq!(store.usage().unwrap().pending_objects, 0);
+        assert_eq!(store.read(&new, true).unwrap().unwrap().bytes, b"old");
+        assert_eq!(
+            store
+                .publish(&new, b"new", |_| Ok(Publication::Stale))
+                .unwrap(),
+            Publication::Stale
+        );
+        assert_eq!(store.read(&new, true).unwrap().unwrap().bytes, b"old");
+        assert_eq!(
+            store.publish(&new, b"new", authority).unwrap(),
+            Publication::Attached
+        );
+        assert_eq!(store.read(&new, false).unwrap().unwrap().bytes, b"new");
+        assert_eq!(store.usage().unwrap().thumbnail_bytes, 3);
+    }
+    #[test]
+    fn interrupted_staging_recovers_without_discarding_retained_fallback() {
+        for renamed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let cfg = config(root.path(), 100, 100);
+            let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+            let old = key(1, Tier::Thumbnail);
+            store.desire(&old, || Ok(true)).unwrap();
+            store.publish(&old, b"old", authority).unwrap();
+            let new = key(2, Tier::Thumbnail);
+            store.desire(&new, || Ok(true)).unwrap();
+            let digest = new.digest().unwrap();
+            let destination = store.path(&digest, new.tier).unwrap();
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            let temporary = format!("{digest}.interrupted.pending");
+            store
+                .db
+                .execute(
+                    "INSERT INTO objects VALUES(?1,?2,'thumbnail',3,?3,'pending',?4,?5)",
+                    params![
+                        digest,
+                        serde_json::to_string(&new).unwrap(),
+                        blake3::hash(b"new").to_hex().to_string(),
+                        temporary,
+                        store.clock().unwrap()
+                    ],
+                )
+                .unwrap();
+            let path = if renamed {
+                destination.clone()
+            } else {
+                destination.parent().unwrap().join(&temporary)
+            };
+            fs::write(&path, b"new").unwrap();
+            drop(store);
+            let store = PreviewStore::open(cfg, &[]).unwrap();
+            assert!(!path.exists());
+            assert_eq!(store.usage().unwrap().pending_objects, 0);
+            assert_eq!(store.read(&new, true).unwrap().unwrap().bytes, b"old");
+        }
+    }
+    #[test]
+    fn large_lru_eviction_does_not_evict_retained_tier() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreviewStore::open(config(root.path(), 8, 8), &[]).unwrap();
+        let thumb = key(1, Tier::Thumbnail);
+        store.desire(&thumb, || Ok(true)).unwrap();
+        store.publish(&thumb, b"thumb", authority).unwrap();
+        let a = key(1, Tier::Large);
+        store.desire(&a, || Ok(true)).unwrap();
+        store.publish(&a, b"large-a", authority).unwrap();
+        let mut b = a.clone();
+        b.asset_id = "second".into();
+        store.desire(&b, || Ok(true)).unwrap();
+        store.publish(&b, b"large-b", authority).unwrap();
+        assert!(store.read(&a, false).unwrap().is_none());
+        assert!(store.read(&b, false).unwrap().is_some());
+        assert!(store.read(&thumb, false).unwrap().is_some());
+        assert_eq!(store.usage().unwrap().large_bytes, 7);
+    }
+    #[test]
+    fn corruption_invalidates_and_allows_regeneration() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreviewStore::open(config(root.path(), 100, 100), &[]).unwrap();
+        let key = key(1, Tier::Thumbnail);
+        store.desire(&key, || Ok(true)).unwrap();
+        store.publish(&key, b"valid", authority).unwrap();
+        let path = store.path(&key.digest().unwrap(), key.tier).unwrap();
+        fs::write(path, b"wrong").unwrap();
+        assert!(store.read(&key, false).is_err());
+        assert_eq!(store.usage().unwrap().thumbnail_bytes, 0);
+        store.publish(&key, b"valid", authority).unwrap();
+        assert_eq!(store.read(&key, false).unwrap().unwrap().bytes, b"valid");
+    }
+    #[test]
+    fn source_admission_tracks_both_relocation_roots_until_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = PreviewStore::open(config(root.path(), 100, 100), &[]).unwrap();
+        let k = key(1, Tier::Thumbnail);
+        store.desire(&k, || Ok(true)).unwrap();
+        store.publish(&k, b"original", authority).unwrap();
+        let old = store.config.thumbnail_root.clone();
+        let moved = root.path().join("moved");
+        assert!(
+            store
+                .ensure_original_separate(&root.path().join("offline/missing.png"))
+                .is_ok()
+        );
+        store
+            .begin_relocation(Tier::Thumbnail, &moved, &[])
+            .unwrap();
+        assert!(
+            store
+                .ensure_original_separate(&moved.join("missing.png"))
+                .is_err()
+        );
+        assert!(
+            store
+                .ensure_original_separate(&old.join("missing.png"))
+                .is_err()
+        );
+        let step = store.relocation_step(Tier::Thumbnail, 2, 100).unwrap();
+        assert_eq!(step.phase, "cleanup");
+        assert!(
+            store
+                .ensure_original_separate(&old.join("missing.png"))
+                .is_err()
+        );
+        assert!(
+            store
+                .ensure_original_separate(&moved.join("missing.png"))
+                .is_err()
+        );
+        assert!(
+            store
+                .relocation_step(Tier::Thumbnail, 2, 100)
+                .unwrap()
+                .complete
+        );
+        assert!(
+            store
+                .ensure_original_separate(&old.join("missing.png"))
+                .is_ok()
+        );
+        assert!(
+            store
+                .ensure_original_separate(&moved.join("missing.png"))
+                .is_err()
+        );
+    }
+    #[test]
+    fn original_overlap_and_conflicting_process_owner_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), 100, 100);
+        assert!(PreviewStore::open(cfg.clone(), &[root.path().to_owned()]).is_err());
+        assert!(!cfg.manifest_root.exists());
+        let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+        assert!(PreviewStore::open(cfg.clone(), &[]).is_err());
+        drop(store);
+        let mut changed = cfg;
+        changed.thumbnail_root = root.path().join("elsewhere");
+        assert!(PreviewStore::open(changed, &[]).is_err());
+    }
+    #[test]
+    fn f_observed_original_root_persists_without_reopen_and_invalidates_review() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let cfg = config(root.path(), 100, 100);
+        let mut store = PreviewStore::open(cfg, &[])?;
+        let cache = store.configuration().thumbnail_root.clone();
+        let first = root.path().join("observed-but-now-offline");
+        store.register_observed_original_root(&first)?;
+        store.replace_original_root_review(std::slice::from_ref(&first), 17)?;
+        assert_eq!(store.original_root_review()?.storage_epoch, Some(17));
+        store.register_observed_original_root(&first)?;
+        assert_eq!(store.original_root_review()?.storage_epoch, Some(17));
+
+        let second = root.path().join("second-observed-root");
+        store.register_observed_original_root(&second)?;
+        let review = store.original_root_review()?;
+        assert_eq!(review.roots, vec![first, second]);
+        assert_eq!(review.storage_epoch, None);
+        assert!(
+            store
+                .register_observed_original_root(&cache.join("overlap"))
+                .is_err()
+        );
+        Ok(())
+    }
+    #[test]
+    fn scoped_namespace_upgrade_reopen_preserves_newer_pending_pixels() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = config(root.path(), 1000, 1000);
+        let store = PreviewStore::open(cfg.clone(), &[]).unwrap();
+        let legacy = key(9, Tier::Thumbnail);
+        store.desire(&legacy, || Ok(true)).unwrap();
+        store.publish(&legacy, b"legacy", authority).unwrap();
+        let mut scoped = key(0, Tier::Thumbnail);
+        scoped.image_pixel_generation = Some(5);
+        store.desire(&scoped, || Ok(true)).unwrap();
+        store
+            .save_job(
+                &"a".repeat(64),
+                &serde_json::json!({"request":{"keys":[scoped]}}).to_string(),
+                10,
+            )
+            .unwrap();
+        // Recreate the brief schema3 scoped-key layout: no wanted namespace,
+        // a queued scoped job, and only an old unscoped current object.
+        store
+            .db
+            .execute_batch(
+                "ALTER TABLE wanted DROP COLUMN image_pixel_generation; PRAGMA user_version=3;",
+            )
+            .unwrap();
+        drop(store);
+        let store = PreviewStore::open(cfg, &[]).unwrap();
+        assert!(store.desire(&legacy, || Ok(true)).is_err());
+        let mut older = scoped.clone();
+        older.image_pixel_generation = Some(4);
+        assert!(store.desire(&older, || Ok(true)).is_err());
+        assert!(store.read(&scoped, false).unwrap().is_none());
+        let fallback = store.read(&scoped, true).unwrap().unwrap();
+        assert!(fallback.stale);
+        assert_eq!(fallback.key, legacy);
+        let mut newer = scoped.clone();
+        newer.image_pixel_generation = Some(6);
+        store.desire(&newer, || Ok(true)).unwrap();
+        assert!(store.desire(&scoped, || Ok(true)).is_err());
+        let mut sibling = scoped;
+        sibling.variant_id = "independent-copy".into();
+        store.desire(&sibling, || Ok(true)).unwrap();
+    }
+}
+
+#[cfg(test)]
+#[path = "store_lock_tests.rs"]
+mod lock_tests;
+
+#[cfg(test)]
+#[path = "store_query_tests.rs"]
+mod query_tests;

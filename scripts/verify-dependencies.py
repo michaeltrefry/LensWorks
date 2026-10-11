@@ -3,10 +3,11 @@
 import json
 import pathlib
 import subprocess
+import catalog_source
 
 root = pathlib.Path(__file__).resolve().parents[1]
 manifest = json.loads((root / 'DEPENDENCIES.json').read_text())
-for name in ('Compositor', 'PhotoCatalog'):
+for name in ('Compositor',):
     item = manifest[name]
     source = root / item['source']
     revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
@@ -14,6 +15,7 @@ for name in ('Compositor', 'PhotoCatalog'):
         raise SystemExit(f'{name}: unexpected revision {revision}')
     if subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True).strip():
         raise SystemExit(f'{name}: frozen source has local changes')
+catalog_source.verify()
 resolved = json.loads((root / 'native/Compositor.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved').read_text())
 sparkle = next(pin for pin in resolved['pins'] if pin['identity'] == 'sparkle')
 if sparkle['state']['revision'] != manifest['Sparkle']['revision']:
@@ -26,4 +28,4 @@ for name, expected in manifest.get('native_formulae', {}).items():
     actual = pathlib.Path('/opt/homebrew/opt', name).resolve().name
     if actual != expected:
         raise SystemExit(f'{name}: expected installed formula {expected}, found {actual}')
-print('Frozen source and native library revisions verified; Sparkle is a baseline reference only.')
+print('Compositor pin, owned catalog source digest and native library revisions verified; Sparkle is a baseline reference only.')

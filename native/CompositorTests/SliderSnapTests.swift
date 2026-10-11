@@ -16,6 +16,9 @@ struct SliderSnapTests {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         defer { window.orderOut(nil) }
+        // A cell lays out its track only when drawn; a real press always lands
+        // on a drawn slider, so draw before pressing.
+        window.displayIfNeeded()
 
         let cell = try #require(slider.cell as? NSSliderCell)
         let press = NSPoint(x: slider.bounds.width * 0.9, y: slider.bounds.midY)

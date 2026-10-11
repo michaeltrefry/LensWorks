@@ -1,0 +1,38 @@
+name: Rust catalog engine and adapter tests
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions: {contents: read}
+jobs:
+  cargo-test:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 4
+      MACOSX_DEPLOYMENT_TARGET: "26.2"
+    steps:
+      - uses: actions/checkout@v4
+        # The engine and adapter build only from in-tree sources; the
+        # vendor/Compositor submodule is not part of either cargo build.
+        with: {submodules: false}
+      - name: Use persistent runner caches for the SDK and cargo target
+        # Outside the workspace (which checkout cleans) so the self-hosted
+        # runner reuses the download and builds incrementally.
+        run: |
+          cache="$HOME/.cache/lensworks-ci"
+          mkdir -p "$cache"
+          echo "CARGO_TARGET_DIR=$cache/rust-tests-target" >> "$GITHUB_ENV"
+          python3 engines/catalog/scripts/fetch_dng_sdk.py --destination "$cache/deps"
+          echo "PHOTOCATALOG_DNG_SDK=$cache/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1" >> "$GITHUB_ENV"
+      - name: Engine tests
+        timeout-minutes: 40
+        run: cargo test --manifest-path engines/catalog/Cargo.toml --locked
+      - name: Engine maximum-size Source fixtures (serial, production deadline)
+        timeout-minutes: 20
+        # Excluded from the parallel run above so their 120 s per-query production
+        # deadline measures the Source path, not contention from other tests.
+        run: cargo test --manifest-path engines/catalog/Cargo.toml --locked --lib -- --ignored --test-threads=1 proxy::budget_tests
+      - name: Adapter tests
+        timeout-minutes: 30
+        run: cargo test --manifest-path adapters/catalog/Cargo.toml --locked

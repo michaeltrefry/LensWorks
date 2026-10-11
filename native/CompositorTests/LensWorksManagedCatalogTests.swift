@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import Testing
+import CryptoKit
 @testable import Compositor
 
 @Suite(.serialized)
@@ -57,19 +58,43 @@ nonisolated struct LensWorksManagedCatalogTests {
         }
     }
 
+    private func ownedCatalogAuthority(_ repository: URL) throws -> (digest: String, upstreamRevision: String) {
+        struct Dependencies: Decodable {
+            struct Catalog: Decodable { let revision: String, source: String, source_manifest: String, source_digest: String, upstream_snapshot_sha256: String }
+            let PhotoCatalog: Catalog
+        }
+        struct Manifest: Decodable { let schema: Int, algorithm: String, source_digest: String, upstream_snapshot_sha256: String }
+        struct Snapshot: Decodable { let schema: Int, revision: String }
+        let dependencies = try JSONDecoder().decode(Dependencies.self, from: Data(contentsOf: repository.appendingPathComponent("DEPENDENCIES.json"))).PhotoCatalog
+        guard dependencies.source == "engines/catalog", dependencies.source_manifest == "engines/catalog/SOURCE_PROVENANCE.json" else {
+            throw LensWorksManagedError.protocolViolation("The catalog source ledger does not identify LensWorks-owned engine files.")
+        }
+        let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: repository.appendingPathComponent(dependencies.source_manifest)))
+        let snapshotBytes = try Data(contentsOf: repository.appendingPathComponent("engines/catalog/UPSTREAM_SNAPSHOT.json"))
+        let snapshot = try JSONDecoder().decode(Snapshot.self, from: snapshotBytes)
+        guard manifest.schema == 1, snapshot.schema == 1, manifest.algorithm == "sha256-canonical-file-ledger-v1",
+              manifest.source_digest == dependencies.source_digest, manifest.source_digest == LWManagedAuthority.sourceRevision,
+              manifest.source_digest.count == 64, manifest.source_digest.allSatisfy({ "0123456789abcdef".contains($0) }),
+              Self.mathSHA(snapshotBytes) == manifest.upstream_snapshot_sha256,
+              manifest.upstream_snapshot_sha256 == dependencies.upstream_snapshot_sha256,
+              snapshot.revision == dependencies.revision, snapshot.revision != manifest.source_digest else {
+            throw LensWorksManagedError.protocolViolation("Owned runtime authority or distinct upstream snapshot provenance does not match the source ledger.")
+        }
+        return (manifest.source_digest, snapshot.revision)
+    }
     @Test func managedSourceAndProtocolMatchApprovedDependencyLedger() throws {
-        struct Ledger: Decodable { struct Pin: Decodable { let revision: String }; let PhotoCatalog: Pin }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let ledger = try JSONDecoder().decode(Ledger.self, from: Data(contentsOf: root.appendingPathComponent("DEPENDENCIES.json")))
-        #expect(LWManagedAuthority.sourceRevision == ledger.PhotoCatalog.revision)
+        let authority = try ownedCatalogAuthority(root)
+        #expect(LWManagedAuthority.sourceRevision == authority.digest)
+        #expect(LWManagedAuthority.sourceRevision != authority.upstreamRevision)
         #expect(LWManagedAuthority.protocolVersion == 2)
-        for revision in ["", "wrong-source", String(repeating: "0", count: 40)] {
+        for revision in ["", "wrong-source", String(repeating: "0", count: 64), authority.upstreamRevision] {
             let data = try JSONEncoder().encode(["session": "1", "phase": "ready", "source_revision": revision])
             #expect(throws: LensWorksManagedError.self) { try LWCatalogCodec.decode(LWManagedSessionAdmission.self, from: data) }
         }
-        // Authority is checked before the remaining descriptor fields, so unsupported
-        // protocol/source fixtures cannot be admitted even if geometry looks plausible.
-        for (revision, version) in [(ledger.PhotoCatalog.revision, 1), (ledger.PhotoCatalog.revision, 3), ("wrong-source", 2)] {
+        // The old upstream commit is provenance only. It must never admit a runtime
+        // owner/surface even when the protocol and geometry appear plausible.
+        for (revision, version) in [(authority.digest, 1), (authority.digest, 3), (authority.upstreamRevision, 2), ("wrong-source", 2)] {
             let data = try JSONSerialization.data(withJSONObject: ["source_revision": revision, "protocol": version, "kind": "float", "mime": "application/x-lensworks-rgba-f32le", "width": 2, "height": 2])
             #expect(throws: LensWorksManagedError.self) { try LWCatalogCodec.decode(LWManagedFloatDescriptor.self, from: data) }
         }
@@ -880,6 +905,552 @@ nonisolated struct LensWorksManagedCatalogTests {
         } catch { throw await fixture.failure(error) }
     }
 
+
+    @Test func actualLinearDNGFullFloatMatchesEveryReferencePixel() async throws {
+        try await mathematicalDNG("generated-linear-mask.dng")
+    }
+    @Test func actualCalibrationDNGFullFloatMatchesEveryReferencePixel() async throws {
+        try await mathematicalDNG("generated-calibration-mask.dng")
+    }
+    @Test func actualSpatialOneDNGFullFloatMatchesEveryReferencePixel() async throws {
+        try await mathematicalDNG("generated-spatial1-mask.dng")
+    }
+    @Test func actualSpatialTwoDNGFullFloatMatchesEveryReferencePixel() async throws {
+        try await mathematicalDNG("generated-spatial2-mask.dng")
+    }
+    private struct MathReference: Decodable {
+        let width: Int, height: Int
+        let linear_srgb: [[Double]], spatial_linear_srgb: [[[Double]]]
+        let alpha: [Double], calibration_applied: [Bool]
+    }
+    private static func mathSHA(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+    /// Checked-in, generator-produced fixtures (engines/catalog/tests/fixtures,
+    /// see its README). The independent per-pixel reference sits next to each DNG.
+    private static var fixtureDirectory: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("engines/catalog/tests/fixtures")
+    }
+    private func mathematicalDNG(_ filename: String) async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let authority = try ownedCatalogAuthority(repository)
+        let inputURL = Self.fixtureDirectory.appendingPathComponent(filename)
+        let referenceURL = Self.fixtureDirectory.appendingPathComponent((filename as NSString).deletingPathExtension + ".expected.json")
+        let sourceBytes = try Data(contentsOf: inputURL), referenceBytes = try Data(contentsOf: referenceURL)
+        let sourceSHA = Self.mathSHA(sourceBytes)
+        guard sourceBytes.count <= 1048576, referenceBytes.count <= 1048576 else { throw LensWorksManagedError.protocolViolation("DNG/reference fixture exceeds its 1MiB bound.") }
+        let expected = try JSONDecoder().decode(MathReference.self, from: referenceBytes)
+        let spatial = filename.contains("spatial"), rgbTolerance = spatial ? 0.002 : 0.001
+        guard expected.width == 36, expected.height == 16, expected.alpha.count == 6,
+              expected.linear_srgb.count == 6, expected.linear_srgb.allSatisfy({ $0.count == 3 && $0.allSatisfy(\.isFinite) }),
+              expected.alpha.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+              spatial ? (expected.spatial_linear_srgb.count == 16 && expected.spatial_linear_srgb.allSatisfy { $0.count == 36 && $0.allSatisfy { $0.count == 3 && $0.allSatisfy(\.isFinite) } }) : expected.spatial_linear_srgb.isEmpty else {
+            throw LensWorksManagedError.protocolViolation("Independent reference shape, finite values, or exact approved tolerances are invalid.")
+        }
+        let jobs = MathJobs()
+        let fixture = try await Fixture.create(copiedSource: inputURL, referenceJobs: jobs)
+        var passed = false
+        defer { if passed { fixture.removeIfClosed() } }
+        let session = fixture.session
+        var evidence: [String: Any] = ["status": "UNQUALIFIED_PENDING_ACTUAL_DECODE", "source": filename,
+            "inputSHA256": sourceSHA, "referenceSHA256": Self.mathSHA(referenceBytes),
+            "sourceRevision": session.sourceRevision, "protocol": LWManagedAuthority.protocolVersion,
+            "RGBToleranceStrict": rgbTolerance, "alphaToleranceStrict": 1e-6]
+        func writeEvidence() throws {
+            let data = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+            guard data.count <= 131072 else { throw LensWorksManagedError.protocolViolation("Math fixture evidence exceeds its 128KiB bound.") }
+            try data.write(to: fixture.root.appendingPathComponent("FullFloatReference.json"), options: .atomic)
+        }
+        func sourceUnchanged() throws {
+            guard Self.mathSHA(try Data(contentsOf: fixture.original)) == sourceSHA,
+                  Self.mathSHA(try Data(contentsOf: inputURL)) == sourceSHA else { throw LensWorksManagedError.protocolViolation("A protected mathematical fixture original changed.") }
+            guard try fixture.original.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == fixture.originalModified,
+                  Set(try FileManager.default.contentsOfDirectory(atPath: fixture.original.deletingLastPathComponent().path)) == Set([fixture.original.lastPathComponent]) else {
+                throw LensWorksManagedError.protocolViolation("A protected DNG source timestamp or directory membership changed.")
+            }
+        }
+        func identityJSON<Value: Encodable>(_ value: Value) throws -> LWCatalogJSON {
+            try LWCatalogCodec.decode(LWCatalogJSON.self, from: LWCatalogCodec.encode(value))
+        }
+        func readPlan(_ exportJob: String) async throws -> LWApplicationExportsDtoPlan {
+            let job = try await session.sourceIdentity(catalog: fixture.catalog, exportJob: exportJob, sequence: LWCatalogI64(1))
+            try jobs.retain(job)
+            let result = try await jobs.result(job)
+            var ownsBuffer = true
+            defer { if ownsBuffer { result.buffer.release() } }
+            let plan = try await result.decode(LWApplicationExportsDtoPlan.self, maximumBytes: 1048576)
+            result.buffer.release(); ownsBuffer = false
+            try await jobs.close(job)
+            return plan
+        }
+        do {
+            try sourceUnchanged()
+            let variantReply = try await jobs.perform(session, .Variant(catalog: fixture.catalog, key: fixture.key))
+            guard case .Variant(let variant) = variantReply else { throw unexpected("actual DNG Variant", variantReply) }
+            let begin = try await jobs.perform(session, .Export(catalog: fixture.catalog, request: .Begin))
+            guard case .Export(.Job(let exportJob)) = begin else { throw unexpected("actual DNG export plan owner", begin) }
+            let destination = fixture.root.appendingPathComponent("NeverPublished.tif")
+            let target = LWApplicationExportsDtoTarget(key: fixture.key, expected_revision: variant.revision,
+                destination: try LWCatalogNativePath(fileURL: destination), overwrite: false, metadata: .Omit)
+            let output = LWApplicationExportsDtoOutput(size: .Original, format: .Tiff(depth: .Float32), profile: .LinearSrgb, alpha: .Preserve)
+            let append = try await jobs.perform(session, .Export(catalog: fixture.catalog, request: .Append(job: exportJob.id, expected_total: LWCatalogI64(0), target: target, output: output,
+                budgets: LWApplicationExportsDtoBudgets(max_original_bytes: LWCatalogU64(1048576), max_payload_bytes: LWCatalogU64(1048576), alias_limits: LWApplicationExportsDtoAliasLimits(directories: LWCatalogU64(32), candidates: LWCatalogU64(256))))))
+            guard case .Export(.Operation(let appended)) = append, let appended else { throw unexpected("actual DNG Append operation", append) }
+            try await waitUntil {
+                let current = try await jobs.perform(session, .Export(catalog: fixture.catalog, request: .Status(operation: appended.id)))
+                guard case .Export(.Operation(let operation)) = current, let operation, operation.id == appended.id else { throw unexpected("matching DNG Append Status", current) }
+                guard !["failed", "canceled"].contains(operation.phase) else { throw unexpected("completed DNG Append", current) }
+                return operation.phase == "complete"
+            }
+            _ = try await jobs.perform(session, .Export(catalog: fixture.catalog, request: .Seal(job: exportJob.id, expected_total: LWCatalogI64(1))))
+            let plan = try await readPlan(exportJob.id)
+            guard plan.job == exportJob.id, plan.sequence.value == 1, !plan.authority.isEmpty,
+                  plan.original == (try LWCatalogNativePath(fileURL: fixture.original)),
+                  plan.identity.key.asset_id == fixture.key.asset_id, plan.identity.key.variant_id == fixture.key.variant_id,
+                  plan.identity.revision == variant.revision, plan.identity.recipe_digest == variant.recipe_digest else { throw LensWorksManagedError.protocolViolation("Real sealed Plan lost exact DNG source/edit authority.") }
+            evidence["planBefore"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(plan))
+            evidence["variantBefore"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(variant))
+            let decode = try await session.decodeFull(catalog: fixture.catalog, exportJob: exportJob.id, sequence: LWCatalogI64(1),
+                limits: .init(max_encoded_bytes: LWCatalogU64(1048576), max_intermediate_pixels: LWCatalogU64(10000), max_allocation_bytes: LWCatalogU64(1048576)),
+                workerBytes: LWCatalogU64(536870912), maximumOutputBytes: LWCatalogU64(9216))
+            try jobs.retain(decode)
+            let result = try await jobs.result(decode)
+            var ownsFloatBuffer = true
+            defer { if ownsFloatBuffer { result.buffer.release() } }
+            guard case .float(let descriptor) = result.descriptor else { throw LensWorksManagedError.protocolViolation("Expected actual DNG float payload; received \(result.descriptor).") }
+            let payload = try await result.buffer.copy(maximumBytes: 9216, expectedLength: result.length)
+            try payload.write(to: fixture.root.appendingPathComponent("Decoded.rgba-f32le"), options: .atomic)
+            evidence["payloadSHA256"] = Self.mathSHA(payload)
+            evidence["descriptor"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(descriptor))
+            try writeEvidence()
+            guard descriptor.width == 36, descriptor.height == 16, descriptor.row_stride.value == 576,
+                  descriptor.byte_length.value == 9216, result.length == 9216, payload.count == 9216,
+                  descriptor.channels == 4, descriptor.sample == "float32_le", descriptor.color_space == "linear_srgb",
+                  descriptor.alpha == "straight", descriptor.orientation == "applied",
+                  descriptor.source_revision == session.sourceRevision, descriptor.source_revision == authority.digest, descriptor.protocol == 2,
+                  descriptor.original == plan.original, descriptor.plan_authority == plan.authority,
+                  try identityJSON(descriptor.source_identity) == identityJSON(plan.identity),
+                  try identityJSON(descriptor.original_revision) == identityJSON(plan.original_revision) else { throw LensWorksManagedError.protocolViolation("Actual full-float descriptor changed geometry/protocol/source/physical revision/plan authority.") }
+            let samples = try await result.floatSamples(maximumBytes: 9216)
+            result.buffer.release(); ownsFloatBuffer = false
+            try await jobs.close(decode)
+            guard samples.count == 2304 else { throw LensWorksManagedError.protocolViolation("Actual DNG full-float frame is not exactly 2304 samples.") }
+            var maximumRGBError = 0.0, maximumAlphaError = 0.0, negative = false, hdr = false, partialAlpha = false
+            for y in 0..<16 { for x in 0..<36 {
+                for channel in 0..<4 {
+                    let index = (y * 36 + x) * 4 + channel, actual = Double(samples[index])
+                    let reference = channel == 3 ? expected.alpha[x % 6] : (spatial ? expected.spatial_linear_srgb[y][x][channel] : expected.linear_srgb[x % 6][channel])
+                    let tolerance = channel == 3 ? 1e-6 : rgbTolerance, delta = abs(actual - reference)
+                    guard actual.isFinite, channel != 3 || (0...1).contains(actual), delta < tolerance else {
+                        throw LensWorksManagedError.protocolViolation("\(filename) pixel(\(x),\(y)) channel\(channel), sample\(index): actual\(actual), expected\(reference), absolute error\(delta), strict tolerance\(tolerance). Full payload/descriptor retained at \(fixture.root.path).")
+                    }
+                    if channel == 3 { maximumAlphaError = max(maximumAlphaError, delta); partialAlpha = partialAlpha || (actual > 0 && actual < 1) }
+                    else { maximumRGBError = max(maximumRGBError, delta); negative = negative || actual < 0; hdr = hdr || actual > 1 }
+                }
+            } }
+            guard negative, hdr, partialAlpha else { throw LensWorksManagedError.protocolViolation("Actual DNG output omitted signed/HDR RGB or partial straight alpha.") }
+            if filename.contains("calibration") {
+                guard expected.calibration_applied.count == 6, let calibration = descriptor.provenance.calibration else { throw LensWorksManagedError.protocolViolation("Actual DNG calibration provenance is missing.") }
+                let applied = UInt64(expected.calibration_applied.filter { $0 }.count * 16 * 6)
+                guard applied == 288, calibration.applied_pixels == applied, calibration.bypassed_pixels == 576 - applied else { throw LensWorksManagedError.protocolViolation("Actual DNG calibration application/bypass counts differ from the independent mask.") }
+            } else if spatial {
+                guard let calibration = descriptor.provenance.spatial_calibration, calibration.applied_pixels == 576, calibration.bypassed_pixels == 0 else { throw LensWorksManagedError.protocolViolation("Actual spatial gain-map calibration did not cover all 576 pixels.") }
+            } else {
+                guard descriptor.provenance.calibration == nil, descriptor.provenance.spatial_calibration == nil else { throw LensWorksManagedError.protocolViolation("Matrix-only DNG unexpectedly applied LUT/spatial calibration.") }
+            }
+            let after = try await readPlan(exportJob.id)
+            let afterVariantReply = try await jobs.perform(session, .Variant(catalog: fixture.catalog, key: fixture.key))
+            guard case .Variant(let afterVariant) = afterVariantReply else { throw unexpected("DNG Variant after decode", afterVariantReply) }
+            guard try identityJSON(after) == identityJSON(plan), try identityJSON(afterVariant) == identityJSON(variant),
+                  !FileManager.default.fileExists(atPath: destination.path) else { throw LensWorksManagedError.protocolViolation("Source-only decode changed sealed Plan/edit authority or published an export.") }
+            evidence["planAfter"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(after))
+            evidence["variantAfter"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(afterVariant))
+            evidence["comparedPixels"] = 576; evidence["comparedScalars"] = 2304
+            evidence["maximumRGBError"] = maximumRGBError; evidence["maximumAlphaError"] = maximumAlphaError
+            evidence["negativeRGB"] = negative; evidence["HDRRGB"] = hdr; evidence["partialStraightAlpha"] = partialAlpha
+            try sourceUnchanged()
+            // Public catalog retirement runs while the retained relay is Ready.
+            let close = try await jobs.perform(session, .Close(catalog: fixture.catalog))
+            guard case .Status(let closed) = close, closed.phase == .Closed, closed.catalog == nil else { throw unexpected("checked DNG catalog Closed", close) }
+            try await fixture.close()
+            try sourceUnchanged()
+            evidence["status"] = "ACTUAL_FULL_FLOAT_REFERENCE_PASS_CHECKED_CLOSED"
+            evidence["sourceSHA256VerifiedBeforeAfter"] = true; evidence["checkedClosed"] = true
+            try writeEvidence()
+            passed = true
+        } catch {
+            let primary = error
+            evidence["status"] = "FAILED_UNQUALIFIED"; evidence["failure"] = String(describing: primary)
+            evidence["retainedJobHandles"] = jobs.handles
+            do { try sourceUnchanged(); evidence["sourceSHA256VerifiedOnFailure"] = true }
+            catch { evidence["sourceVerificationFailure"] = String(describing: error) }
+            do { try writeEvidence() } catch { Issue.record("Math fixture diagnostics could not be written at \(fixture.root.path): \(error)") }
+            fixture.cleanup.preserve("Full-float reference failure: \(primary); source/descriptor/float artifacts retained at \(fixture.root.path).")
+            do {
+                try await jobs.retire()
+                let close = try await jobs.perform(session, .Close(catalog: fixture.catalog))
+                guard case .Status(let closed) = close, closed.phase == .Closed, closed.catalog == nil else { throw unexpected("DNG failure catalog retirement", close) }
+                try await fixture.close()
+            } catch {
+                fixture.cleanup.preserve("Full-float reference failure: \(primary). Checked cleanup failed: \(error); retained handles \(jobs.handles).")
+                throw LensWorksManagedError.protocolViolation("\(primary); checked cleanup: \(error). Retained math fixture: \(fixture.root.path).")
+            }
+            throw LensWorksManagedError.protocolViolation("\(primary). Checked-closed failed math fixture retained at \(fixture.root.path).")
+        }
+    }
+    /// Test-only single-caller custody. At most eight outstanding real jobs;
+    /// each completion observation is finite and pending jobs remain owned on error.
+    private final class MathJobs {
+        private var jobs: [LWManagedJob] = []
+        var handles: [String] { jobs.map { String($0.handle.value) } }
+        func retain(_ job: LWManagedJob) throws {
+            guard jobs.count < 8 else { throw LensWorksManagedError.resourceLimit("Math fixture owns eight unfinished jobs; no further admission.") }
+            jobs.append(job)
+        }
+        func result(_ job: LWManagedJob) async throws -> LWManagedResult {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            while true {
+                try Task.checkCancellation()
+                let status = try await job.status()
+                if status.phase == .complete { return try await job.takeResult() }
+                guard status.phase == .pending, ContinuousClock.now < deadline else { throw LensWorksManagedError.protocolViolation("Math job \(job.handle.value) did not yield one terminal result within 30 seconds; owner retained.") }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        func close(_ job: LWManagedJob) async throws {
+            guard try await job.status().phase != .pending else { throw LensWorksManagedError.protocolViolation("Math job release requires actual terminal authority.") }
+            try await job.close()
+            jobs.removeAll { $0.handle == job.handle }
+        }
+        func perform(_ session: LWManagedSession, _ request: LWApplicationRequest) async throws -> LWApplicationResponse {
+            guard jobs.count < 8 else { throw LensWorksManagedError.resourceLimit("Math fixture has no free admitted job slot.") }
+            let job = try await session.submit(request)
+            try retain(job)
+            let value = try await result(job)
+            var ownsBuffer = true
+            defer { if ownsBuffer { value.buffer.release() } }
+            let reply = try await value.decode(LWApplicationReply.self, maximumBytes: 1048576)
+            value.buffer.release(); ownsBuffer = false
+            try await close(job)
+            switch reply { case .Ok(let response): return response
+            case .Error(let error): throw LensWorksManagedError.native(code: error.code.rawValue, message: error.message) }
+        }
+        func retire() async throws {
+            for job in jobs { try await job.cancel() }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            while !jobs.isEmpty {
+                for job in jobs {
+                    if try await job.status().phase != .pending { try await close(job) }
+                }
+                if !jobs.isEmpty {
+                    guard ContinuousClock.now < deadline else { throw LensWorksManagedError.protocolViolation("Math fixture jobs still retire after 30 seconds; handles \(handles) retained.") }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+            }
+        }
+    }
+
+
+    @Test func actualPNGFullFloatMatchesEverySourcePixel() async throws {
+        let proof = try nonDNGProof("generated-swatches.png")
+        var frame = try await decodeNonDNG(proof)
+        do {
+            guard let reference = proof.sourceLinearRGBA, reference.count == 6, reference.allSatisfy({ $0.count == 4 }) else {
+                throw LensWorksManagedError.protocolViolation("Qualified PNG source reference must contain exactly six straight linear RGBA pixels.")
+            }
+            var maximumRGBError = 0.0, maximumAlphaError = 0.0
+            for pixel in 0..<6 { for channel in 0..<4 {
+                let actual = Double(frame.samples[pixel * 4 + channel]), expected = reference[pixel][channel]
+                let tolerance = channel == 3 ? 1e-6 : 0.001, delta = abs(actual - expected)
+                guard expected.isFinite, actual.isFinite, delta < tolerance else {
+                    throw LensWorksManagedError.protocolViolation("PNG pixel\(pixel) channel\(channel): actual\(actual), expected\(expected), error\(delta), strict tolerance\(tolerance). Full raw frame retained at \(frame.fixture.root.path).")
+                }
+                if channel == 3 { maximumAlphaError = max(maximumAlphaError, delta) }
+                else { maximumRGBError = max(maximumRGBError, delta) }
+            } }
+            guard frame.samples[11] == 0, frame.samples[10] > 0.999, frame.samples[7] > 0 && frame.samples[7] < 1 else {
+                throw LensWorksManagedError.protocolViolation("PNG lost transparent blue RGB or partial straight alpha.")
+            }
+            frame.evidence["comparedPixels"] = 6; frame.evidence["comparedScalars"] = 24
+            frame.evidence["maximumRGBError"] = maximumRGBError; frame.evidence["maximumAlphaError"] = maximumAlphaError
+            frame.evidence["RGBToleranceStrict"] = 0.001; frame.evidence["alphaToleranceStrict"] = 1e-6
+            frame.evidence["qualifiedContractRGBTolerance"] = 0.001
+            frame.evidence["toleranceAuthority"] = "coordinator explicitly approved 0.001 RGB and 1e-6 alpha before runtime; no failure-based adjustment"
+            frame.evidence["comparison"] = "qualified raw PNG CRC/zlib source RGBA with standard inverse sRGB; every pixel including alpha-zero RGB"
+            try finishNonDNG(&frame)
+        } catch {
+            preserveNonDNG(&frame, failure: error)
+            throw error
+        }
+    }
+
+    @Test func actualAVIFIrotExifPrecedenceMatchesFullFramePair() async throws {
+        var frames: [NonDNGFrame] = []
+        do {
+            frames.append(try await decodeNonDNG(nonDNGProof("generated-irot.avif")))
+            frames.append(try await decodeNonDNG(nonDNGProof("generated-irot-exif.avif")))
+            guard frames.count == 2, frames[0].descriptor.original != frames[1].descriptor.original,
+                  frames[0].descriptor.source_identity.key.asset_id != frames[1].descriptor.source_identity.key.asset_id,
+                  frames[0].samples.count == 24, frames[1].samples.count == 24 else {
+                throw LensWorksManagedError.protocolViolation("AVIF pair requires two distinct real source and catalog-photo identities with exactly 24 full-frame samples.")
+            }
+            for index in 0..<24 {
+                let a = frames[0].samples[index], b = frames[1].samples[index]
+                guard a.isFinite, b.isFinite, a.bitPattern == b.bitPattern else {
+                    throw LensWorksManagedError.protocolViolation("AVIF irot/EXIF pair differs at pixel\(index / 4) channel\(index % 4): \(a) bits\(a.bitPattern), \(b) bits\(b.bitPattern). Both checked-closed raw frames retained.")
+                }
+            }
+            guard frames[0].raw == frames[1].raw else { throw LensWorksManagedError.protocolViolation("AVIF pair float-byte equality contradicts scalar comparison.") }
+            for index in frames.indices {
+                frames[index].evidence["comparedPixels"] = 6; frames[index].evidence["comparedScalars"] = 24
+                frames[index].evidence["pairPayloadSHA256"] = Self.mathSHA(frames[1 - index].raw)
+                frames[index].evidence["pairSource"] = frames[1 - index].proof.filename
+                frames[index].evidence["comparison"] = "exact full-frame float bits and oriented2x3 geometry/metadataorientation8; EXIF identity does not override irot; relational only"
+                frames[index].evidence["absoluteColorQualified"] = false
+                frames[index].evidence["rotationDirectionOracleQualified"] = false
+                try finishNonDNG(&frames[index])
+            }
+        } catch {
+            for index in frames.indices { preserveNonDNG(&frames[index], failure: error) }
+            throw error
+        }
+    }
+
+    @Test func actualTenBitAVIFFullFloatMatchesEveryIndependentSwatch() async throws {
+        let proof = try tenBitProof()
+        var frame = try await decodeNonDNG(proof.frame)
+        do {
+            var maximumSourceRGBError = 0.0, maximumQuantizedAlphaError = 0.0
+            var maximumPrecisionRGBError = 0.0, maximumPrecisionAlphaError = 0.0
+            for pixel in 0..<6 { for channel in 0..<4 {
+                let actual = Double(frame.samples[pixel * 4 + channel])
+                let source = channel == 3 ? proof.quantizedAlpha[pixel] : proof.sourceReference[pixel][channel]
+                let sourceTolerance = channel == 3 ? 1.0 / 1023 : 0.003
+                let precision = proof.precisionReference[pixel][channel]
+                let precisionTolerance = channel == 3 ? proof.precisionAlphaTolerance : proof.precisionRGBTolerance
+                let sourceError = abs(actual - source), precisionError = abs(actual - precision)
+                guard actual.isFinite, source.isFinite, precision.isFinite,
+                      sourceError < sourceTolerance, precisionError < precisionTolerance else {
+                    throw LensWorksManagedError.protocolViolation("10-bit AVIF pixel\(pixel) channel\(channel): actual\(actual), source\(source), strict source tolerance\(sourceTolerance), precision reference\(precision), strict precision tolerance\(precisionTolerance), source error\(sourceError), precision error\(precisionError). Full raw frame retained at \(frame.fixture.root.path).")
+                }
+                if channel == 3 {
+                    maximumQuantizedAlphaError = max(maximumQuantizedAlphaError, sourceError)
+                    maximumPrecisionAlphaError = max(maximumPrecisionAlphaError, precisionError)
+                } else {
+                    maximumSourceRGBError = max(maximumSourceRGBError, sourceError)
+                    maximumPrecisionRGBError = max(maximumPrecisionRGBError, precisionError)
+                }
+            } }
+            guard frame.descriptor.provenance.source_bits_per_channel == 10,
+                  frame.samples[11] == 0, frame.samples[10] > 0.999,
+                  frame.samples[7] > 0 && frame.samples[7] < 1 else {
+                throw LensWorksManagedError.protocolViolation("10-bit AVIF lost actual10-bit provenance, transparent blue RGB, or partial straight alpha.")
+            }
+            frame.evidence["comparedPixels"] = 6; frame.evidence["comparedScalars"] = 24
+            frame.evidence["maximumSourceRGBError"] = maximumSourceRGBError
+            frame.evidence["maximumQuantizedAlphaError"] = maximumQuantizedAlphaError
+            frame.evidence["maximumPrecisionRGBError"] = maximumPrecisionRGBError
+            frame.evidence["maximumPrecisionAlphaError"] = maximumPrecisionAlphaError
+            frame.evidence["RGBToleranceStrict"] = 0.003; frame.evidence["alphaToleranceStrict"] = 1.0 / 1023
+            frame.evidence["precisionRGBToleranceStrict"] = proof.precisionRGBTolerance
+            frame.evidence["precisionAlphaToleranceStrict"] = proof.precisionAlphaTolerance
+            frame.evidence["precisionReference"] = proof.precisionReference
+            frame.evidence["comparison"] = "all24 finite straight RGBA samples; sourcePNG color baseline plus independent16-bit ImageIO precision, actual retainedsourcebits10; alpha-zero RGB preserved"
+            try finishNonDNG(&frame)
+        } catch {
+            preserveNonDNG(&frame, failure: error)
+            throw error
+        }
+    }
+    private struct TenBitProof {
+        let frame: NonDNGProof
+        let sourceReference: [[Double]], precisionReference: [[Double]], quantizedAlpha: [Double]
+        let precisionRGBTolerance: Double, precisionAlphaTolerance: Double
+    }
+    private static func inverseSRGB(_ sample: Double) -> Double {
+        sample <= 0.04045 ? sample / 12.92 : pow((sample + 0.055) / 1.055, 2.4)
+    }
+    /// The six straight RGBA8 swatches generate_dng_fixture.py writes into
+    /// generated-swatches.png and, at 10 bits, generated-swatches-10bit.avif.
+    private static let swatchRGBA8: [[UInt8]] = [[255, 0, 0, 255], [0, 255, 0, 128], [0, 0, 255, 0], [128, 128, 128, 255], [255, 255, 255, 255], [0, 0, 0, 255]]
+    private static var swatchLinearRGBA: [[Double]] {
+        swatchRGBA8.map { pixel in pixel.enumerated().map { channel, code in
+            let sample = Double(code) / 255
+            return channel == 3 ? sample : inverseSRGB(sample)
+        } }
+    }
+    private func tenBitProof() throws -> TenBitProof {
+        // Independent 16-bit ImageIO decode of the 10-bit AVIF, and the 10-bit
+        // alpha codes it stores, recorded once from the checked-in fixture.
+        let imageIORGBA16: [[UInt16]] = [[65535, 0, 0, 65535], [0, 65535, 0, 32927], [0, 0, 65535, 0], [32928, 32928, 32928, 65535], [65535, 65535, 65535, 65535], [0, 0, 0, 65535]]
+        let alphaCodes10: [Double] = [1023, 514, 0, 1023, 1023, 1023]
+        let precision = imageIORGBA16.map { pixel in pixel.enumerated().map { channel, code in
+            let sample = Double(code) / 65535
+            return channel == 3 ? sample : Self.inverseSRGB(sample)
+        } }
+        let frame = try nonDNGFrameProof("generated-swatches-10bit.avif", width: 3, height: 2, metadataOrientation: 1, sourceBitsPerChannel: 10, sourceLinearRGBA: nil)
+        return TenBitProof(frame: frame, sourceReference: Self.swatchLinearRGBA, precisionReference: precision,
+            quantizedAlpha: alphaCodes10.map { $0 / 1023 },
+            precisionRGBTolerance: (2.4 / 1.055) / 65535 + 1e-6, precisionAlphaTolerance: 1.0 / 65535 + 1e-6)
+    }
+    private struct NonDNGProof {
+        let filename: String
+        let source: URL, sha256: String
+        let width: UInt32, height: UInt32, metadataOrientation: UInt32, sourceBitsPerChannel: UInt32
+        let sourceLinearRGBA: [[Double]]?
+    }
+    private struct NonDNGFrame {
+        let proof: NonDNGProof
+        let fixture: Fixture
+        let raw: Data, samples: [Float], descriptor: LWManagedFloatDescriptor
+        var evidence: [String: Any]
+    }
+    private func nonDNGFrameProof(_ filename: String, width: UInt32, height: UInt32, metadataOrientation: UInt32, sourceBitsPerChannel: UInt32, sourceLinearRGBA: [[Double]]?) throws -> NonDNGProof {
+        let source = Self.fixtureDirectory.appendingPathComponent(filename)
+        let bytes = try Data(contentsOf: source)
+        guard !bytes.isEmpty, bytes.count <= 1048576 else { throw LensWorksManagedError.protocolViolation("\(filename) fixture is empty or exceeds 1MiB.") }
+        return NonDNGProof(filename: filename, source: source, sha256: Self.mathSHA(bytes), width: width, height: height,
+            metadataOrientation: metadataOrientation, sourceBitsPerChannel: sourceBitsPerChannel, sourceLinearRGBA: sourceLinearRGBA)
+    }
+    private func nonDNGProof(_ filename: String) throws -> NonDNGProof {
+        switch filename {
+        case "generated-swatches.png":
+            return try nonDNGFrameProof(filename, width: 3, height: 2, metadataOrientation: 1, sourceBitsPerChannel: 8, sourceLinearRGBA: Self.swatchLinearRGBA)
+        case "generated-irot.avif", "generated-irot-exif.avif":
+            // Relational pair only: oriented 2x3 with metadata orientation 8, no absolute color oracle.
+            return try nonDNGFrameProof(filename, width: 2, height: 3, metadataOrientation: 8, sourceBitsPerChannel: 8, sourceLinearRGBA: nil)
+        default:
+            throw LensWorksManagedError.protocolViolation("No non-DNG proof for \(filename).")
+        }
+    }
+    private func decodeNonDNG(_ proof: NonDNGProof) async throws -> NonDNGFrame {
+        let inputURL = proof.source
+        guard Self.mathSHA(try Data(contentsOf: inputURL)) == proof.sha256 else { throw LensWorksManagedError.protocolViolation("Non-DNG source changed before copying.") }
+        let jobs = MathJobs()
+        let fixture = try await Fixture.create(copiedSource: inputURL, referenceJobs: jobs)
+        var evidence: [String: Any] = ["status": "UNQUALIFIED_DECODE_PENDING", "source": proof.filename,
+            "sourceSHA256": proof.sha256, "sourceRevision": fixture.session.sourceRevision,
+            "protocol": LWManagedAuthority.protocolVersion, "absoluteAVIFColorQualified": false]
+        func unchanged() throws {
+            guard Self.mathSHA(try Data(contentsOf: fixture.original)) == proof.sha256,
+                  Self.mathSHA(try Data(contentsOf: inputURL)) == proof.sha256,
+                  try fixture.original.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == fixture.originalModified,
+                  Set(try FileManager.default.contentsOfDirectory(atPath: fixture.original.deletingLastPathComponent().path)) == Set([fixture.original.lastPathComponent]) else {
+                throw LensWorksManagedError.protocolViolation("A protected non-DNG source SHA, timestamp, or directory membership changed.")
+            }
+        }
+        func encoded<Value: Encodable>(_ value: Value) throws -> LWCatalogJSON { try LWCatalogCodec.decode(LWCatalogJSON.self, from: LWCatalogCodec.encode(value)) }
+        func plan(_ id: String) async throws -> LWApplicationExportsDtoPlan {
+            let job = try await fixture.session.sourceIdentity(catalog: fixture.catalog, exportJob: id, sequence: LWCatalogI64(1))
+            try jobs.retain(job)
+            let result = try await jobs.result(job)
+            var ownsBuffer = true; defer { if ownsBuffer { result.buffer.release() } }
+            let value = try await result.decode(LWApplicationExportsDtoPlan.self, maximumBytes: 1048576)
+            result.buffer.release(); ownsBuffer = false; try await jobs.close(job)
+            return value
+        }
+        do {
+            try unchanged()
+            let beforeReply = try await jobs.perform(fixture.session, .Variant(catalog: fixture.catalog, key: fixture.key))
+            guard case .Variant(let before) = beforeReply else { throw unexpected("actual non-DNG Variant", beforeReply) }
+            let begunReply = try await jobs.perform(fixture.session, .Export(catalog: fixture.catalog, request: .Begin))
+            guard case .Export(.Job(let begun)) = begunReply else { throw unexpected("actual non-DNG export plan owner", begunReply) }
+            let destination = fixture.root.appendingPathComponent("NeverPublished.tif")
+            let target = LWApplicationExportsDtoTarget(key: fixture.key, expected_revision: before.revision, destination: try LWCatalogNativePath(fileURL: destination), overwrite: false, metadata: .Omit)
+            let output = LWApplicationExportsDtoOutput(size: .Original, format: .Tiff(depth: .Float32), profile: .LinearSrgb, alpha: .Preserve)
+            let appendedReply = try await jobs.perform(fixture.session, .Export(catalog: fixture.catalog, request: .Append(job: begun.id, expected_total: LWCatalogI64(0), target: target, output: output,
+                budgets: LWApplicationExportsDtoBudgets(max_original_bytes: LWCatalogU64(1048576), max_payload_bytes: LWCatalogU64(1048576), alias_limits: LWApplicationExportsDtoAliasLimits(directories: LWCatalogU64(32), candidates: LWCatalogU64(256))))))
+            guard case .Export(.Operation(let appended)) = appendedReply, let appended else { throw unexpected("actual non-DNG Append", appendedReply) }
+            try await waitUntil {
+                let reply = try await jobs.perform(fixture.session, .Export(catalog: fixture.catalog, request: .Status(operation: appended.id)))
+                guard case .Export(.Operation(let state)) = reply, let state, state.id == appended.id else { throw unexpected("matching non-DNG Append Status", reply) }
+                guard !["failed", "canceled"].contains(state.phase) else { throw unexpected("complete non-DNG Append", reply) }
+                return state.phase == "complete"
+            }
+            _ = try await jobs.perform(fixture.session, .Export(catalog: fixture.catalog, request: .Seal(job: begun.id, expected_total: LWCatalogI64(1))))
+            let beforePlan = try await plan(begun.id)
+            guard beforePlan.job == begun.id, beforePlan.sequence.value == 1, !beforePlan.authority.isEmpty,
+                  beforePlan.original == (try LWCatalogNativePath(fileURL: fixture.original)),
+                  beforePlan.identity.key.asset_id == fixture.key.asset_id, beforePlan.identity.key.variant_id == fixture.key.variant_id,
+                  beforePlan.identity.revision == before.revision, beforePlan.identity.recipe_digest == before.recipe_digest else { throw LensWorksManagedError.protocolViolation("Real non-DNG Plan lost source/edit authority.") }
+            evidence["planBefore"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(beforePlan))
+            evidence["variantBefore"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(before))
+            let decode = try await fixture.session.decodeFull(catalog: fixture.catalog, exportJob: begun.id, sequence: LWCatalogI64(1),
+                limits: .init(max_encoded_bytes: LWCatalogU64(1048576), max_intermediate_pixels: LWCatalogU64(10000), max_allocation_bytes: LWCatalogU64(1048576)),
+                workerBytes: LWCatalogU64(536870912), maximumOutputBytes: LWCatalogU64(96))
+            try jobs.retain(decode)
+            let result = try await jobs.result(decode)
+            var ownsBuffer = true; defer { if ownsBuffer { result.buffer.release() } }
+            guard case .float(let descriptor) = result.descriptor else { throw LensWorksManagedError.protocolViolation("Expected actual non-DNG full-float descriptor.") }
+            let raw = try await result.buffer.copy(maximumBytes: 96, expectedLength: result.length)
+            try raw.write(to: fixture.root.appendingPathComponent("Decoded.rgba-f32le"), options: .atomic)
+            evidence["payloadSHA256"] = Self.mathSHA(raw); evidence["payloadBytes"] = raw.count
+            evidence["descriptor"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(descriptor))
+            try writeNonDNG(fixture, evidence)
+            guard descriptor.width == proof.width, descriptor.height == proof.height,
+                  descriptor.row_stride.value == UInt64(proof.width) * 16, descriptor.byte_length.value == 96, result.length == 96, raw.count == 96,
+                  descriptor.channels == 4, descriptor.sample == "float32_le", descriptor.color_space == "linear_srgb",
+                  descriptor.alpha == "straight", descriptor.orientation == "applied", descriptor.metadata.orientation == proof.metadataOrientation,
+                  descriptor.provenance.source_bits_per_channel == proof.sourceBitsPerChannel, descriptor.protocol == 2, descriptor.source_revision == LWManagedAuthority.sourceRevision, descriptor.source_revision == fixture.session.sourceRevision,
+                  descriptor.original == beforePlan.original, descriptor.plan_authority == beforePlan.authority,
+                  try encoded(descriptor.source_identity) == encoded(beforePlan.identity),
+                  try encoded(descriptor.original_revision) == encoded(beforePlan.original_revision) else { throw LensWorksManagedError.protocolViolation("Non-DNG descriptor lost exact geometry/orientation/bitdepth/protocol/source/Plan authority.") }
+            let samples = try await result.floatSamples(maximumBytes: 96)
+            result.buffer.release(); ownsBuffer = false; try await jobs.close(decode)
+            guard samples.count == 24 else { throw LensWorksManagedError.protocolViolation("Non-DNG frame is not exactly 24 RGBA samples.") }
+            for index in samples.indices {
+                guard samples[index].isFinite, index % 4 != 3 || (0...1).contains(samples[index]) else { throw LensWorksManagedError.protocolViolation("Non-DNG pixel\(index / 4) channel\(index % 4) is nonfinite or has invalid straight alpha.") }
+            }
+            let afterPlan = try await plan(begun.id)
+            let afterReply = try await jobs.perform(fixture.session, .Variant(catalog: fixture.catalog, key: fixture.key))
+            guard case .Variant(let after) = afterReply else { throw unexpected("actual non-DNG Variant after decode", afterReply) }
+            guard try encoded(afterPlan) == encoded(beforePlan), try encoded(after) == encoded(before),
+                  !FileManager.default.fileExists(atPath: destination.path) else { throw LensWorksManagedError.protocolViolation("Non-DNG source decode changed Plan/recipe authority or published output.") }
+            evidence["planAfter"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(afterPlan))
+            evidence["variantAfter"] = try JSONSerialization.jsonObject(with: LWCatalogCodec.encode(after))
+            try unchanged()
+            let close = try await jobs.perform(fixture.session, .Close(catalog: fixture.catalog))
+            guard case .Status(let closed) = close, closed.phase == .Closed, closed.catalog == nil else { throw unexpected("checked non-DNG public Close", close) }
+            try await fixture.close(); try unchanged()
+            evidence["checkedClosed"] = true; evidence["sourceSHA256VerifiedBeforeAfter"] = true
+            evidence["status"] = "ACTUAL_DECODE_ONLY_CHECKED_CLOSED_COMPARISON_PENDING"
+            try writeNonDNG(fixture, evidence)
+            return NonDNGFrame(proof: proof, fixture: fixture, raw: raw, samples: samples, descriptor: descriptor, evidence: evidence)
+        } catch {
+            let primary = error
+            evidence["status"] = "FAILED_UNQUALIFIED"; evidence["failure"] = String(describing: primary); evidence["retainedJobHandles"] = jobs.handles
+            do { try unchanged(); evidence["sourceSHA256VerifiedOnFailure"] = true } catch { evidence["sourceVerificationFailure"] = String(describing: error) }
+            do { try writeNonDNG(fixture, evidence) } catch { Issue.record("Non-DNG diagnostics could not be written at \(fixture.root.path): \(error)") }
+            fixture.cleanup.preserve("Non-DNG decode failed: \(primary). Raw/source authority retained at \(fixture.root.path).")
+            do {
+                try await jobs.retire()
+                let reply = try await jobs.perform(fixture.session, .Close(catalog: fixture.catalog))
+                guard case .Status(let closed) = reply, closed.phase == .Closed, closed.catalog == nil else { throw unexpected("non-DNG failure public Close", reply) }
+                try await fixture.close()
+            } catch {
+                fixture.cleanup.preserve("Non-DNG failure: \(primary). Checked cleanup: \(error); retained handles \(jobs.handles).")
+                throw LensWorksManagedError.protocolViolation("\(primary); checked cleanup: \(error). Retained fixture: \(fixture.root.path).")
+            }
+            throw LensWorksManagedError.protocolViolation("\(primary). Checked-closed failed fixture retained at \(fixture.root.path).")
+        }
+    }
+    private func writeNonDNG(_ fixture: Fixture, _ evidence: [String: Any]) throws {
+        let bytes = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+        guard bytes.count <= 131072 else { throw LensWorksManagedError.protocolViolation("Non-DNG report exceeded 128KiB.") }
+        try bytes.write(to: fixture.root.appendingPathComponent("FullFloatReference.json"), options: .atomic)
+    }
+    private func preserveNonDNG(_ frame: inout NonDNGFrame, failure: any Error) {
+        frame.evidence["status"] = "FAILED_UNQUALIFIED"; frame.evidence["failure"] = String(describing: failure)
+        do { try writeNonDNG(frame.fixture, frame.evidence) } catch { Issue.record("Non-DNG comparison failure evidence could not be written: \(error)") }
+        frame.fixture.cleanup.preserve("Checked-closed non-DNG comparison failed: \(failure); raw/authority retained at \(frame.fixture.root.path).")
+    }
+    private func finishNonDNG(_ frame: inout NonDNGFrame) throws {
+        frame.evidence["status"] = "ACTUAL_NON_DNG_REFERENCE_PASS_CHECKED_CLOSED"
+        try writeNonDNG(frame.fixture, frame.evidence)
+        frame.fixture.removeIfClosed()
+    }
+
     private func exportComplete(_ fixture: Fixture, _ reply: LWApplicationResponse) async throws -> LWApplicationExportsDtoOperation {
         guard case .Export(.Operation(let operation)) = reply, let operation else { throw unexpected("Export operation admission", reply) }
         var complete: LWApplicationExportsDtoOperation?
@@ -976,15 +1547,15 @@ nonisolated struct LensWorksManagedCatalogTests {
                 return LensWorksManagedError.protocolViolation("Fixture failed: \(primary). Checked cleanup failed: \(error). Retained artifacts: \(root.path)")
             }
         }
-        static func create(floatTIFF: Bool = false, metadataConflict: Bool = false) async throws -> Self {
+        static func create(floatTIFF: Bool = false, metadataConflict: Bool = false, copiedSource: URL? = nil, referenceJobs: MathJobs? = nil) async throws -> Self {
             let worker = try #require(ProcessInfo.processInfo.environment["LW_CATALOG_TEST_WORKER"], "Set the explicit owned helper fixture path.")
             let temporaryPath = try #require(realpath(FileManager.default.temporaryDirectory.path, nil), "Resolve the physical temporary directory before admitting source authority.")
             defer { free(temporaryPath) }
             let root = URL(fileURLWithPath: String(cString: temporaryPath), isDirectory: true).appendingPathComponent("LWManaged-\(UUID())")
             let originals = root.appendingPathComponent("Originals")
             try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
-            let source = originals.appendingPathComponent(floatTIFF ? "wide.tif" : "source.png")
-            let data = floatTIFF ? tiff() : Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==")!
+            let source = originals.appendingPathComponent(copiedSource?.lastPathComponent ?? (floatTIFF ? "wide.tif" : "source.png"))
+            let data = try copiedSource.map { try Data(contentsOf: $0) } ?? (floatTIFF ? tiff() : Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==")!)
             try data.write(to: source)
             let originalModified = try #require(source.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
             var companions: [URL: Data] = [:], companionModified: [URL: Date] = [:]
@@ -1002,25 +1573,41 @@ nonisolated struct LensWorksManagedCatalogTests {
             let nativeDecodeWorker = try LWCatalogNativePath(fileURL: URL(fileURLWithPath: decodeWorker))
             let config = LWManagedSessionConfig(worker_executable: nativeWorker, decode_worker_executable: nativeDecodeWorker, cache_root: nil, original_roots: [try LWCatalogNativePath(fileURL: originals)], limits: nil, preview_policy: nil, preview_limits: nil)
             let session = try await LWManagedSession.create(config: config)
+            func perform(_ request: LWApplicationRequest) async throws -> LWApplicationResponse {
+                if let referenceJobs { return try await referenceJobs.perform(session, request) }
+                return try await session.perform(request)
+            }
             do {
-                guard case .Status(let opened) = try await session.perform(.Create(path: LWCatalogNativePath(fileURL: root.appendingPathComponent("Catalog")))), let catalog = opened.catalog else { throw LensWorksManagedError.protocolViolation("Expected admitted catalog token") }
+                guard case .Status(let opened) = try await perform(.Create(path: LWCatalogNativePath(fileURL: root.appendingPathComponent("Catalog")))), let catalog = opened.catalog else { throw LensWorksManagedError.protocolViolation("Expected admitted catalog token") }
                 try await LensWorksManagedCatalogTests.waitUntil {
-                    guard case .Status(let status) = try await session.perform(.Status) else { return false }
+                    guard case .Status(let status) = try await perform(.Status) else { return false }
                     return status.phase == .Ready
                 }
-                _ = try await session.perform(.ImportStart(catalog: catalog, source: LWCatalogNativePath(fileURL: originals)))
+                _ = try await perform(.ImportStart(catalog: catalog, source: LWCatalogNativePath(fileURL: originals)))
                 try await LensWorksManagedCatalogTests.waitUntil {
-                    guard case .Import(let status) = try await session.perform(.ImportStatus(catalog: catalog)), let status else { return false }
+                    guard case .Import(let status) = try await perform(.ImportStatus(catalog: catalog)), let status else { return false }
                     if status.phase == .Failed { throw LensWorksManagedError.protocolViolation(status.error ?? "Import failed") }
                     return status.phase == .Complete
                 }
-                guard case .Images(let rows, _, _, _, _) = try await session.perform(.Images(catalog: catalog, folder: nil, recursive: true, text: nil, cursor: nil, limit: 10)), let image = rows.first else { throw LensWorksManagedError.protocolViolation("Expected real imported image") }
+                guard case .Images(let rows, _, _, _, _) = try await perform(.Images(catalog: catalog, folder: nil, recursive: true, text: nil, cursor: nil, limit: 10)), let image = rows.first else { throw LensWorksManagedError.protocolViolation("Expected real imported image") }
                 return Self(root: root, original: source, before: data, originalModified: originalModified, session: session, catalog: catalog, key: image.key, cleanup: FixtureCleanup(root: root, handle: session.handle), companions: companions, companionModified: companionModified)
             } catch {
                 let primary = error
                 do {
+                    if let referenceJobs {
+                        try await referenceJobs.retire()
+                        let stateReply = try await referenceJobs.perform(session, .Status)
+                        guard case .Status(let state) = stateReply else { throw LensWorksManagedError.protocolViolation("Math fixture creation cleanup needs actual public Status.") }
+                        if let token = state.catalog {
+                            let reply = try await referenceJobs.perform(session, .Close(catalog: token))
+                            guard case .Status(let closed) = reply, closed.phase == .Closed, closed.catalog == nil else { throw LensWorksManagedError.protocolViolation("Math fixture creation retains public catalog authority.") }
+                        } else {
+                            guard [.Closed, .Failed].contains(state.phase) else { throw LensWorksManagedError.protocolViolation("Math fixture creation has no certified no-catalog status.") }
+                        }
+                    }
                     try await session.close()
-                    try FileManager.default.removeItem(at: root)
+                    if referenceJobs == nil { try FileManager.default.removeItem(at: root) }
+                    else { FixtureCleanup(root: root, handle: session.handle).preserve("Checked-closed math fixture creation failed: \(primary).") }
                 } catch {
                     let cleanup = FixtureCleanup(root: root, handle: session.handle)
                     cleanup.preserve("Fixture creation failed: \(primary). Checked cleanup failed: \(error)")

@@ -7,6 +7,9 @@ struct CompositorApp: App {
     var body: some Scene {
         Window("LensWorks", id: "editor") {
             ProjectWorkspaceView(applicationDelegate: applicationDelegate).roundedControls()
+                .overlay(alignment: .bottom) {
+                    if let reason = session.commandRefusal { Text(reason).padding(8).background(.regularMaterial).accessibilityIdentifier("LensWorks.commandRefusal") }
+                }
                 .onAppear { LensWorksLaunchTrace.record("window.editor.onAppear") }
         }
             .defaultSize(width: 1180, height: 780)
@@ -317,11 +320,10 @@ struct CompositorApp: App {
                         .disabled(!session.canEditLayers || session.activeLayer?.parentID == nil)
                     Button("New Blank Layer") { session.addBlankLayer() }
                         .configuredKeyboardShortcut("n", modifiers: [.command, .shift]).disabled(!session.canEditLayers)
-                    Button("Rename Layer…") { session.renamingLayerID = session.activeLayerID }
-                        .disabled(!session.canEditLayers || session.activeLayer == nil)
-                    Button(session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer") {
-                        if let id = session.activeLayerID { session.toggleLayerVisibility(id) }
-                    }.disabled(!session.canEditLayers || session.activeLayer == nil)
+                    LensWorksLayerCommandButton(session: session, id: .beginRename)
+                    LensWorksLayerCommandButton(session: session, id: .visibility,
+                        label: session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer")
+                        .registeredCommandShortcut(.visibility)
                     Divider()
                     Button("Move Layer Up") { session.moveActiveLayer(by: 1) }
                         .configuredKeyboardShortcut("]").disabled(!session.canMoveActiveLayer(by: 1))

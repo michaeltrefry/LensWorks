@@ -1609,6 +1609,7 @@ mod tests {
     }
     #[test]
     fn managed_blake3_known_vectors_and_argument_limits() {
+        let _serial = crate::test_serial();
         for (input, expected) in [
             (
                 &b""[..],
@@ -1655,6 +1656,7 @@ mod tests {
     }
     #[test]
     fn managed_streaming_blake3_large_input_final_once_and_handle_faults() {
+        let _serial = crate::test_serial();
         struct Owned(u64);
         impl Drop for Owned {
             fn drop(&mut self) {
@@ -1754,6 +1756,7 @@ mod tests {
     }
     #[test]
     fn managed_streaming_blake3_owner_allowance_survives_release_during_call() {
+        let _serial = crate::test_serial();
         struct Owners(Vec<u64>);
         impl Drop for Owners {
             fn drop(&mut self) {
@@ -1786,6 +1789,7 @@ mod tests {
     }
     #[test]
     fn managed_initializing_session_rejects_guessed_authority_until_published() {
+        let _serial = crate::test_serial();
         extern "C" fn noop_callback(_: *mut c_void, _: u64, _: u64) {}
         struct Resume(Arc<StartupGate>);
         impl Drop for Resume {
@@ -1851,6 +1855,7 @@ mod tests {
     }
     #[test]
     fn managed_receiver_failure_retains_visible_job_before_any_effect() {
+        let _serial = crate::test_serial();
         let initial = LIVE_JOBS.load(Ordering::Acquire);
         let (h, j) = new_job(empty_session(), 128).unwrap();
         let effects = Arc::new(AtomicUsize::new(0));
@@ -1875,6 +1880,7 @@ mod tests {
     }
     #[test]
     fn managed_blocked_checked_shutdown_retains_owner_and_keeps_polling_finite() {
+        let _serial = crate::test_serial();
         let (code, h) = raw(
             json!({"version":2,"op":"session_create","config":{"worker_executable":{"encoding":"UnixBytes","units":[47,120]}}}),
         );
@@ -1910,6 +1916,7 @@ mod tests {
     }
     #[test]
     fn managed_retained_startup_owners_are_bounded_until_checked_shutdown() {
+        let _serial = crate::test_serial();
         assert_eq!(OWNERS.load(Ordering::Acquire), 0);
         let mut owners = Vec::new();
         for _ in 0..MAX_SESSIONS {
@@ -1943,6 +1950,7 @@ mod tests {
     }
     #[test]
     fn managed_shutdown_fences_concurrent_job_and_callback_publication() {
+        let _serial = crate::test_serial();
         let s = empty_session();
         let gate = Arc::new(std::sync::Barrier::new(33));
         let callbacks = Box::new(AtomicUsize::new(0));
@@ -2011,6 +2019,7 @@ mod tests {
     }
     #[test]
     fn managed_response_and_payload_saturation_never_orphan_effects() {
+        let _serial = crate::test_serial();
         assert_eq!(OWNERS.load(Ordering::Acquire), 0);
         let initial = PAYLOAD_BYTES.load(Ordering::Acquire);
         let reservation = ResponseReservation::reserve().unwrap();
@@ -2100,6 +2109,7 @@ mod tests {
     }
     #[test]
     fn managed_released_jobs_cannot_bypass_blocked_callback_receiver_cap() {
+        let _serial = crate::test_serial();
         let initial = LIVE_JOBS.load(Ordering::Acquire);
         assert_eq!(initial, 0);
         let s = empty_session();

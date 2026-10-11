@@ -150,7 +150,7 @@ final class EditorSession {
     private var fileRequestWaiters: [CheckedContinuation<Void, Never>] = []
     var canStartProjectOperation: Bool {
         _ = showsBusy // Re-evaluate in the UI when a long operation starts or ends.
-        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && adjustmentEditingID == nil && !showsConversionSheet
+        return commandInteraction == nil && selectionAmountOperation == nil && colorRange == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && adjustmentEditingID == nil && !showsConversionSheet
     }
     func waitForFileRequest() async {
         while !canStartProjectOperation {
@@ -581,6 +581,10 @@ final class EditorSession {
     /// Cancel pressed while a Photoshop file was still being read.
     @ObservationIgnored private var conversionCancelled = false
     var opacityEditLayerID: UUID?
+    var commandInteraction: LensWorksCommandInteraction?
+    var commandRefusal: String?
+    var commandContextEpoch: UInt64 = 0
+    var commandRenameAdmission: LensWorksLayerAdmission?
     var blendPreview: (layerID: UUID, mode: LayerBlendMode)?
     @ObservationIgnored var refreshCanvasPreview: (() -> Void)?
     var isMaskSelected = false { didSet { if !isMaskSelected { viewsMaskAlone = false } } }
@@ -592,14 +596,18 @@ final class EditorSession {
         guard viewsMaskAlone, isMaskSelected, let layer = activeLayer, layer.mask != nil else { return nil }
         return layer
     }
-    var selectedLayerIDs: Set<UUID> = []
+    var selectedLayerIDs: Set<UUID> = [] {
+        willSet { if newValue != selectedLayerIDs { finishCommandInteractionBeforeSelectionChange() } }
+        didSet { if oldValue != selectedLayerIDs { commandContextEpoch &+= 1 } }
+    }
     var activeLayerID: UUID? {
+        willSet { if newValue != activeLayerID { finishCommandInteractionBeforeSelectionChange(); commandContextEpoch &+= 1 } }
         didSet {
             if activeLayerID != oldValue { isMaskSelected = false }
             selectedLayerIDs = activeLayerID.map { [$0] } ?? []
         }
     }
-    var renamingLayerID: UUID? { didSet { resumeFileRequests() } }
+    var renamingLayerID: UUID? { didSet { if renamingLayerID == nil { commandRenameAdmission = nil }; resumeFileRequests() } }
     let history = DocumentHistory()
     var isModified: Bool { history.isModified }
     var canUseHistory: Bool {
@@ -614,11 +622,12 @@ final class EditorSession {
         if gradientEdit != nil { cancelGradient(); return }
         guard canUndo, let snapshot = history.undo() else { return }
         restore(snapshot)
+        commandContextEpoch &+= 1
     }
-
     func redo() {
         guard canRedo, let snapshot = history.redo() else { return }
         restore(snapshot)
+        commandContextEpoch &+= 1
     }
 
     private func restore(_ snapshot: DocumentHistory.Snapshot) {
@@ -637,11 +646,17 @@ final class EditorSession {
         history.begin(name, document: document, selection: activeLayerID)
     }
 
-    func endEdit() { history.end(document: document, selection: activeLayerID) }
+    func endEdit() {
+        let revision = history.currentRevision
+        history.end(document: document, selection: activeLayerID)
+        if history.currentRevision != revision { commandContextEpoch &+= 1 }
+    }
     var activeLayer: ImageLayer? { document?.layers.first { $0.id == activeLayerID } }
-    var canEditLayers: Bool {
+    var canEditLayers: Bool { commandInteraction == nil && canEditLayersForCommand }
+    var canEditLayersForCommand: Bool { renamingLayerID == nil && canEditLayersWithoutRename }
+    var canEditLayersWithoutRename: Bool {
         _ = showsBusy
-        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && renamingLayerID == nil && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
+        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
     }
 
     func addBlankLayer() {
@@ -695,36 +710,27 @@ final class EditorSession {
         finishDeletingLayers(ids, baked: [:])
     }
 
-    func renameLayer(_ id: UUID, to name: String) {
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isProjectBusy, !isImporting, !name.isEmpty, let index = document?.layers.firstIndex(where: { $0.id == id }) else { return }
-        beginEdit("Rename Layer")
-        defer { endEdit() }
-        document?.layers[index].name = name
-    }
-
-    func toggleLayerVisibility(_ id: UUID) {
-        guard canEditLayers, let index = document?.layers.firstIndex(where: { $0.id == id }) else { return }
-        beginEdit(document?.layers[index].isVisible == true ? "Hide Layer" : "Show Layer")
-        defer { endEdit() }
-        document?.layers[index].isVisible.toggle()
-    }
+    func renameLayer(_ id: UUID, to name: String) { _ = runCommand(.rename(id, name)) }
+    func toggleLayerVisibility(_ id: UUID) { _ = runCommand(.visibility([id], nil)) }
 
     /// Photoshop's eye swipe: pressing an eye shows or hides that layer, and dragging over other eyes gives them the
     /// same state, all as one undo step (`beginEdit` at the press, `endEdit` when the button comes up).
     func beginVisibilitySwipe(_ id: UUID) -> Bool? {
-        guard canEditLayers, let layer = document?.layers.first(where: { $0.id == id }) else { return nil }
+        guard canEditLayers, let document, let layer = document.layers.first(where: { $0.id == id }) else { return nil }
         let visible = !layer.isVisible
-        beginEdit(visible ? "Show Layer" : "Hide Layer")
-        setVisibilityInSwipe(id, visible: visible)
-        return visible
+        do { _ = try beginCommandInteraction(.visibility(document.layers.map(\.id), visible)) }
+        catch { commandRefusal = error.localizedDescription; return nil }
+        setVisibilityInSwipe(id, visible: visible); return visible
     }
     func setVisibilityInSwipe(_ id: UUID, visible: Bool) {
-        guard let index = document?.layers.firstIndex(where: { $0.id == id }),
-              document?.layers[index].isVisible != visible else { return }
-        document?.layers[index].isVisible = visible
+        guard commandInteraction?.commandID == .visibility else { return }
+        _ = runCommand(.visibility([id], visible))
     }
-    func endVisibilitySwipe() { endEdit() }
+    func endVisibilitySwipe() {
+        guard let interaction = commandInteraction, interaction.commandID == .visibility else { return }
+        do { try endCommandInteraction(interaction.token) }
+        catch { commandRefusal = error.localizedDescription }
+    }
 
     func reorderLayers(from offsets: IndexSet, to destination: Int) {
         guard canEditLayers, var layers = document?.layers.reversed().map({ $0 }),
@@ -946,7 +952,7 @@ final class EditorSession {
 
     /// `emptyLayer` starts the canvas with a selected blank "Layer 1", as File > New does.
     func createDocument(width: Int, height: Int, emptyLayer: Bool = false) {
-        guard !isProjectBusy, !isImporting, (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { return }
+        guard commandInteraction == nil, !isProjectBusy, !isImporting, (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { return }
         commitTransform()
         beginEdit("New Canvas")
         defer { endEdit() }

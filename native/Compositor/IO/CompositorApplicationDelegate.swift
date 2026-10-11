@@ -44,8 +44,45 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         // Slider knobs snap to a click on the track instead of gliding there.
         SliderSnap.install()
+        pinEditorWindowFrameForUITests()
         LensWorksLaunchTrace.record("delegate.willFinishLaunching.end")
     }
+
+    /// UI tests pass `-LensWorksPinnedWindowFrame "{{x, y}, {w, h}}"` (AppKit screen coordinates) so every launch
+    /// captures the editor window at the same frame on the same display. Without it macOS restores or places the
+    /// window wherever it likes, which on a multi-display host can be a display with a different backing scale.
+    /// A pinned window also stops autosaving, so tests leave the user's remembered window frame alone. Every
+    /// window update re-checks it, so a later placement or restoration cannot move it either. An opaque backdrop
+    /// window sits right behind it: the window's rounded corners otherwise show whatever other apps have on screen
+    /// there, which would differ between captures.
+    private func pinEditorWindowFrameForUITests() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flag = arguments.firstIndex(of: "-LensWorksPinnedWindowFrame"), arguments.indices.contains(flag + 1) else { return }
+        let value = arguments[flag + 1]
+        let frame = NSRectFromString(value)
+        guard frame.width > 0, frame.height > 0 else { return }
+        pinnedWindowObserver = NotificationCenter.default.addObserver(forName: NSWindow.didUpdateNotification, object: nil, queue: .main) { [unowned self] notification in
+            MainActor.assumeIsolated {
+                guard let window = notification.object as? NSWindow, window.identifier?.rawValue.hasPrefix("editor") == true else { return }
+                if !window.frameAutosaveName.isEmpty { window.setFrameAutosaveName("") }
+                if window.isRestorable { window.isRestorable = false }
+                if window.frame != frame { window.setFrame(frame, display: true) }
+                if window.isVisible, self.pinnedWindowBackdrop?.isVisible != true {
+                    let backdrop = self.pinnedWindowBackdrop ?? NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+                    backdrop.isReleasedWhenClosed = false
+                    backdrop.backgroundColor = .black
+                    backdrop.hasShadow = false
+                    backdrop.ignoresMouseEvents = true
+                    backdrop.setAccessibilityElement(false)
+                    backdrop.setFrame(frame, display: false)
+                    backdrop.order(.below, relativeTo: window.windowNumber)
+                    self.pinnedWindowBackdrop = backdrop
+                }
+            }
+        }
+    }
+    private var pinnedWindowObserver: NSObjectProtocol?
+    private var pinnedWindowBackdrop: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LensWorksLaunchTrace.record("delegate.didFinishLaunching", details: ["windows": String(NSApp.windows.count), "visibleWindows": String(NSApp.windows.filter(\.isVisible).count)])

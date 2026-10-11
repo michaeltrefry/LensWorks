@@ -1,0 +1,112 @@
+{
+  "upstream_version": "1.12.1",
+  "upstream_crate_sha256": "04517ad6f440d16e52ade0ad6d781029313bdacaac4590de9a9114f8d737af61",
+  "feature": "source-preservation",
+  "changes": [
+    {
+      "file": "Cargo.toml",
+      "before_sha256": "51cfc3c8612f4f1753bca29e3c312aacecc4d9edb8c1a21c1296dcea099fa369",
+      "after_sha256": "849a54a5210d4970872cad2f607f19565d8f2d9c79324d0d9cd90417359f8853"
+    },
+    {
+      "file": "build.rs",
+      "before_sha256": "38f152fe2b3ab7b7648189f246daea26ac291d6863deb9a8cb6845c7e6d80a73",
+      "after_sha256": "21813b0774af59a8437049821a296f31d2d40d1c6fad84b5eaffda65a79ae76a"
+    },
+    {
+      "file": "build.rs",
+      "before_sha256": "21813b0774af59a8437049821a296f31d2d40d1c6fad84b5eaffda65a79ae76a",
+      "after_sha256": "f1442ac0095d3c33da1f34d112c3d8edcf023533a5730fc49bd79480107b5ea8"
+    },
+    {
+      "file": "build.rs",
+      "before_sha256": "f1442ac0095d3c33da1f34d112c3d8edcf023533a5730fc49bd79480107b5ea8",
+      "after_sha256": "620edb21b8b3646e94b592ee0206930ba1ea663410b3fcf0dcd15b882e13decf"
+    },
+    {
+      "file": "build.rs",
+      "before_sha256": "620edb21b8b3646e94b592ee0206930ba1ea663410b3fcf0dcd15b882e13decf",
+      "after_sha256": "a56ca2256a6c5138a23a7f09ae6725acb5e295213bbc54f992e65ac249669ea5"
+    },
+    {
+      "file": "external/xmp_toolkit/XMPCore/source/XMPMeta-Parse.cpp",
+      "before_sha256": "edbb19f9d157879b8d47ee45881a4dcf6b89f123fc3071efb37c6706b9e1075c",
+      "after_sha256": "1678b010496056ecfc38becc1b96cbd728b6b8806fc706d3aa8b1352af6a0b1f"
+    },
+    {
+      "file": "external/xmp_toolkit/XMPCore/source/XMPMeta.cpp",
+      "before_sha256": "0479db966cb1be44b4bffa902c4064c79442b178a7a9a70fd53e038a69459681",
+      "after_sha256": "11f0edaf2647321e1a0c07c58267cc87be13efc8f4cbc4244a7b31b790c3841c"
+    },
+    {
+      "file": "external/xmp_toolkit/XMPCore/source/XMPCore_Impl.cpp",
+      "before_sha256": "0a9f2117461fa4066388f24a61e7a2ee95d530b0311c4131ea096be1c54bd9fa",
+      "after_sha256": "ea38714a0d32e219139a76b1a55e0484b7a94d13109ed8a5ec82e96e0ba751a1"
+    },
+    {
+      "file": "external/xmp_toolkit/XMPCore/source/ParseRDF.cpp",
+      "before_sha256": "58545a128ff375bf3714081a0d56bc89040109126d206475ffe5e320130f9cd8",
+      "after_sha256": "8a5aadd3b364256e9e9145eb2d04da55e1f404eb4db2f8d2e1d877ad1de83b39"
+    },
+    {
+      "file": "src/xmp_meta.rs",
+      "before_sha256": "4e26c57964dbc970d0d2ad03f68109acb6bb568cb207b2d4524070a7250c4416",
+      "after_sha256": "1f17eef6c9aa8113ddf1b0e0e9d8585e4db2613320e53ad2a3cc5c0b1efc55d5"
+    },
+    {
+      "file": "src/xmp_meta.rs",
+      "before_sha256": "1f17eef6c9aa8113ddf1b0e0e9d8585e4db2613320e53ad2a3cc5c0b1efc55d5",
+      "after_sha256": "463b42dbffa8f7254139f22566a05548356d07e7c5a7e0e98ad1102fb13a7b97"
+    },
+    {
+      "file": "src/ffi.rs",
+      "before_sha256": "438e4d4d43ab26e50e8c97f04538029a375ab692cbf3be3863cccb4c70378f2b",
+      "after_sha256": "1598348e0ea588316ae0aa87cfa94da854e5ffb4fe11209dbc84c7ebe3a3a070"
+    },
+    {
+      "file": "src/ffi.rs",
+      "before_sha256": "1598348e0ea588316ae0aa87cfa94da854e5ffb4fe11209dbc84c7ebe3a3a070",
+      "after_sha256": "efdba4461f4654285930d0949489c978bb4d33808374f9d80af1060b179fd1d9"
+    },
+    {
+      "file": "src/ffi/bounded_string.rs",
+      "before_sha256": null,
+      "after_sha256": "679481d6377c9bd96dc10dab6bba7e3b64bc4e1f7af928b8b87dc84dee5f15e2"
+    },
+    {
+      "file": "build.rs",
+      "before_sha256": "a56ca2256a6c5138a23a7f09ae6725acb5e295213bbc54f992e65ac249669ea5",
+      "after_sha256": "214d04ef065633bea83ca00de0dbd77450116216115dc97b04b9f165b24641a0"
+    },
+    {
+      "file": "src/ffi.cpp",
+      "before_sha256": "59cd87061f5bc5a3e6dac4c81c44b58dad7bd58092d1058a856466c196a070ca",
+      "after_sha256": "767e5c1ed7a0adaa7397b4800493ec0d05845b4d3be807cda982e17ff4b37829"
+    },
+    {
+      "file": "src/ffi.rs",
+      "before_sha256": "efdba4461f4654285930d0949489c978bb4d33808374f9d80af1060b179fd1d9",
+      "after_sha256": "c296e948752cf29e8ff221a2d2bb10d58ccb6ea4494cd6066dcb26ab708f05b4"
+    },
+    {
+      "file": "src/ffi/bounded_string.rs",
+      "before_sha256": "679481d6377c9bd96dc10dab6bba7e3b64bc4e1f7af928b8b87dc84dee5f15e2",
+      "after_sha256": "80b2db63f0b6aee97f85d89172af2e1b448a3921dd44cd753e42d5ead922bce8"
+    },
+    {
+      "file": "src/xmp_meta.rs",
+      "before_sha256": "463b42dbffa8f7254139f22566a05548356d07e7c5a7e0e98ad1102fb13a7b97",
+      "after_sha256": "f64e1f8ce3617b8eda91dbdd4cb9bc3fa8f32ce83249a5d749d70457d738c34d"
+    },
+    {
+      "file": "src/lib.rs",
+      "before_sha256": "316b1069633e09c6176d1839585be3304b05d4f8c90f9b2ccb04f40a5c8b47b2",
+      "after_sha256": "28d7157ab93c40714f50ab9a348fda53f8764dc5397ac1c626968fe3dd86bad6"
+    },
+    {
+      "file": "src/admitted_string.rs",
+      "before_sha256": null,
+      "after_sha256": "db71472fd988845be0e789fe5d6ff5a38014d404c62eb65d1f46b00e7ff3d903"
+    }
+  ]
+}

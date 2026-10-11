@@ -4,3 +4,5 @@
 xcuserdata/
 *.profraw
 __pycache__/
+# Preserve the former checkout for provenance; it is not a LensWorks dependency.
+/vendor/PhotoCatalog/

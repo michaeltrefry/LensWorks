@@ -1,11 +1,22 @@
 # Catalog adapter
 
-LensWorks owns this version-1 C/JSON boundary. The catalog, import, metadata,
-schema migration, UUID identity, preview validation, and original-file safety
-remain in PhotoCatalog at `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
-The dependency is the pinned `../../vendor/PhotoCatalog` checkout. The root
-Cargo patch preserves its `libsqlite3-sys` private database-identity fix;
-PhotoCatalog also retains its `xmp_toolkit` source-preservation fork.
+LensWorks owns this C/JSON boundary and the complete retained catalog source
+at `../../engines/catalog`. `UPSTREAM_SNAPSHOT.json` records the immutable copy
+provenance from upstream revision `f4f8d3f12acc77fe5632720702c52a7cfefb5b58`.
+The original PhotoCatalog checkout is preserved locally and is not a dependency.
+The owned source retains all catalog services, its `libsqlite3-sys` private
+identity fix, `xmp_toolkit` source-preservation fork, fixtures and notices.
+
+Runtime `source_revision` is the owned source SHA256 in
+`engines/catalog/SOURCE_PROVENANCE.json`, not the historical upstream revision.
+`scripts/catalog_source.py` verifies a canonical sorted path/mode/length/SHA256
+ledger for the complete engine tree. Only that current manifest itself and
+explicit known build-output directories are excluded. The adapter build script
+requires this verified identity and compiles it into the ABI and decode helper.
+Engine changes require review and explicit `python3 scripts/catalog_source.py
+--write`; builds never repair authority automatically. Adapter source is tracked
+separately as LensWorks ABI/build authority. Historical acceptance artifacts
+remain evidence for their original source identity and are not transferred.
 
 `lw_catalog_request` accepts a NUL-terminated UTF-8 JSON request and returns
 an owned NUL-terminated JSON string. Release it exactly once using
@@ -73,18 +84,16 @@ asset state, as defined by PhotoCatalog.
 
 ## Reproduce
 
-Verify the source revision and clean tracked files before building:
+Verify the owned source before building:
 
 ```sh
-git -C vendor/PhotoCatalog rev-parse HEAD
-git -C vendor/PhotoCatalog diff --exit-code
-git -C vendor/PhotoCatalog diff --cached --exit-code
+python3 scripts/catalog_source.py
+python3 scripts/verify-dependencies.py
 ```
 
-The expected head is the revision above. The coordinator's dependency pin
-manifest records the same revision and licenses. Build prerequisites are
-PhotoCatalog's existing Adobe DNG SDK checksum-pinned fetch, native pkg-config
-libraries, and Rust toolchain; no GPU workload is used by this adapter.
+No PhotoCatalog Git checkout or repository access is needed. Prerequisites are
+the copied Adobe DNG SDK checksum-pinned fetch script, native pkg-config libraries,
+and Rust toolchain; no GPU workload is used by this adapter.
 
 ```sh
 export PHOTOCATALOG_DNG_SDK="$PWD/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1"
@@ -279,7 +288,7 @@ or above one. The payload is contiguous RGBA f32 little-endian with stride
 width*16; it is the full original decode, not an encoded preview or an applied
 editor recipe. The editor retains the recipe/layer evaluation separately.
 
-`lensworks-decode-worker` compiles the pinned `src/main.rs` directly using
+`lensworks-decode-worker` compiles the owned `src/main.rs` directly using
 `include!`, preserving every retained descendant-worker dispatch. Its owned
 `--lensworks-full-decode` mode precedes that dispatch. Production may package
 separate PhotoCatalog and LensWorks decode helpers; configure both absolute
@@ -288,9 +297,10 @@ framed stdout/stderr into app logs. The float mode uses a versioned bounded
 file frame with private temporary files and no media-directory staging.
 
 Run CPU tests with `cargo test --release --locked --manifest-path
-adapters/catalog/Cargo.toml --target-dir .build/rust-catalog -- --test-threads=1`.
-Registry/compatibility tests require this serial process-wide fixture gate;
-the dedicated blocked-callback fixture itself exercises concurrent admission,
+adapters/catalog/Cargo.toml --target-dir .build/rust-catalog`.
+Registry/compatibility tests serialize on an in-code process-wide fixture gate
+(the managed registry and counters are global by design), so the suite runs
+with the default parallel harness; the dedicated blocked-callback fixture itself exercises concurrent admission,
 cancellation and teardown. Planned inventory profiles and wire round trips
 are reported separately from actual retained-service lifecycle acceptance.
 

@@ -46,7 +46,9 @@ struct ExternalChangeTests {
         try await ProjectStore.shared.save(snapshot, to: url)
     }
 
-    private func eventually(_ timeout: Duration = .seconds(4), _ condition: () -> Bool) async -> Bool {
+    /// Waits for a condition the watcher reaches on its own. Returns as soon as it holds; the long limit only
+    /// bounds a real failure, so a loaded host (parallel tests, CI builds) cannot fail a correct run.
+    private func eventually(_ timeout: Duration = .seconds(60), _ condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if condition() { return true }
@@ -146,7 +148,7 @@ struct ExternalChangeTests {
         let manifest = url.appendingPathComponent("manifest.json")
         let good = try Data(contentsOf: manifest)
         try Data("{ \"format\": \"com.compositor.project\", \"version\": 9, \"layers\": [".utf8).write(to: manifest, options: .atomic)
-        await settle()
+        #expect(await eventually { controller.externalChanges.checksCompleted >= 1 })
         #expect(controller.externalChanges.reloadCount == 0)
         #expect(controller.session.document?.layers.count == 2)
         let fixed = try #require(String(data: good, encoding: .utf8)).replacingOccurrences(of: "\"Base\"", with: "\"Finished\"")
@@ -164,7 +166,7 @@ struct ExternalChangeTests {
         let active = try #require(session.document?.layers.first?.id)
         session.renameLayer(active, to: "Unsaved here")
         try await renameFirstLayerOnDisk(url, to: "Renamed elsewhere")
-        await settle()
+        #expect(await eventually { controller.externalChanges.checksCompleted >= 1 })
         // No window to ask in, so the question waits and the document keeps the unsaved edit.
         #expect(controller.externalChanges.reloadCount == 0)
         #expect(controller.externalChanges.pending)

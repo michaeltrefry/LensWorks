@@ -59,7 +59,7 @@ struct LensWorksCatalogTests {
         session.setLayerOpacity(0.6)
         let snapshot = try #require(session.projectSnapshot())
         let project = media.appendingPathComponent("Working version.comp")
-        let version = LensWorksWorkingVersion(id: UUID(), photoID: asset.id, catalogPath: catalogURL.path, originalPath: source.path, projectPath: project.path, name: "Working version")
+        let version = LensWorksWorkingVersion(id: UUID(), photoID: asset.photoID, catalogPath: catalogURL.path, originalPath: source.path, projectPath: project.path, name: "Working version")
         try await ProjectStore.shared.save(snapshot, to: project, workingVersion: version)
         let beforeManifest = try Data(contentsOf: project.appendingPathComponent("manifest.json"))
         let beforeIdentity = try Data(contentsOf: project.appendingPathComponent("LensWorks.json"))
@@ -142,19 +142,21 @@ struct LensWorksCatalogTests {
         await session.importImages([source])
         let snapshot = try #require(session.projectSnapshot())
         let healthy = media.appendingPathComponent("Healthy.comp"), corrupt = media.appendingPathComponent("Corrupt.comp")
-        let version = LensWorksWorkingVersion(id: UUID(), photoID: asset.id, catalogPath: try #require(catalog.catalogPath),
+        let version = LensWorksWorkingVersion(id: UUID(), photoID: asset.photoID, catalogPath: try #require(catalog.catalogPath),
             originalPath: source.path, projectPath: healthy.path, name: "Healthy")
         try await ProjectStore.shared.save(snapshot, to: healthy, workingVersion: version)
         try await ProjectStore.shared.save(snapshot, to: corrupt, workingVersion: version)
         try FileManager.default.removeItem(at: corrupt.appendingPathComponent("LensWorks.json"))
         UserDefaults.standard.set([healthy.path, corrupt.path], forKey: "LensWorks.workingVersions")
+        await catalog.reconcileWorkingVersions()
+        #expect(catalog.error?.contains("Corrupt.comp") == true)
+        #expect(UserDefaults.standard.stringArray(forKey: "LensWorks.workingVersions")?.contains(corrupt.path) == true)
         await catalog.connect(catalogURL.path)
         #expect(catalog.catalogPath != nil)
         #expect(catalog.assets.count == 1)
         #expect(catalog.selectedAsset?.id == asset.id)
         #expect(catalog.versions.count == 1)
         #expect(catalog.versions.first?.projectPath == healthy.path)
-        #expect(catalog.error?.contains("Corrupt.comp") == true)
         await #expect(throws: (any Error).self) { try await ProjectStore.shared.load(from: corrupt) }
     }
 

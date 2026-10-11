@@ -1,9 +1,9 @@
-// Source-derived from frozen PhotoCatalog f4f8d3f12acc77fe5632720702c52a7cfefb5b58.
+// Source-derived from LensWorks-owned engines/catalog; upstream snapshot f4f8d3f12acc77fe5632720702c52a7cfefb5b58 is provenance only.
 // Coverage and source hashes: docs/CATALOG_SERVICE_COVERAGE.json.
 // All retained serialized request/result fields remain typed; arbitrary JSON is limited to serde_json::Value.
 import Foundation
 
-/// application::Limits (vendor/PhotoCatalog/src/application.rs:101).
+/// application::Limits (engines/catalog/src/application.rs:101).
 nonisolated struct LWApplicationLimits: Codable, Sendable {
     var queued: UInt
     var request_bytes: UInt
@@ -52,7 +52,7 @@ nonisolated struct LWApplicationLimits: Codable, Sendable {
     }
 }
 
-/// application::backup::BackupReceipt (vendor/PhotoCatalog/src/application/backup.rs:76).
+/// application::backup::BackupReceipt (engines/catalog/src/application/backup.rs:76).
 nonisolated struct LWApplicationBackupBackupReceipt: Codable, Sendable {
     var `protocol`: LWCatalogU64
     var backup_id: String
@@ -88,7 +88,7 @@ nonisolated struct LWApplicationBackupBackupReceipt: Codable, Sendable {
     }
 }
 
-/// application::backup::Failure (vendor/PhotoCatalog/src/application/backup.rs:120).
+/// application::backup::Failure (engines/catalog/src/application/backup.rs:120).
 nonisolated struct LWApplicationBackupFailure: Codable, Sendable {
     var message: String
     var truncated: Bool
@@ -108,14 +108,14 @@ nonisolated struct LWApplicationBackupFailure: Codable, Sendable {
     }
 }
 
-/// application::backup::Kind (vendor/PhotoCatalog/src/application/backup.rs:44).
+/// application::backup::Kind (engines/catalog/src/application/backup.rs:44).
 nonisolated enum LWApplicationBackupKind: String, Codable, Sendable {
     case Create = "create"
     case Inspect = "inspect"
     case Restore = "restore"
 }
 
-/// application::backup::Progress (vendor/PhotoCatalog/src/application/backup.rs:59).
+/// application::backup::Progress (engines/catalog/src/application/backup.rs:59).
 nonisolated struct LWApplicationBackupProgress: Codable, Sendable {
     var phase: LWCatalogBackupPhase
     var pages_copied: LWCatalogU64
@@ -143,7 +143,7 @@ nonisolated struct LWApplicationBackupProgress: Codable, Sendable {
     }
 }
 
-/// application::backup::Receipt (vendor/PhotoCatalog/src/application/backup.rs:115).
+/// application::backup::Receipt (engines/catalog/src/application/backup.rs:115).
 nonisolated indirect enum LWApplicationBackupReceipt: Codable, Sendable {
     case Backup(LWApplicationBackupBackupReceipt)
     case Restore(LWApplicationBackupRestoreReceipt)
@@ -172,7 +172,7 @@ nonisolated indirect enum LWApplicationBackupReceipt: Codable, Sendable {
     }
 }
 
-/// application::backup::RestoreReceipt (vendor/PhotoCatalog/src/application/backup.rs:97).
+/// application::backup::RestoreReceipt (engines/catalog/src/application/backup.rs:97).
 nonisolated struct LWApplicationBackupRestoreReceipt: Codable, Sendable {
     var `protocol`: LWCatalogU64
     var restore_id: String
@@ -200,7 +200,7 @@ nonisolated struct LWApplicationBackupRestoreReceipt: Codable, Sendable {
     }
 }
 
-/// application::backup::Snapshot (vendor/PhotoCatalog/src/application/backup.rs:125).
+/// application::backup::Snapshot (engines/catalog/src/application/backup.rs:125).
 nonisolated struct LWApplicationBackupSnapshot: Codable, Sendable {
     var operation: String
     var kind: LWApplicationBackupKind
@@ -240,7 +240,7 @@ nonisolated struct LWApplicationBackupSnapshot: Codable, Sendable {
     }
 }
 
-/// application::backup::State (vendor/PhotoCatalog/src/application/backup.rs:51).
+/// application::backup::State (engines/catalog/src/application/backup.rs:51).
 nonisolated enum LWApplicationBackupState: String, Codable, Sendable {
     case Running = "running"
     case CancelRequested = "cancel_requested"
@@ -248,7 +248,7 @@ nonisolated enum LWApplicationBackupState: String, Codable, Sendable {
     case Failed = "failed"
 }
 
-/// application::browse::Options (vendor/PhotoCatalog/src/application/browse.rs:8).
+/// application::browse::Options (engines/catalog/src/application/browse.rs:8).
 nonisolated struct LWApplicationBrowseOptions: Codable, Sendable {
     var text: String?
     var keyword: LWCatalogI64?
@@ -333,7 +333,7 @@ nonisolated struct LWApplicationBrowseOptions: Codable, Sendable {
     }
 }
 
-/// application::copy::Inspection (vendor/PhotoCatalog/src/application/copy.rs:117).
+/// application::copy::Inspection (engines/catalog/src/application/copy.rs:117).
 nonisolated struct LWApplicationCopyInspection: Codable, Sendable {
     var job: LWApplicationCopyJob
     var source: LWApplicationCopyTarget
@@ -369,7 +369,7 @@ nonisolated struct LWApplicationCopyInspection: Codable, Sendable {
     }
 }
 
-/// application::copy::Item (vendor/PhotoCatalog/src/application/copy.rs:107).
+/// application::copy::Item (engines/catalog/src/application/copy.rs:107).
 nonisolated struct LWApplicationCopyItem: Codable, Sendable {
     var sequence: LWCatalogI64
     var target: LWApplicationCopyTarget
@@ -409,7 +409,7 @@ nonisolated struct LWApplicationCopyItem: Codable, Sendable {
     }
 }
 
-/// application::copy::Job (vendor/PhotoCatalog/src/application/copy.rs:82).
+/// application::copy::Job (engines/catalog/src/application/copy.rs:82).
 nonisolated struct LWApplicationCopyJob: Codable, Sendable {
     var sequence: LWCatalogI64
     var id: String
@@ -441,7 +441,7 @@ nonisolated struct LWApplicationCopyJob: Codable, Sendable {
     }
 }
 
-/// application::copy::Name (vendor/PhotoCatalog/src/application/copy.rs:101).
+/// application::copy::Name (engines/catalog/src/application/copy.rs:101).
 nonisolated struct LWApplicationCopyName: Codable, Sendable {
     var filename: String
     var variant_label: String
@@ -465,7 +465,7 @@ nonisolated struct LWApplicationCopyName: Codable, Sendable {
     }
 }
 
-/// application::copy::Operation (vendor/PhotoCatalog/src/application/copy.rs:136).
+/// application::copy::Operation (engines/catalog/src/application/copy.rs:136).
 nonisolated struct LWApplicationCopyOperation: Codable, Sendable {
     var id: String
     var job: LWApplicationCopyJob
@@ -493,7 +493,7 @@ nonisolated struct LWApplicationCopyOperation: Codable, Sendable {
     }
 }
 
-/// application::copy::Phase (vendor/PhotoCatalog/src/application/copy.rs:127).
+/// application::copy::Phase (engines/catalog/src/application/copy.rs:127).
 nonisolated enum LWApplicationCopyPhase: String, Codable, Sendable {
     case Running = "running"
     case Paused = "paused"
@@ -503,7 +503,7 @@ nonisolated enum LWApplicationCopyPhase: String, Codable, Sendable {
     case Failed = "failed"
 }
 
-/// application::copy::Request (vendor/PhotoCatalog/src/application/copy.rs:22).
+/// application::copy::Request (engines/catalog/src/application/copy.rs:22).
 nonisolated indirect enum LWApplicationCopyRequest: Codable, Sendable {
     case Begin(source: LWCatalogEditsVariantKey, expected_revision: LWCatalogI64, groups: [LWEditRecipeAdjustmentGroup])
     case Append(job: String, expected_total: LWCatalogI64, targets: [LWApplicationCopyTarget])
@@ -657,7 +657,7 @@ nonisolated indirect enum LWApplicationCopyRequest: Codable, Sendable {
     }
 }
 
-/// application::copy::Response (vendor/PhotoCatalog/src/application/copy.rs:144).
+/// application::copy::Response (engines/catalog/src/application/copy.rs:144).
 nonisolated indirect enum LWApplicationCopyResponse: Codable, Sendable {
     case Job(LWApplicationCopyJob)
     case Jobs(rows: [LWApplicationCopyJob], next: LWCatalogI64?)
@@ -717,7 +717,7 @@ nonisolated indirect enum LWApplicationCopyResponse: Codable, Sendable {
     }
 }
 
-/// application::copy::Target (vendor/PhotoCatalog/src/application/copy.rs:77).
+/// application::copy::Target (engines/catalog/src/application/copy.rs:77).
 nonisolated struct LWApplicationCopyTarget: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var expected_revision: LWCatalogI64
@@ -738,7 +738,7 @@ nonisolated struct LWApplicationCopyTarget: Codable, Sendable {
     }
 }
 
-/// application::dto::BridgeError (vendor/PhotoCatalog/src/application/dto.rs:437).
+/// application::dto::BridgeError (engines/catalog/src/application/dto.rs:437).
 nonisolated struct LWApplicationDtoBridgeError: Codable, Sendable {
     var code: LWApplicationDtoErrorCode
     var message: String
@@ -758,7 +758,7 @@ nonisolated struct LWApplicationDtoBridgeError: Codable, Sendable {
     }
 }
 
-/// application::dto::CullOperation (vendor/PhotoCatalog/src/application/dto.rs:220).
+/// application::dto::CullOperation (engines/catalog/src/application/dto.rs:220).
 nonisolated indirect enum LWApplicationDtoCullOperation: Codable, Sendable {
     case Rating(UInt8)
     case Flag(LWOrganizationFlag)
@@ -797,7 +797,7 @@ nonisolated indirect enum LWApplicationDtoCullOperation: Codable, Sendable {
     }
 }
 
-/// application::dto::ErrorCode (vendor/PhotoCatalog/src/application/dto.rs:426).
+/// application::dto::ErrorCode (engines/catalog/src/application/dto.rs:426).
 nonisolated enum LWApplicationDtoErrorCode: String, Codable, Sendable {
     case InvalidRequest = "invalid_request"
     case Busy = "busy"
@@ -809,7 +809,7 @@ nonisolated enum LWApplicationDtoErrorCode: String, Codable, Sendable {
     case Closed = "closed"
 }
 
-/// application::dto::Folder (vendor/PhotoCatalog/src/application/dto.rs:278).
+/// application::dto::Folder (engines/catalog/src/application/dto.rs:278).
 nonisolated struct LWApplicationDtoFolder: Codable, Sendable {
     var id: LWCatalogI64
     var parent: LWCatalogI64?
@@ -837,7 +837,7 @@ nonisolated struct LWApplicationDtoFolder: Codable, Sendable {
     }
 }
 
-/// application::dto::GridImage (vendor/PhotoCatalog/src/application/dto.rs:285).
+/// application::dto::GridImage (engines/catalog/src/application/dto.rs:285).
 nonisolated struct LWApplicationDtoGridImage: Codable, Sendable {
     var image_id: String
     var origin: String
@@ -901,7 +901,7 @@ nonisolated struct LWApplicationDtoGridImage: Codable, Sendable {
     }
 }
 
-/// application::dto::HistoryEntry (vendor/PhotoCatalog/src/application/dto.rs:311).
+/// application::dto::HistoryEntry (engines/catalog/src/application/dto.rs:311).
 nonisolated struct LWApplicationDtoHistoryEntry: Codable, Sendable {
     var revision: LWCatalogI64
     var kind: String
@@ -929,7 +929,7 @@ nonisolated struct LWApplicationDtoHistoryEntry: Codable, Sendable {
     }
 }
 
-/// application::dto::ImportPhase (vendor/PhotoCatalog/src/application/dto.rs:253).
+/// application::dto::ImportPhase (engines/catalog/src/application/dto.rs:253).
 nonisolated enum LWApplicationDtoImportPhase: String, Codable, Sendable {
     case Discovering = "discovering"
     case Draining = "draining"
@@ -939,7 +939,7 @@ nonisolated enum LWApplicationDtoImportPhase: String, Codable, Sendable {
     case Failed = "failed"
 }
 
-/// application::dto::ImportStatus (vendor/PhotoCatalog/src/application/dto.rs:262).
+/// application::dto::ImportStatus (engines/catalog/src/application/dto.rs:262).
 nonisolated struct LWApplicationDtoImportStatus: Codable, Sendable {
     var id: String
     var source: LWCatalogNativePath
@@ -1003,7 +1003,7 @@ nonisolated struct LWApplicationDtoImportStatus: Codable, Sendable {
     }
 }
 
-/// application::dto::Phase (vendor/PhotoCatalog/src/application/dto.rs:233).
+/// application::dto::Phase (engines/catalog/src/application/dto.rs:233).
 nonisolated enum LWApplicationDtoPhase: String, Codable, Sendable {
     case Closed = "closed"
     case Opening = "opening"
@@ -1013,7 +1013,7 @@ nonisolated enum LWApplicationDtoPhase: String, Codable, Sendable {
     case Failed = "failed"
 }
 
-/// application::dto::PreviewDeliveryDiagnostic (vendor/PhotoCatalog/src/application/dto.rs:350).
+/// application::dto::PreviewDeliveryDiagnostic (engines/catalog/src/application/dto.rs:350).
 nonisolated struct LWApplicationDtoPreviewDeliveryDiagnostic: Codable, Sendable {
     var ready_for_transfer_ms: LWCatalogFloat64
     var retained_read: LWApplicationDtoPreviewReadDiagnostic
@@ -1041,7 +1041,7 @@ nonisolated struct LWApplicationDtoPreviewDeliveryDiagnostic: Codable, Sendable 
     }
 }
 
-/// application::dto::PreviewDiagnostic (vendor/PhotoCatalog/src/application/dto.rs:359).
+/// application::dto::PreviewDiagnostic (engines/catalog/src/application/dto.rs:359).
 nonisolated struct LWApplicationDtoPreviewDiagnostic: Codable, Sendable {
     var route: LWApplicationDtoPreviewRoute
     var expected_key_digest: String?
@@ -1085,7 +1085,7 @@ nonisolated struct LWApplicationDtoPreviewDiagnostic: Codable, Sendable {
     }
 }
 
-/// application::dto::PreviewReadDiagnostic (vendor/PhotoCatalog/src/application/dto.rs:338).
+/// application::dto::PreviewReadDiagnostic (engines/catalog/src/application/dto.rs:338).
 nonisolated struct LWApplicationDtoPreviewReadDiagnostic: Codable, Sendable {
     var outcome: String
     var queue_ms: LWCatalogFloat64
@@ -1133,7 +1133,7 @@ nonisolated struct LWApplicationDtoPreviewReadDiagnostic: Codable, Sendable {
     }
 }
 
-/// application::dto::PreviewRoute (vendor/PhotoCatalog/src/application/dto.rs:331).
+/// application::dto::PreviewRoute (engines/catalog/src/application/dto.rs:331).
 nonisolated enum LWApplicationDtoPreviewRoute: String, Codable, Sendable {
     case Pending = "pending"
     case Retained = "retained"
@@ -1141,7 +1141,7 @@ nonisolated enum LWApplicationDtoPreviewRoute: String, Codable, Sendable {
     case MemoryCache = "memory_cache"
 }
 
-/// application::dto::PreviewState (vendor/PhotoCatalog/src/application/dto.rs:319).
+/// application::dto::PreviewState (engines/catalog/src/application/dto.rs:319).
 nonisolated enum LWApplicationDtoPreviewState: String, Codable, Sendable {
     case Queued = "queued"
     case Ready = "ready"
@@ -1153,7 +1153,7 @@ nonisolated enum LWApplicationDtoPreviewState: String, Codable, Sendable {
     case Canceled = "canceled"
 }
 
-/// application::dto::PreviewStatus (vendor/PhotoCatalog/src/application/dto.rs:370).
+/// application::dto::PreviewStatus (engines/catalog/src/application/dto.rs:370).
 nonisolated struct LWApplicationDtoPreviewStatus: Codable, Sendable {
     var ticket: String
     var key: LWCatalogEditsVariantKey
@@ -1201,13 +1201,13 @@ nonisolated struct LWApplicationDtoPreviewStatus: Codable, Sendable {
     }
 }
 
-/// application::dto::PreviewTier (vendor/PhotoCatalog/src/application/dto.rs:227).
+/// application::dto::PreviewTier (engines/catalog/src/application/dto.rs:227).
 nonisolated enum LWApplicationDtoPreviewTier: String, Codable, Sendable {
     case Thumbnail = "thumbnail"
     case Large = "large"
 }
 
-/// application::dto::Reply (vendor/PhotoCatalog/src/application/dto.rs:443).
+/// application::dto::Reply (engines/catalog/src/application/dto.rs:443).
 nonisolated indirect enum LWApplicationDtoReply: Codable, Sendable {
     case Ok(value: LWApplicationDtoResponse)
     case Error(error: LWApplicationDtoBridgeError)
@@ -1236,7 +1236,7 @@ nonisolated indirect enum LWApplicationDtoReply: Codable, Sendable {
     }
 }
 
-/// application::dto::Request (vendor/PhotoCatalog/src/application/dto.rs:37).
+/// application::dto::Request (engines/catalog/src/application/dto.rs:37).
 nonisolated indirect enum LWApplicationDtoRequest: Codable, Sendable {
     case PreviewSettings(catalog: String, request: LWApplicationPreviewSettingsRequest)
     case LightroomMigration(request: LWApplicationLightroomMigrationRequest)
@@ -1816,7 +1816,7 @@ nonisolated indirect enum LWApplicationDtoRequest: Codable, Sendable {
     }
 }
 
-/// application::dto::Response (vendor/PhotoCatalog/src/application/dto.rs:384).
+/// application::dto::Response (engines/catalog/src/application/dto.rs:384).
 nonisolated indirect enum LWApplicationDtoResponse: Codable, Sendable {
     case PreviewSettings(LWApplicationPreviewSettingsStatus)
     case LightroomMigration(LWApplicationLightroomMigrationResponse)
@@ -2005,7 +2005,7 @@ nonisolated indirect enum LWApplicationDtoResponse: Codable, Sendable {
     }
 }
 
-/// application::dto::Restored (vendor/PhotoCatalog/src/application/dto.rs:455).
+/// application::dto::Restored (engines/catalog/src/application/dto.rs:455).
 nonisolated struct LWApplicationDtoRestored: Codable, Sendable {
     var receipt: LWApplicationBackupRestoreReceipt
     var jobs_held: Bool
@@ -2025,7 +2025,7 @@ nonisolated struct LWApplicationDtoRestored: Codable, Sendable {
     }
 }
 
-/// application::dto::Status (vendor/PhotoCatalog/src/application/dto.rs:242).
+/// application::dto::Status (engines/catalog/src/application/dto.rs:242).
 nonisolated struct LWApplicationDtoStatus: Codable, Sendable {
     var phase: LWApplicationDtoPhase
     var catalog: String?
@@ -2065,7 +2065,7 @@ nonisolated struct LWApplicationDtoStatus: Codable, Sendable {
     }
 }
 
-/// application::dto::Variant (vendor/PhotoCatalog/src/application/dto.rs:301).
+/// application::dto::Variant (engines/catalog/src/application/dto.rs:301).
 nonisolated struct LWApplicationDtoVariant: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var label: String
@@ -2105,7 +2105,7 @@ nonisolated struct LWApplicationDtoVariant: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::AliasLimits (vendor/PhotoCatalog/src/application/exports/dto.rs:38).
+/// application::exports::dto::AliasLimits (engines/catalog/src/application/exports/dto.rs:38).
 nonisolated struct LWApplicationExportsDtoAliasLimits: Codable, Sendable {
     var directories: LWCatalogU64
     var candidates: LWCatalogU64
@@ -2126,7 +2126,7 @@ nonisolated struct LWApplicationExportsDtoAliasLimits: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Blob (vendor/PhotoCatalog/src/application/exports/dto.rs:386).
+/// application::exports::dto::Blob (engines/catalog/src/application/exports/dto.rs:386).
 nonisolated struct LWApplicationExportsDtoBlob: Codable, Sendable {
     var digest: String
     var bytes: LWCatalogU64
@@ -2146,7 +2146,7 @@ nonisolated struct LWApplicationExportsDtoBlob: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Budgets (vendor/PhotoCatalog/src/application/exports/dto.rs:44).
+/// application::exports::dto::Budgets (engines/catalog/src/application/exports/dto.rs:44).
 nonisolated struct LWApplicationExportsDtoBudgets: Codable, Sendable {
     var max_original_bytes: LWCatalogU64
     var max_payload_bytes: LWCatalogU64
@@ -2171,7 +2171,7 @@ nonisolated struct LWApplicationExportsDtoBudgets: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::DecodeLimits (vendor/PhotoCatalog/src/application/exports/dto.rs:58).
+/// application::exports::dto::DecodeLimits (engines/catalog/src/application/exports/dto.rs:58).
 nonisolated struct LWApplicationExportsDtoDecodeLimits: Codable, Sendable {
     var max_encoded_bytes: LWCatalogU64
     var max_intermediate_pixels: LWCatalogU64
@@ -2196,7 +2196,7 @@ nonisolated struct LWApplicationExportsDtoDecodeLimits: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Destination (vendor/PhotoCatalog/src/application/exports/dto.rs:442).
+/// application::exports::dto::Destination (engines/catalog/src/application/exports/dto.rs:442).
 nonisolated struct LWApplicationExportsDtoDestination: Codable, Sendable {
     var target: LWApplicationExportsDtoTargetKey
     var name: LWApplicationExportsDtoName
@@ -2224,7 +2224,7 @@ nonisolated struct LWApplicationExportsDtoDestination: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::DestinationSnapshot (vendor/PhotoCatalog/src/application/exports/dto.rs:391).
+/// application::exports::dto::DestinationSnapshot (engines/catalog/src/application/exports/dto.rs:391).
 nonisolated struct LWApplicationExportsDtoDestinationSnapshot: Codable, Sendable {
     var version: UInt32
     var operation: String
@@ -2256,7 +2256,7 @@ nonisolated struct LWApplicationExportsDtoDestinationSnapshot: Codable, Sendable
     }
 }
 
-/// application::exports::dto::EncodeLimits (vendor/PhotoCatalog/src/application/exports/dto.rs:65).
+/// application::exports::dto::EncodeLimits (engines/catalog/src/application/exports/dto.rs:65).
 nonisolated struct LWApplicationExportsDtoEncodeLimits: Codable, Sendable {
     var render: LWApplicationExportsDtoRenderLimits
     var max_metadata_bytes: LWCatalogU64
@@ -2281,7 +2281,7 @@ nonisolated struct LWApplicationExportsDtoEncodeLimits: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::ExecutionLimits (vendor/PhotoCatalog/src/application/exports/dto.rs:80).
+/// application::exports::dto::ExecutionLimits (engines/catalog/src/application/exports/dto.rs:80).
 nonisolated struct LWApplicationExportsDtoExecutionLimits: Codable, Sendable {
     var worker_bytes: LWCatalogU64
     var working_bytes: LWCatalogU64
@@ -2306,7 +2306,7 @@ nonisolated struct LWApplicationExportsDtoExecutionLimits: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::FileRevision (vendor/PhotoCatalog/src/application/exports/dto.rs:295).
+/// application::exports::dto::FileRevision (engines/catalog/src/application/exports/dto.rs:295).
 nonisolated struct LWApplicationExportsDtoFileRevision: Codable, Sendable {
     var bytes: LWCatalogU64
     var digest: String
@@ -2334,7 +2334,7 @@ nonisolated struct LWApplicationExportsDtoFileRevision: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::ImageIdentity (vendor/PhotoCatalog/src/application/exports/dto.rs:343).
+/// application::exports::dto::ImageIdentity (engines/catalog/src/application/exports/dto.rs:343).
 nonisolated struct LWApplicationExportsDtoImageIdentity: Codable, Sendable {
     var image_id: String
     var key: LWCatalogEditsVariantKey
@@ -2370,7 +2370,7 @@ nonisolated struct LWApplicationExportsDtoImageIdentity: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Item (vendor/PhotoCatalog/src/application/exports/dto.rs:331).
+/// application::exports::dto::Item (engines/catalog/src/application/exports/dto.rs:331).
 nonisolated struct LWApplicationExportsDtoItem: Codable, Sendable {
     var sequence: LWCatalogI64
     var key: LWCatalogEditsVariantKey
@@ -2418,7 +2418,7 @@ nonisolated struct LWApplicationExportsDtoItem: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Job (vendor/PhotoCatalog/src/application/exports/dto.rs:270).
+/// application::exports::dto::Job (engines/catalog/src/application/exports/dto.rs:270).
 nonisolated struct LWApplicationExportsDtoJob: Codable, Sendable {
     var sequence: LWCatalogI64
     var id: String
@@ -2450,7 +2450,7 @@ nonisolated struct LWApplicationExportsDtoJob: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Metadata (vendor/PhotoCatalog/src/application/exports/dto.rs:99).
+/// application::exports::dto::Metadata (engines/catalog/src/application/exports/dto.rs:99).
 nonisolated indirect enum LWApplicationExportsDtoMetadata: Codable, Sendable {
     case Omit
     case Resolved(expected_revision: LWCatalogI64, base_model: LWCatalogI64?)
@@ -2481,7 +2481,7 @@ nonisolated indirect enum LWApplicationExportsDtoMetadata: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Name (vendor/PhotoCatalog/src/application/exports/dto.rs:289).
+/// application::exports::dto::Name (engines/catalog/src/application/exports/dto.rs:289).
 nonisolated struct LWApplicationExportsDtoName: Codable, Sendable {
     var filename: String
     var variant_label: String
@@ -2505,7 +2505,7 @@ nonisolated struct LWApplicationExportsDtoName: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Naming (vendor/PhotoCatalog/src/application/exports/dto.rs:123).
+/// application::exports::dto::Naming (engines/catalog/src/application/exports/dto.rs:123).
 nonisolated struct LWApplicationExportsDtoNaming: Codable, Sendable {
     var prefix: String
     var suffix: String
@@ -2534,7 +2534,7 @@ nonisolated struct LWApplicationExportsDtoNaming: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Operation (vendor/PhotoCatalog/src/application/exports/dto.rs:476).
+/// application::exports::dto::Operation (engines/catalog/src/application/exports/dto.rs:476).
 nonisolated struct LWApplicationExportsDtoOperation: Codable, Sendable {
     var id: String
     var kind: String
@@ -2590,7 +2590,7 @@ nonisolated struct LWApplicationExportsDtoOperation: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Options (vendor/PhotoCatalog/src/application/exports/dto.rs:86).
+/// application::exports::dto::Options (engines/catalog/src/application/exports/dto.rs:86).
 nonisolated struct LWApplicationExportsDtoOptions: Codable, Sendable {
     var budgets: LWApplicationExportsDtoBudgets
     var execution: LWApplicationExportsDtoExecutionLimits
@@ -2638,7 +2638,7 @@ nonisolated struct LWApplicationExportsDtoOptions: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Output (vendor/PhotoCatalog/src/application/exports/dto.rs:30).
+/// application::exports::dto::Output (engines/catalog/src/application/exports/dto.rs:30).
 nonisolated struct LWApplicationExportsDtoOutput: Codable, Sendable {
     var size: LWImageExportSpecificationOutputSize
     var format: LWImageExportSpecificationOutputFormat
@@ -2667,7 +2667,7 @@ nonisolated struct LWApplicationExportsDtoOutput: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Paths (vendor/PhotoCatalog/src/application/exports/dto.rs:436).
+/// application::exports::dto::Paths (engines/catalog/src/application/exports/dto.rs:436).
 nonisolated struct LWApplicationExportsDtoPaths: Codable, Sendable {
     var projected: LWCatalogU64
     var pending: Bool
@@ -2691,7 +2691,7 @@ nonisolated struct LWApplicationExportsDtoPaths: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::PhotoLimits (vendor/PhotoCatalog/src/application/exports/dto.rs:72).
+/// application::exports::dto::PhotoLimits (engines/catalog/src/application/exports/dto.rs:72).
 nonisolated struct LWApplicationExportsDtoPhotoLimits: Codable, Sendable {
     var decode: LWApplicationExportsDtoDecodeLimits
     var render: LWApplicationExportsDtoRenderLimits
@@ -2720,7 +2720,7 @@ nonisolated struct LWApplicationExportsDtoPhotoLimits: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Plan (vendor/PhotoCatalog/src/application/exports/dto.rs:399).
+/// application::exports::dto::Plan (engines/catalog/src/application/exports/dto.rs:399).
 nonisolated struct LWApplicationExportsDtoPlan: Codable, Sendable {
     var job: String
     var sequence: LWCatalogI64
@@ -2796,7 +2796,7 @@ nonisolated struct LWApplicationExportsDtoPlan: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::PlanChunk (vendor/PhotoCatalog/src/application/exports/dto.rs:418).
+/// application::exports::dto::PlanChunk (engines/catalog/src/application/exports/dto.rs:418).
 nonisolated struct LWApplicationExportsDtoPlanChunk: Codable, Sendable {
     var job: String
     var sequence: LWCatalogI64
@@ -2836,7 +2836,7 @@ nonisolated struct LWApplicationExportsDtoPlanChunk: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Profile (vendor/PhotoCatalog/src/application/exports/dto.rs:23).
+/// application::exports::dto::Profile (engines/catalog/src/application/exports/dto.rs:23).
 nonisolated indirect enum LWApplicationExportsDtoProfile: Codable, Sendable {
     case Srgb
     case LinearSrgb
@@ -2873,7 +2873,7 @@ nonisolated indirect enum LWApplicationExportsDtoProfile: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::ProfileAdmission (vendor/PhotoCatalog/src/application/exports/dto.rs:428).
+/// application::exports::dto::ProfileAdmission (engines/catalog/src/application/exports/dto.rs:428).
 nonisolated struct LWApplicationExportsDtoProfileAdmission: Codable, Sendable {
     var token: String
     var name: String
@@ -2905,7 +2905,7 @@ nonisolated struct LWApplicationExportsDtoProfileAdmission: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Receipt (vendor/PhotoCatalog/src/application/exports/dto.rs:312).
+/// application::exports::dto::Receipt (engines/catalog/src/application/exports/dto.rs:312).
 nonisolated struct LWApplicationExportsDtoReceipt: Codable, Sendable {
     var state: String
     var destination: LWCatalogNativePath
@@ -2937,7 +2937,7 @@ nonisolated struct LWApplicationExportsDtoReceipt: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Recovery (vendor/PhotoCatalog/src/application/exports/dto.rs:449).
+/// application::exports::dto::Recovery (engines/catalog/src/application/exports/dto.rs:449).
 nonisolated struct LWApplicationExportsDtoRecovery: Codable, Sendable {
     var fenced: LWCatalogU64
     var complete: Bool
@@ -2957,7 +2957,7 @@ nonisolated struct LWApplicationExportsDtoRecovery: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::RenderIdentity (vendor/PhotoCatalog/src/application/exports/dto.rs:360).
+/// application::exports::dto::RenderIdentity (engines/catalog/src/application/exports/dto.rs:360).
 nonisolated struct LWApplicationExportsDtoRenderIdentity: Codable, Sendable {
     var image_identity: LWApplicationExportsDtoImageIdentity?
     var source: LWApplicationExportsDtoSourceIdentity
@@ -2989,7 +2989,7 @@ nonisolated struct LWApplicationExportsDtoRenderIdentity: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::RenderLimits (vendor/PhotoCatalog/src/application/exports/dto.rs:51).
+/// application::exports::dto::RenderLimits (engines/catalog/src/application/exports/dto.rs:51).
 nonisolated struct LWApplicationExportsDtoRenderLimits: Codable, Sendable {
     var max_pixels: LWCatalogU64
     var max_allocation_bytes: LWCatalogU64
@@ -3014,7 +3014,7 @@ nonisolated struct LWApplicationExportsDtoRenderLimits: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Request (vendor/PhotoCatalog/src/application/exports/dto.rs:136).
+/// application::exports::dto::Request (engines/catalog/src/application/exports/dto.rs:136).
 nonisolated indirect enum LWApplicationExportsDtoRequest: Codable, Sendable {
     case Options
     case Profile(path: LWCatalogNativePath)
@@ -3331,7 +3331,7 @@ nonisolated indirect enum LWApplicationExportsDtoRequest: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::Response (vendor/PhotoCatalog/src/application/exports/dto.rs:491).
+/// application::exports::dto::Response (engines/catalog/src/application/exports/dto.rs:491).
 nonisolated indirect enum LWApplicationExportsDtoResponse: Codable, Sendable {
     case Options(LWApplicationExportsDtoOptions)
     case Released(token: String)
@@ -3429,7 +3429,7 @@ nonisolated indirect enum LWApplicationExportsDtoResponse: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::ResultValue (vendor/PhotoCatalog/src/application/exports/dto.rs:455).
+/// application::exports::dto::ResultValue (engines/catalog/src/application/exports/dto.rs:455).
 nonisolated indirect enum LWApplicationExportsDtoResultValue: Codable, Sendable {
     case Profile(LWApplicationExportsDtoProfileAdmission)
     case Paths(LWApplicationExportsDtoPaths)
@@ -3510,7 +3510,7 @@ nonisolated indirect enum LWApplicationExportsDtoResultValue: Codable, Sendable 
     }
 }
 
-/// application::exports::dto::SourceIdentity (vendor/PhotoCatalog/src/application/exports/dto.rs:352).
+/// application::exports::dto::SourceIdentity (engines/catalog/src/application/exports/dto.rs:352).
 nonisolated struct LWApplicationExportsDtoSourceIdentity: Codable, Sendable {
     var asset_id: String
     var generation: LWCatalogI64
@@ -3542,7 +3542,7 @@ nonisolated struct LWApplicationExportsDtoSourceIdentity: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::StoredOutput (vendor/PhotoCatalog/src/application/exports/dto.rs:379).
+/// application::exports::dto::StoredOutput (engines/catalog/src/application/exports/dto.rs:379).
 nonisolated struct LWApplicationExportsDtoStoredOutput: Codable, Sendable {
     var size: LWImageExportSpecificationOutputSize
     var format: LWImageExportSpecificationOutputFormat
@@ -3570,7 +3570,7 @@ nonisolated struct LWApplicationExportsDtoStoredOutput: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::StoredProfile (vendor/PhotoCatalog/src/application/exports/dto.rs:369).
+/// application::exports::dto::StoredProfile (engines/catalog/src/application/exports/dto.rs:369).
 nonisolated indirect enum LWApplicationExportsDtoStoredProfile: Codable, Sendable {
     case Srgb
     case LinearSrgb
@@ -3606,7 +3606,7 @@ nonisolated indirect enum LWApplicationExportsDtoStoredProfile: Codable, Sendabl
     }
 }
 
-/// application::exports::dto::Target (vendor/PhotoCatalog/src/application/exports/dto.rs:114).
+/// application::exports::dto::Target (engines/catalog/src/application/exports/dto.rs:114).
 nonisolated struct LWApplicationExportsDtoTarget: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var expected_revision: LWCatalogI64
@@ -3639,7 +3639,7 @@ nonisolated struct LWApplicationExportsDtoTarget: Codable, Sendable {
     }
 }
 
-/// application::exports::dto::TargetKey (vendor/PhotoCatalog/src/application/exports/dto.rs:108).
+/// application::exports::dto::TargetKey (engines/catalog/src/application/exports/dto.rs:108).
 nonisolated struct LWApplicationExportsDtoTargetKey: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var expected_revision: LWCatalogI64
@@ -3660,19 +3660,19 @@ nonisolated struct LWApplicationExportsDtoTargetKey: Codable, Sendable {
     }
 }
 
-/// application::lightroom::OpenMode (vendor/PhotoCatalog/src/application/lightroom.rs:148).
+/// application::lightroom::OpenMode (engines/catalog/src/application/lightroom.rs:148).
 nonisolated enum LWApplicationLightroomOpenMode: String, Codable, Sendable {
     case Create = "Create"
     case OpenExisting = "OpenExisting"
 }
 
-/// application::lightroom::OriginalInspection (vendor/PhotoCatalog/src/application/lightroom.rs:162).
+/// application::lightroom::OriginalInspection (engines/catalog/src/application/lightroom.rs:162).
 nonisolated enum LWApplicationLightroomOriginalInspection: String, Codable, Sendable {
     case MetadataOnly = "MetadataOnly"
     case Packets = "Packets"
 }
 
-/// application::lightroom::Phase (vendor/PhotoCatalog/src/application/lightroom.rs:346).
+/// application::lightroom::Phase (engines/catalog/src/application/lightroom.rs:346).
 nonisolated enum LWApplicationLightroomPhase: String, Codable, Sendable {
     case Opening = "Opening"
     case Running = "Running"
@@ -3684,7 +3684,7 @@ nonisolated enum LWApplicationLightroomPhase: String, Codable, Sendable {
     case Closed = "Closed"
 }
 
-/// application::lightroom::ResultPage (vendor/PhotoCatalog/src/application/lightroom.rs:375).
+/// application::lightroom::ResultPage (engines/catalog/src/application/lightroom.rs:375).
 nonisolated struct LWApplicationLightroomResultPage: Codable, Sendable {
     var workbench: String
     var generation: String
@@ -3728,7 +3728,7 @@ nonisolated struct LWApplicationLightroomResultPage: Codable, Sendable {
     }
 }
 
-/// application::lightroom::ReviewCollection (vendor/PhotoCatalog/src/application/lightroom.rs:239).
+/// application::lightroom::ReviewCollection (engines/catalog/src/application/lightroom.rs:239).
 nonisolated enum LWApplicationLightroomReviewCollection: String, Codable, Sendable {
     case Families = "Families"
     case Captures = "Captures"
@@ -3737,7 +3737,7 @@ nonisolated enum LWApplicationLightroomReviewCollection: String, Codable, Sendab
     case PathCollisionSample = "PathCollisionSample"
 }
 
-/// application::lightroom_bridge::wire::Action (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:65).
+/// application::lightroom_bridge::wire::Action (engines/catalog/src/application/lightroom_bridge/wire.rs:65).
 nonisolated indirect enum LWApplicationLightroomBridgeWireAction: Codable, Sendable {
     case Discover(root: LWCatalogNativePath, limits: LWApplicationLightroomBridgeWireInspectionLimits)
     case Capture(source: LWCatalogNativePath, output: LWCatalogNativePath, include_auxiliary: Bool, closed_application_evidence: String?, limits: LWApplicationLightroomBridgeWireInspectionLimits)
@@ -3865,7 +3865,7 @@ nonisolated indirect enum LWApplicationLightroomBridgeWireAction: Codable, Senda
     }
 }
 
-/// application::lightroom_bridge::wire::Guard (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:51).
+/// application::lightroom_bridge::wire::Guard (engines/catalog/src/application/lightroom_bridge/wire.rs:51).
 nonisolated struct LWApplicationLightroomBridgeWireGuard: Codable, Sendable {
     var workbench: String
     var generation: String
@@ -3890,7 +3890,7 @@ nonisolated struct LWApplicationLightroomBridgeWireGuard: Codable, Sendable {
     }
 }
 
-/// application::lightroom_bridge::wire::InputPurpose (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:57).
+/// application::lightroom_bridge::wire::InputPurpose (engines/catalog/src/application/lightroom_bridge/wire.rs:57).
 nonisolated enum LWApplicationLightroomBridgeWireInputPurpose: String, Codable, Sendable {
     case Inventory = "Inventory"
     case SelectionRequest = "SelectionRequest"
@@ -3898,7 +3898,7 @@ nonisolated enum LWApplicationLightroomBridgeWireInputPurpose: String, Codable, 
     case ApprovalDraft = "ApprovalDraft"
 }
 
-/// application::lightroom_bridge::wire::InputStatus (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:598).
+/// application::lightroom_bridge::wire::InputStatus (engines/catalog/src/application/lightroom_bridge/wire.rs:598).
 nonisolated struct LWApplicationLightroomBridgeWireInputStatus: Codable, Sendable {
     var attempt: String
     var `guard`: LWApplicationLightroomBridgeWireGuard
@@ -3946,7 +3946,7 @@ nonisolated struct LWApplicationLightroomBridgeWireInputStatus: Codable, Sendabl
     }
 }
 
-/// application::lightroom_bridge::wire::InspectionLimits (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:25).
+/// application::lightroom_bridge::wire::InspectionLimits (engines/catalog/src/application/lightroom_bridge/wire.rs:25).
 nonisolated struct LWApplicationLightroomBridgeWireInspectionLimits: Codable, Sendable {
     var max_files: LWCatalogU64
     var max_depth: LWCatalogU64
@@ -3979,7 +3979,7 @@ nonisolated struct LWApplicationLightroomBridgeWireInspectionLimits: Codable, Se
     }
 }
 
-/// application::lightroom_bridge::wire::Options (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:538).
+/// application::lightroom_bridge::wire::Options (engines/catalog/src/application/lightroom_bridge/wire.rs:538).
 nonisolated struct LWApplicationLightroomBridgeWireOptions: Codable, Sendable {
     var envelope_bytes: LWCatalogU64
     var chunk_bytes: LWCatalogU64
@@ -4031,7 +4031,7 @@ nonisolated struct LWApplicationLightroomBridgeWireOptions: Codable, Sendable {
     }
 }
 
-/// application::lightroom_bridge::wire::Query (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:122).
+/// application::lightroom_bridge::wire::Query (engines/catalog/src/application/lightroom_bridge/wire.rs:122).
 nonisolated indirect enum LWApplicationLightroomBridgeWireQuery: Codable, Sendable {
     case CaptureManifest(directory: LWCatalogNativePath)
     case Rows(revision: String, table: String?, after: LWCatalogI64, limit: LWCatalogU64)
@@ -4196,7 +4196,7 @@ nonisolated indirect enum LWApplicationLightroomBridgeWireQuery: Codable, Sendab
     }
 }
 
-/// application::lightroom_bridge::wire::Request (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:458).
+/// application::lightroom_bridge::wire::Request (engines/catalog/src/application/lightroom_bridge/wire.rs:458).
 nonisolated indirect enum LWApplicationLightroomBridgeWireRequest: Codable, Sendable {
     case SealedDocument(request: LWFilesystemWorkerWireLightroomSealedRead)
     case ArtifactPreparation(request: LWFilesystemWorkerWireLightroomArtifactPreparation)
@@ -4349,7 +4349,7 @@ nonisolated indirect enum LWApplicationLightroomBridgeWireRequest: Codable, Send
     }
 }
 
-/// application::lightroom_bridge::wire::Response (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:611).
+/// application::lightroom_bridge::wire::Response (engines/catalog/src/application/lightroom_bridge/wire.rs:611).
 nonisolated indirect enum LWApplicationLightroomBridgeWireResponse: Codable, Sendable {
     case Options(LWApplicationLightroomBridgeWireOptions)
     case Status(LWApplicationLightroomBridgeWireStatus?)
@@ -4406,7 +4406,7 @@ nonisolated indirect enum LWApplicationLightroomBridgeWireResponse: Codable, Sen
     }
 }
 
-/// application::lightroom_bridge::wire::ResultPage (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:592).
+/// application::lightroom_bridge::wire::ResultPage (engines/catalog/src/application/lightroom_bridge/wire.rs:592).
 nonisolated struct LWApplicationLightroomBridgeWireResultPage: Codable, Sendable {
     var attempt: String
     var page: LWApplicationLightroomResultPage
@@ -4426,7 +4426,7 @@ nonisolated struct LWApplicationLightroomBridgeWireResultPage: Codable, Sendable
     }
 }
 
-/// application::lightroom_bridge::wire::SelectionLimits (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:36).
+/// application::lightroom_bridge::wire::SelectionLimits (engines/catalog/src/application/lightroom_bridge/wire.rs:36).
 nonisolated struct LWApplicationLightroomBridgeWireSelectionLimits: Codable, Sendable {
     var review_bytes: LWCatalogU64
     var row_bytes: LWCatalogU64
@@ -4467,7 +4467,7 @@ nonisolated struct LWApplicationLightroomBridgeWireSelectionLimits: Codable, Sen
     }
 }
 
-/// application::lightroom_bridge::wire::Status (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:551).
+/// application::lightroom_bridge::wire::Status (engines/catalog/src/application/lightroom_bridge/wire.rs:551).
 nonisolated struct LWApplicationLightroomBridgeWireStatus: Codable, Sendable {
     var attempt: String
     var workbench: String
@@ -4543,7 +4543,7 @@ nonisolated struct LWApplicationLightroomBridgeWireStatus: Codable, Sendable {
     }
 }
 
-/// application::lightroom_bridge::wire::WorkbenchLimits (vendor/PhotoCatalog/src/application/lightroom_bridge/wire.rs:12).
+/// application::lightroom_bridge::wire::WorkbenchLimits (engines/catalog/src/application/lightroom_bridge/wire.rs:12).
 nonisolated struct LWApplicationLightroomBridgeWireWorkbenchLimits: Codable, Sendable {
     var request_bytes: LWCatalogU64
     var result_bytes: LWCatalogU64
@@ -4584,7 +4584,7 @@ nonisolated struct LWApplicationLightroomBridgeWireWorkbenchLimits: Codable, Sen
     }
 }
 
-/// application::lightroom_migration::Failure (vendor/PhotoCatalog/src/application/lightroom_migration.rs:73).
+/// application::lightroom_migration::Failure (engines/catalog/src/application/lightroom_migration.rs:73).
 nonisolated struct LWApplicationLightroomMigrationFailure: Codable, Sendable {
     var code: LWApplicationDtoErrorCode
     var detail: String
@@ -4621,7 +4621,7 @@ nonisolated struct LWApplicationLightroomMigrationFailure: Codable, Sendable {
     }
 }
 
-/// application::lightroom_migration::Header (vendor/PhotoCatalog/src/application/lightroom_migration.rs:13).
+/// application::lightroom_migration::Header (engines/catalog/src/application/lightroom_migration.rs:13).
 nonisolated struct LWApplicationLightroomMigrationHeader: Codable, Sendable {
     var catalog: String?
     var destination: LWCatalogNativePath
@@ -4654,7 +4654,7 @@ nonisolated struct LWApplicationLightroomMigrationHeader: Codable, Sendable {
     }
 }
 
-/// application::lightroom_migration::Phase (vendor/PhotoCatalog/src/application/lightroom_migration.rs:62).
+/// application::lightroom_migration::Phase (engines/catalog/src/application/lightroom_migration.rs:62).
 nonisolated enum LWApplicationLightroomMigrationPhase: String, Codable, Sendable {
     case Uploading = "uploading"
     case Ready = "ready"
@@ -4665,7 +4665,7 @@ nonisolated enum LWApplicationLightroomMigrationPhase: String, Codable, Sendable
     case Failed = "failed"
 }
 
-/// application::lightroom_migration::Request (vendor/PhotoCatalog/src/application/lightroom_migration.rs:22).
+/// application::lightroom_migration::Request (engines/catalog/src/application/lightroom_migration.rs:22).
 nonisolated indirect enum LWApplicationLightroomMigrationRequest: Codable, Sendable {
     case Begin(operation: String, header: LWApplicationLightroomMigrationHeader)
     case Upload(`guard`: LWLightroomMigrationWorkerProtocolGuard, role: LWLightroomMigrationWorkerProtocolInputRole, offset: LWCatalogU64, text: String)
@@ -4761,7 +4761,7 @@ nonisolated indirect enum LWApplicationLightroomMigrationRequest: Codable, Senda
     }
 }
 
-/// application::lightroom_migration::Response (vendor/PhotoCatalog/src/application/lightroom_migration.rs:107).
+/// application::lightroom_migration::Response (engines/catalog/src/application/lightroom_migration.rs:107).
 nonisolated indirect enum LWApplicationLightroomMigrationResponse: Codable, Sendable {
     case Status(LWApplicationLightroomMigrationSnapshot)
     case Page(`guard`: LWLightroomMigrationWorkerProtocolGuard, page: LWCatalogU64, offset: LWCatalogU64, text: String, next_offset: LWCatalogU64?)
@@ -4814,7 +4814,7 @@ nonisolated indirect enum LWApplicationLightroomMigrationResponse: Codable, Send
     }
 }
 
-/// application::lightroom_migration::ResultIdentity (vendor/PhotoCatalog/src/application/lightroom_migration.rs:95).
+/// application::lightroom_migration::ResultIdentity (engines/catalog/src/application/lightroom_migration.rs:95).
 nonisolated struct LWApplicationLightroomMigrationResultIdentity: Codable, Sendable {
     var bytes: LWCatalogU64
     var blake3: String
@@ -4839,7 +4839,7 @@ nonisolated struct LWApplicationLightroomMigrationResultIdentity: Codable, Senda
     }
 }
 
-/// application::lightroom_migration::Snapshot (vendor/PhotoCatalog/src/application/lightroom_migration.rs:83).
+/// application::lightroom_migration::Snapshot (engines/catalog/src/application/lightroom_migration.rs:83).
 nonisolated struct LWApplicationLightroomMigrationSnapshot: Codable, Sendable {
     var `guard`: LWLightroomMigrationWorkerProtocolGuard
     var phase: LWApplicationLightroomMigrationPhase
@@ -4884,7 +4884,7 @@ nonisolated struct LWApplicationLightroomMigrationSnapshot: Codable, Sendable {
     }
 }
 
-/// application::metadata::AdobePage (vendor/PhotoCatalog/src/application/metadata.rs:372).
+/// application::metadata::AdobePage (engines/catalog/src/application/metadata.rs:372).
 nonisolated struct LWApplicationMetadataAdobePage: Codable, Sendable {
     var row: LWApplicationMetadataImportedRow
     var compatibility: LWCatalogMigrationHistoryCompatibility
@@ -4936,7 +4936,7 @@ nonisolated struct LWApplicationMetadataAdobePage: Codable, Sendable {
     }
 }
 
-/// application::metadata::AdobeProperty (vendor/PhotoCatalog/src/application/metadata.rs:360).
+/// application::metadata::AdobeProperty (engines/catalog/src/application/metadata.rs:360).
 nonisolated struct LWApplicationMetadataAdobeProperty: Codable, Sendable {
     var path_json: String
     var namespace: String?
@@ -4984,7 +4984,7 @@ nonisolated struct LWApplicationMetadataAdobeProperty: Codable, Sendable {
     }
 }
 
-/// application::metadata::BlobSource (vendor/PhotoCatalog/src/application/metadata.rs:125).
+/// application::metadata::BlobSource (engines/catalog/src/application/metadata.rs:125).
 nonisolated indirect enum LWApplicationMetadataBlobSource: Codable, Sendable {
     case Packet(observation: LWCatalogI64, ordinal: LWCatalogI64)
     case Model(id: LWCatalogI64)
@@ -5016,7 +5016,7 @@ nonisolated indirect enum LWApplicationMetadataBlobSource: Codable, Sendable {
     }
 }
 
-/// application::metadata::Candidate (vendor/PhotoCatalog/src/application/metadata.rs:229).
+/// application::metadata::Candidate (engines/catalog/src/application/metadata.rs:229).
 nonisolated struct LWApplicationMetadataCandidate: Codable, Sendable {
     var model: LWCatalogI64
     var source: LWCatalogI64
@@ -5056,7 +5056,7 @@ nonisolated struct LWApplicationMetadataCandidate: Codable, Sendable {
     }
 }
 
-/// application::metadata::Chunk (vendor/PhotoCatalog/src/application/metadata.rs:294).
+/// application::metadata::Chunk (engines/catalog/src/application/metadata.rs:294).
 nonisolated struct LWApplicationMetadataChunk: Codable, Sendable {
     var bytes: [UInt8]
     var offset: LWCatalogU64
@@ -5096,7 +5096,7 @@ nonisolated struct LWApplicationMetadataChunk: Codable, Sendable {
     }
 }
 
-/// application::metadata::ColumnPage (vendor/PhotoCatalog/src/application/metadata.rs:353).
+/// application::metadata::ColumnPage (engines/catalog/src/application/metadata.rs:353).
 nonisolated struct LWApplicationMetadataColumnPage: Codable, Sendable {
     var row: LWApplicationMetadataImportedRow
     var columns: LWApplicationMetadataPage<LWApplicationMetadataImportedColumn>
@@ -5124,7 +5124,7 @@ nonisolated struct LWApplicationMetadataColumnPage: Codable, Sendable {
     }
 }
 
-/// application::metadata::Decision (vendor/PhotoCatalog/src/application/metadata.rs:279).
+/// application::metadata::Decision (engines/catalog/src/application/metadata.rs:279).
 nonisolated struct LWApplicationMetadataDecision: Codable, Sendable {
     var id: LWCatalogI64
     var revision: LWCatalogI64
@@ -5156,14 +5156,14 @@ nonisolated struct LWApplicationMetadataDecision: Codable, Sendable {
     }
 }
 
-/// application::metadata::DecisionText (vendor/PhotoCatalog/src/application/metadata.rs:156).
+/// application::metadata::DecisionText (engines/catalog/src/application/metadata.rs:156).
 nonisolated enum LWApplicationMetadataDecisionText: String, Codable, Sendable {
     case Action = "action"
     case Detail = "detail"
     case CreatedAt = "created_at"
 }
 
-/// application::metadata::Field (vendor/PhotoCatalog/src/application/metadata.rs:222).
+/// application::metadata::Field (engines/catalog/src/application/metadata.rs:222).
 nonisolated struct LWApplicationMetadataField: Codable, Sendable {
     var name: String
     var value: LWApplicationMetadataRetainedText?
@@ -5191,7 +5191,7 @@ nonisolated struct LWApplicationMetadataField: Codable, Sendable {
     }
 }
 
-/// application::metadata::FileInstance (vendor/PhotoCatalog/src/application/metadata.rs:287).
+/// application::metadata::FileInstance (engines/catalog/src/application/metadata.rs:287).
 nonisolated struct LWApplicationMetadataFileInstance: Codable, Sendable {
     var id: LWCatalogI64
     var source: LWCatalogI64
@@ -5219,13 +5219,13 @@ nonisolated struct LWApplicationMetadataFileInstance: Codable, Sendable {
     }
 }
 
-/// application::metadata::FileInstanceText (vendor/PhotoCatalog/src/application/metadata.rs:163).
+/// application::metadata::FileInstanceText (engines/catalog/src/application/metadata.rs:163).
 nonisolated enum LWApplicationMetadataFileInstanceText: String, Codable, Sendable {
     case Provenance = "provenance"
     case ObservedAt = "observed_at"
 }
 
-/// application::metadata::ImportedColumn (vendor/PhotoCatalog/src/application/metadata.rs:346).
+/// application::metadata::ImportedColumn (engines/catalog/src/application/metadata.rs:346).
 nonisolated struct LWApplicationMetadataImportedColumn: Codable, Sendable {
     var ordinal: LWCatalogU64
     var name: String
@@ -5253,7 +5253,7 @@ nonisolated struct LWApplicationMetadataImportedColumn: Codable, Sendable {
     }
 }
 
-/// application::metadata::ImportedField (vendor/PhotoCatalog/src/application/metadata.rs:339).
+/// application::metadata::ImportedField (engines/catalog/src/application/metadata.rs:339).
 nonisolated struct LWApplicationMetadataImportedField: Codable, Sendable {
     var name: String
     var representation: String
@@ -5281,7 +5281,7 @@ nonisolated struct LWApplicationMetadataImportedField: Codable, Sendable {
     }
 }
 
-/// application::metadata::ImportedPage (vendor/PhotoCatalog/src/application/metadata.rs:327).
+/// application::metadata::ImportedPage (engines/catalog/src/application/metadata.rs:327).
 nonisolated struct LWApplicationMetadataImportedPage: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var input: String
@@ -5329,7 +5329,7 @@ nonisolated struct LWApplicationMetadataImportedPage: Codable, Sendable {
     }
 }
 
-/// application::metadata::ImportedRow (vendor/PhotoCatalog/src/application/metadata.rs:304).
+/// application::metadata::ImportedRow (engines/catalog/src/application/metadata.rs:304).
 nonisolated struct LWApplicationMetadataImportedRow: Codable, Sendable {
     var record: LWCatalogI64
     var source_key_json: String
@@ -5373,7 +5373,7 @@ nonisolated struct LWApplicationMetadataImportedRow: Codable, Sendable {
     }
 }
 
-/// application::metadata::Model (vendor/PhotoCatalog/src/application/metadata.rs:262).
+/// application::metadata::Model (engines/catalog/src/application/metadata.rs:262).
 nonisolated struct LWApplicationMetadataModel: Codable, Sendable {
     var id: LWCatalogI64
     var ordinal: LWCatalogI64
@@ -5413,14 +5413,14 @@ nonisolated struct LWApplicationMetadataModel: Codable, Sendable {
     }
 }
 
-/// application::metadata::ModelText (vendor/PhotoCatalog/src/application/metadata.rs:149).
+/// application::metadata::ModelText (engines/catalog/src/application/metadata.rs:149).
 nonisolated enum LWApplicationMetadataModelText: String, Codable, Sendable {
     case Descriptor = "descriptor"
     case Projection = "projection"
     case Error = "error"
 }
 
-/// application::metadata::Observation (vendor/PhotoCatalog/src/application/metadata.rs:251).
+/// application::metadata::Observation (engines/catalog/src/application/metadata.rs:251).
 nonisolated struct LWApplicationMetadataObservation: Codable, Sendable {
     var id: LWCatalogI64
     var source: LWCatalogI64
@@ -5464,7 +5464,7 @@ nonisolated struct LWApplicationMetadataObservation: Codable, Sendable {
     }
 }
 
-/// application::metadata::ObservationText (vendor/PhotoCatalog/src/application/metadata.rs:140).
+/// application::metadata::ObservationText (engines/catalog/src/application/metadata.rs:140).
 nonisolated enum LWApplicationMetadataObservationText: String, Codable, Sendable {
     case Revision = "revision"
     case Status = "status"
@@ -5473,7 +5473,7 @@ nonisolated enum LWApplicationMetadataObservationText: String, Codable, Sendable
     case CreatedAt = "created_at"
 }
 
-/// application::metadata::Packet (vendor/PhotoCatalog/src/application/metadata.rs:272).
+/// application::metadata::Packet (engines/catalog/src/application/metadata.rs:272).
 nonisolated struct LWApplicationMetadataPacket: Codable, Sendable {
     var ordinal: LWCatalogI64
     var blob_hash: String
@@ -5501,7 +5501,7 @@ nonisolated struct LWApplicationMetadataPacket: Codable, Sendable {
     }
 }
 
-/// application::metadata::Page (vendor/PhotoCatalog/src/application/metadata.rs:216).
+/// application::metadata::Page (engines/catalog/src/application/metadata.rs:216).
 nonisolated struct LWApplicationMetadataPage<T: Codable & Sendable>: Codable, Sendable {
     var rows: [T]
     var next: String?
@@ -5525,14 +5525,14 @@ nonisolated struct LWApplicationMetadataPage<T: Codable & Sendable>: Codable, Se
     }
 }
 
-/// application::metadata::RecordRole (vendor/PhotoCatalog/src/application/metadata.rs:204).
+/// application::metadata::RecordRole (engines/catalog/src/application/metadata.rs:204).
 nonisolated enum LWApplicationMetadataRecordRole: String, Codable, Sendable {
     case Row = "row"
     case Table = "table"
     case Entity = "entity"
 }
 
-/// application::metadata::Relation (vendor/PhotoCatalog/src/application/metadata.rs:315).
+/// application::metadata::Relation (engines/catalog/src/application/metadata.rs:315).
 nonisolated struct LWApplicationMetadataRelation: Codable, Sendable {
     var reference_record: LWCatalogI64
     var source_id: String
@@ -5580,7 +5580,7 @@ nonisolated struct LWApplicationMetadataRelation: Codable, Sendable {
     }
 }
 
-/// application::metadata::Request (vendor/PhotoCatalog/src/application/metadata.rs:21).
+/// application::metadata::Request (engines/catalog/src/application/metadata.rs:21).
 nonisolated indirect enum LWApplicationMetadataRequest: Codable, Sendable {
     case Identity(key: LWCatalogEditsVariantKey)
     case Fields(identity: LWApplicationOrganizationImageIdentity, after: String?, limit: UInt16)
@@ -5865,7 +5865,7 @@ nonisolated indirect enum LWApplicationMetadataRequest: Codable, Sendable {
     }
 }
 
-/// application::metadata::Response (vendor/PhotoCatalog/src/application/metadata.rs:386).
+/// application::metadata::Response (engines/catalog/src/application/metadata.rs:386).
 nonisolated indirect enum LWApplicationMetadataResponse: Codable, Sendable {
     case Identity(LWApplicationOrganizationImageIdentity)
     case Fields(LWApplicationMetadataPage<LWApplicationMetadataField>)
@@ -5989,7 +5989,7 @@ nonisolated indirect enum LWApplicationMetadataResponse: Codable, Sendable {
     }
 }
 
-/// application::metadata::RetainedText (vendor/PhotoCatalog/src/application/metadata.rs:210).
+/// application::metadata::RetainedText (engines/catalog/src/application/metadata.rs:210).
 nonisolated struct LWApplicationMetadataRetainedText: Codable, Sendable {
     var bytes: LWCatalogU64
     var inline: String?
@@ -6013,7 +6013,7 @@ nonisolated struct LWApplicationMetadataRetainedText: Codable, Sendable {
     }
 }
 
-/// application::metadata::Source (vendor/PhotoCatalog/src/application/metadata.rs:239).
+/// application::metadata::Source (engines/catalog/src/application/metadata.rs:239).
 nonisolated struct LWApplicationMetadataSource: Codable, Sendable {
     var id: LWCatalogI64
     var kind: LWApplicationMetadataRetainedText
@@ -6061,7 +6061,7 @@ nonisolated struct LWApplicationMetadataSource: Codable, Sendable {
     }
 }
 
-/// application::metadata::SourceText (vendor/PhotoCatalog/src/application/metadata.rs:131).
+/// application::metadata::SourceText (engines/catalog/src/application/metadata.rs:131).
 nonisolated enum LWApplicationMetadataSourceText: String, Codable, Sendable {
     case Kind = "kind"
     case Display = "display"
@@ -6070,7 +6070,7 @@ nonisolated enum LWApplicationMetadataSourceText: String, Codable, Sendable {
     case Locator = "locator"
 }
 
-/// application::metadata::TextReference (vendor/PhotoCatalog/src/application/metadata.rs:169).
+/// application::metadata::TextReference (engines/catalog/src/application/metadata.rs:169).
 nonisolated indirect enum LWApplicationMetadataTextReference: Codable, Sendable {
     case Effective(field: String)
     case Candidate(model: LWCatalogI64, field: String)
@@ -6156,7 +6156,7 @@ nonisolated indirect enum LWApplicationMetadataTextReference: Codable, Sendable 
     }
 }
 
-/// application::metadata_write::Action (vendor/PhotoCatalog/src/application/metadata_write.rs:66).
+/// application::metadata_write::Action (engines/catalog/src/application/metadata_write.rs:66).
 nonisolated indirect enum LWApplicationMetadataWriteAction: Codable, Sendable {
     case InputBegin(bytes: LWCatalogU64, expected_blake3: String?, limits: LWApplicationMetadataWriteWriteLimits)
     case InputAppend(token: String, generation: LWCatalogU64, offset: LWCatalogU64, bytes: [UInt8])
@@ -6322,7 +6322,7 @@ nonisolated indirect enum LWApplicationMetadataWriteAction: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Admitted (vendor/PhotoCatalog/src/application/metadata_write.rs:257).
+/// application::metadata_write::Admitted (engines/catalog/src/application/metadata_write.rs:257).
 nonisolated struct LWApplicationMetadataWriteAdmitted: Codable, Sendable {
     var operation: String
     var attempt: String
@@ -6350,7 +6350,7 @@ nonisolated struct LWApplicationMetadataWriteAdmitted: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Bytes (vendor/PhotoCatalog/src/application/metadata_write.rs:309).
+/// application::metadata_write::Bytes (engines/catalog/src/application/metadata_write.rs:309).
 nonisolated struct LWApplicationMetadataWriteBytes: Codable, Sendable {
     var bytes: [UInt8]
     var offset: LWCatalogU64
@@ -6386,7 +6386,7 @@ nonisolated struct LWApplicationMetadataWriteBytes: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Input (vendor/PhotoCatalog/src/application/metadata_write.rs:264).
+/// application::metadata_write::Input (engines/catalog/src/application/metadata_write.rs:264).
 nonisolated struct LWApplicationMetadataWriteInput: Codable, Sendable {
     var token: String
     var generation: LWCatalogU64
@@ -6434,7 +6434,7 @@ nonisolated struct LWApplicationMetadataWriteInput: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Operation (vendor/PhotoCatalog/src/application/metadata_write.rs:318).
+/// application::metadata_write::Operation (engines/catalog/src/application/metadata_write.rs:318).
 nonisolated struct LWApplicationMetadataWriteOperation: Codable, Sendable {
     var id: String
     var attempt: String
@@ -6490,7 +6490,7 @@ nonisolated struct LWApplicationMetadataWriteOperation: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Options (vendor/PhotoCatalog/src/application/metadata_write.rs:244).
+/// application::metadata_write::Options (engines/catalog/src/application/metadata_write.rs:244).
 nonisolated struct LWApplicationMetadataWriteOptions: Codable, Sendable {
     var defaults: LWApplicationMetadataWriteWriteLimits
     var input_max: LWCatalogU64
@@ -6542,7 +6542,7 @@ nonisolated struct LWApplicationMetadataWriteOptions: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Page (vendor/PhotoCatalog/src/application/metadata_write.rs:303).
+/// application::metadata_write::Page (engines/catalog/src/application/metadata_write.rs:303).
 nonisolated struct LWApplicationMetadataWritePage<T: Codable & Sendable>: Codable, Sendable {
     var rows: [T]
     var next: String?
@@ -6566,7 +6566,7 @@ nonisolated struct LWApplicationMetadataWritePage<T: Codable & Sendable>: Codabl
     }
 }
 
-/// application::metadata_write::Reference (vendor/PhotoCatalog/src/application/metadata_write.rs:276).
+/// application::metadata_write::Reference (engines/catalog/src/application/metadata_write.rs:276).
 nonisolated struct LWApplicationMetadataWriteReference: Codable, Sendable {
     var token: String
     var bytes: LWCatalogU64
@@ -6594,7 +6594,7 @@ nonisolated struct LWApplicationMetadataWriteReference: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Request (vendor/PhotoCatalog/src/application/metadata_write.rs:152).
+/// application::metadata_write::Request (engines/catalog/src/application/metadata_write.rs:152).
 nonisolated indirect enum LWApplicationMetadataWriteRequest: Codable, Sendable {
     case Options
     case Status(operation: String?)
@@ -6772,7 +6772,7 @@ nonisolated indirect enum LWApplicationMetadataWriteRequest: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Response (vendor/PhotoCatalog/src/application/metadata_write.rs:229).
+/// application::metadata_write::Response (engines/catalog/src/application/metadata_write.rs:229).
 nonisolated indirect enum LWApplicationMetadataWriteResponse: Codable, Sendable {
     case Options(LWApplicationMetadataWriteOptions)
     case Status(LWApplicationMetadataWriteStatus)
@@ -6875,7 +6875,7 @@ nonisolated indirect enum LWApplicationMetadataWriteResponse: Codable, Sendable 
     }
 }
 
-/// application::metadata_write::Review (vendor/PhotoCatalog/src/application/metadata_write.rs:283).
+/// application::metadata_write::Review (engines/catalog/src/application/metadata_write.rs:283).
 nonisolated struct LWApplicationMetadataWriteReview: Codable, Sendable {
     var token: String
     var digest: String
@@ -6923,7 +6923,7 @@ nonisolated struct LWApplicationMetadataWriteReview: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::ReviewField (vendor/PhotoCatalog/src/application/metadata_write.rs:295).
+/// application::metadata_write::ReviewField (engines/catalog/src/application/metadata_write.rs:295).
 nonisolated struct LWApplicationMetadataWriteReviewField: Codable, Sendable {
     var field: String
     var before: String?
@@ -6955,7 +6955,7 @@ nonisolated struct LWApplicationMetadataWriteReviewField: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::Status (vendor/PhotoCatalog/src/application/metadata_write.rs:332).
+/// application::metadata_write::Status (engines/catalog/src/application/metadata_write.rs:332).
 nonisolated struct LWApplicationMetadataWriteStatus: Codable, Sendable {
     var catalog: String
     var epoch: LWCatalogU64
@@ -6995,7 +6995,7 @@ nonisolated struct LWApplicationMetadataWriteStatus: Codable, Sendable {
     }
 }
 
-/// application::metadata_write::WriteLimits (vendor/PhotoCatalog/src/application/metadata_write.rs:18).
+/// application::metadata_write::WriteLimits (engines/catalog/src/application/metadata_write.rs:18).
 nonisolated struct LWApplicationMetadataWriteWriteLimits: Codable, Sendable {
     var input_bytes: LWCatalogU64
     var existing_file_bytes: LWCatalogU64
@@ -7032,7 +7032,7 @@ nonisolated struct LWApplicationMetadataWriteWriteLimits: Codable, Sendable {
     }
 }
 
-/// application::organization::BatchItem (vendor/PhotoCatalog/src/application/organization.rs:124).
+/// application::organization::BatchItem (engines/catalog/src/application/organization.rs:124).
 nonisolated struct LWApplicationOrganizationBatchItem: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var expected_revision: LWCatalogI64
@@ -7053,7 +7053,7 @@ nonisolated struct LWApplicationOrganizationBatchItem: Codable, Sendable {
     }
 }
 
-/// application::organization::Collection (vendor/PhotoCatalog/src/application/organization.rs:219).
+/// application::organization::Collection (engines/catalog/src/application/organization.rs:219).
 nonisolated struct LWApplicationOrganizationCollection: Codable, Sendable {
     var id: String
     var name: String
@@ -7081,7 +7081,7 @@ nonisolated struct LWApplicationOrganizationCollection: Codable, Sendable {
     }
 }
 
-/// application::organization::ImageIdentity (vendor/PhotoCatalog/src/application/organization.rs:130).
+/// application::organization::ImageIdentity (engines/catalog/src/application/organization.rs:130).
 nonisolated struct LWApplicationOrganizationImageIdentity: Codable, Sendable {
     var image_id: String
     var key: LWCatalogEditsVariantKey
@@ -7118,7 +7118,7 @@ nonisolated struct LWApplicationOrganizationImageIdentity: Codable, Sendable {
     }
 }
 
-/// application::organization::Job (vendor/PhotoCatalog/src/application/organization.rs:243).
+/// application::organization::Job (engines/catalog/src/application/organization.rs:243).
 nonisolated struct LWApplicationOrganizationJob: Codable, Sendable {
     var id: String
     var operation: LWOrganizationOperation
@@ -7158,7 +7158,7 @@ nonisolated struct LWApplicationOrganizationJob: Codable, Sendable {
     }
 }
 
-/// application::organization::JobItem (vendor/PhotoCatalog/src/application/organization.rs:266).
+/// application::organization::JobItem (engines/catalog/src/application/organization.rs:266).
 nonisolated struct LWApplicationOrganizationJobItem: Codable, Sendable {
     var sequence: LWCatalogI64
     var key: LWCatalogEditsVariantKey
@@ -7198,7 +7198,7 @@ nonisolated struct LWApplicationOrganizationJobItem: Codable, Sendable {
     }
 }
 
-/// application::organization::Keyword (vendor/PhotoCatalog/src/application/organization.rs:211).
+/// application::organization::Keyword (engines/catalog/src/application/organization.rs:211).
 nonisolated struct LWApplicationOrganizationKeyword: Codable, Sendable {
     var id: LWCatalogI64
     var kind: LWOrganizationKeywordKind
@@ -7230,7 +7230,7 @@ nonisolated struct LWApplicationOrganizationKeyword: Codable, Sendable {
     }
 }
 
-/// application::organization::Member (vendor/PhotoCatalog/src/application/organization.rs:237).
+/// application::organization::Member (engines/catalog/src/application/organization.rs:237).
 nonisolated struct LWApplicationOrganizationMember: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var cursor: LWApplicationOrganizationMemberCursor
@@ -7254,7 +7254,7 @@ nonisolated struct LWApplicationOrganizationMember: Codable, Sendable {
     }
 }
 
-/// application::organization::MemberCursor (vendor/PhotoCatalog/src/application/organization.rs:164).
+/// application::organization::MemberCursor (engines/catalog/src/application/organization.rs:164).
 nonisolated struct LWApplicationOrganizationMemberCursor: Codable, Sendable {
     var position: LWCatalogI64
     var sequence: LWCatalogI64
@@ -7275,7 +7275,7 @@ nonisolated struct LWApplicationOrganizationMemberCursor: Codable, Sendable {
     }
 }
 
-/// application::organization::MembershipCursor (vendor/PhotoCatalog/src/application/organization.rs:170).
+/// application::organization::MembershipCursor (engines/catalog/src/application/organization.rs:170).
 nonisolated struct LWApplicationOrganizationMembershipCursor: Codable, Sendable {
     var collection: String
     var revision: LWCatalogI64
@@ -7308,7 +7308,7 @@ nonisolated struct LWApplicationOrganizationMembershipCursor: Codable, Sendable 
     }
 }
 
-/// application::organization::MembershipPage (vendor/PhotoCatalog/src/application/organization.rs:200).
+/// application::organization::MembershipPage (engines/catalog/src/application/organization.rs:200).
 nonisolated struct LWApplicationOrganizationMembershipPage: Codable, Sendable {
     var rows: [LWApplicationOrganizationMember]
     var next: LWApplicationOrganizationMembershipCursor?
@@ -7332,7 +7332,7 @@ nonisolated struct LWApplicationOrganizationMembershipPage: Codable, Sendable {
     }
 }
 
-/// application::organization::Page (vendor/PhotoCatalog/src/application/organization.rs:206).
+/// application::organization::Page (engines/catalog/src/application/organization.rs:206).
 nonisolated struct LWApplicationOrganizationPage<T: Codable & Sendable, C: Codable & Sendable>: Codable, Sendable {
     var rows: [T]
     var next: C?
@@ -7352,7 +7352,7 @@ nonisolated struct LWApplicationOrganizationPage<T: Codable & Sendable, C: Codab
     }
 }
 
-/// application::organization::Placement (vendor/PhotoCatalog/src/application/organization.rs:226).
+/// application::organization::Placement (engines/catalog/src/application/organization.rs:226).
 nonisolated struct LWApplicationOrganizationPlacement: Codable, Sendable {
     var collection: String
     var parent: String?
@@ -7376,7 +7376,7 @@ nonisolated struct LWApplicationOrganizationPlacement: Codable, Sendable {
     }
 }
 
-/// application::organization::Request (vendor/PhotoCatalog/src/application/organization.rs:19).
+/// application::organization::Request (engines/catalog/src/application/organization.rs:19).
 nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
     case Keywords(kind: LWOrganizationKeywordKind, parent: LWCatalogI64?, after: LWCatalogI64, limit: UInt16)
     case CreateKeyword(kind: LWOrganizationKeywordKind, path: [String])
@@ -7742,7 +7742,7 @@ nonisolated indirect enum LWApplicationOrganizationRequest: Codable, Sendable {
     }
 }
 
-/// application::organization::Response (vendor/PhotoCatalog/src/application/organization.rs:277).
+/// application::organization::Response (engines/catalog/src/application/organization.rs:277).
 nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
     case Keywords(LWApplicationOrganizationPage<LWApplicationOrganizationKeyword, LWCatalogI64>)
     case KeywordCreated(id: LWCatalogI64)
@@ -7866,7 +7866,7 @@ nonisolated indirect enum LWApplicationOrganizationResponse: Codable, Sendable {
     }
 }
 
-/// application::organization::Synonym (vendor/PhotoCatalog/src/application/organization.rs:232).
+/// application::organization::Synonym (engines/catalog/src/application/organization.rs:232).
 nonisolated struct LWApplicationOrganizationSynonym: Codable, Sendable {
     var synonym: String
     var provenance_json: String
@@ -7886,7 +7886,7 @@ nonisolated struct LWApplicationOrganizationSynonym: Codable, Sendable {
     }
 }
 
-/// application::preview_settings::OriginalRoots (vendor/PhotoCatalog/src/application/preview_settings.rs:72).
+/// application::preview_settings::OriginalRoots (engines/catalog/src/application/preview_settings.rs:72).
 nonisolated struct LWApplicationPreviewSettingsOriginalRoots: Codable, Sendable {
     var state: String
     var roots: [LWCatalogNativePath]
@@ -7922,7 +7922,7 @@ nonisolated struct LWApplicationPreviewSettingsOriginalRoots: Codable, Sendable 
     }
 }
 
-/// application::preview_settings::Relocation (vendor/PhotoCatalog/src/application/preview_settings.rs:61).
+/// application::preview_settings::Relocation (engines/catalog/src/application/preview_settings.rs:61).
 nonisolated struct LWApplicationPreviewSettingsRelocation: Codable, Sendable {
     var source: LWCatalogNativePath
     var destination: LWCatalogNativePath
@@ -7962,7 +7962,7 @@ nonisolated struct LWApplicationPreviewSettingsRelocation: Codable, Sendable {
     }
 }
 
-/// application::preview_settings::Request (vendor/PhotoCatalog/src/application/preview_settings.rs:25).
+/// application::preview_settings::Request (engines/catalog/src/application/preview_settings.rs:25).
 nonisolated indirect enum LWApplicationPreviewSettingsRequest: Codable, Sendable {
     case Status
     case SetBudgets(thumbnail_bytes: LWCatalogU64, large_bytes: LWCatalogU64)
@@ -8054,21 +8054,23 @@ nonisolated indirect enum LWApplicationPreviewSettingsRequest: Codable, Sendable
     }
 }
 
-/// application::preview_settings::Status (vendor/PhotoCatalog/src/application/preview_settings.rs:50).
+/// application::preview_settings::Status (engines/catalog/src/application/preview_settings.rs:50).
 nonisolated struct LWApplicationPreviewSettingsStatus: Codable, Sendable {
     var thumbnail_root: LWCatalogNativePath
     var large_root: LWCatalogNativePath
     var thumbnail_bytes: LWCatalogU64
     var large_bytes: LWCatalogU64
+    var previews_drained: Bool
     var relocation_pending: Bool
     var relocation_tier: LWPreviewStoreTier?
     var relocation: LWApplicationPreviewSettingsRelocation?
     var original_roots: LWApplicationPreviewSettingsOriginalRoots
-    init(thumbnail_root: LWCatalogNativePath, large_root: LWCatalogNativePath, thumbnail_bytes: LWCatalogU64, large_bytes: LWCatalogU64, relocation_pending: Bool, relocation_tier: LWPreviewStoreTier?, relocation: LWApplicationPreviewSettingsRelocation?, original_roots: LWApplicationPreviewSettingsOriginalRoots) {
+    init(thumbnail_root: LWCatalogNativePath, large_root: LWCatalogNativePath, thumbnail_bytes: LWCatalogU64, large_bytes: LWCatalogU64, previews_drained: Bool, relocation_pending: Bool, relocation_tier: LWPreviewStoreTier?, relocation: LWApplicationPreviewSettingsRelocation?, original_roots: LWApplicationPreviewSettingsOriginalRoots) {
         self.thumbnail_root = thumbnail_root
         self.large_root = large_root
         self.thumbnail_bytes = thumbnail_bytes
         self.large_bytes = large_bytes
+        self.previews_drained = previews_drained
         self.relocation_pending = relocation_pending
         self.relocation_tier = relocation_tier
         self.relocation = relocation
@@ -8080,6 +8082,7 @@ nonisolated struct LWApplicationPreviewSettingsStatus: Codable, Sendable {
         self.large_root = try container.decode(LWCatalogNativePath.self, forKey: LWCatalogCodingKey("large_root"))
         self.thumbnail_bytes = try container.decode(LWCatalogU64.self, forKey: LWCatalogCodingKey("thumbnail_bytes"))
         self.large_bytes = try container.decode(LWCatalogU64.self, forKey: LWCatalogCodingKey("large_bytes"))
+        self.previews_drained = try container.decode(Bool.self, forKey: LWCatalogCodingKey("previews_drained"))
         self.relocation_pending = try container.decode(Bool.self, forKey: LWCatalogCodingKey("relocation_pending"))
         self.relocation_tier = try container.decodeIfPresent(LWPreviewStoreTier.self, forKey: LWCatalogCodingKey("relocation_tier"))
         self.relocation = try container.decodeIfPresent(LWApplicationPreviewSettingsRelocation.self, forKey: LWCatalogCodingKey("relocation"))
@@ -8091,6 +8094,7 @@ nonisolated struct LWApplicationPreviewSettingsStatus: Codable, Sendable {
         try container.encode(large_root, forKey: LWCatalogCodingKey("large_root"))
         try container.encode(thumbnail_bytes, forKey: LWCatalogCodingKey("thumbnail_bytes"))
         try container.encode(large_bytes, forKey: LWCatalogCodingKey("large_bytes"))
+        try container.encode(previews_drained, forKey: LWCatalogCodingKey("previews_drained"))
         try container.encode(relocation_pending, forKey: LWCatalogCodingKey("relocation_pending"))
         try container.encode(relocation_tier, forKey: LWCatalogCodingKey("relocation_tier"))
         try container.encode(relocation, forKey: LWCatalogCodingKey("relocation"))
@@ -8098,7 +8102,7 @@ nonisolated struct LWApplicationPreviewSettingsStatus: Codable, Sendable {
     }
 }
 
-/// application::relink::Action (vendor/PhotoCatalog/src/application/relink.rs:317).
+/// application::relink::Action (engines/catalog/src/application/relink.rs:317).
 nonisolated enum LWApplicationRelinkAction: String, Codable, Sendable {
     case Prepare = "prepare"
     case Confirm = "confirm"
@@ -8109,7 +8113,7 @@ nonisolated enum LWApplicationRelinkAction: String, Codable, Sendable {
     case Original = "original"
 }
 
-/// application::relink::Item (vendor/PhotoCatalog/src/application/relink.rs:239).
+/// application::relink::Item (engines/catalog/src/application/relink.rs:239).
 nonisolated struct LWApplicationRelinkItem: Codable, Sendable {
     var sequence: LWCatalogI64
     var asset_id: String
@@ -8153,7 +8157,7 @@ nonisolated struct LWApplicationRelinkItem: Codable, Sendable {
     }
 }
 
-/// application::relink::Mount (vendor/PhotoCatalog/src/application/relink.rs:285).
+/// application::relink::Mount (engines/catalog/src/application/relink.rs:285).
 nonisolated struct LWApplicationRelinkMount: Codable, Sendable {
     var token: String
     var path: LWCatalogNativePath
@@ -8181,7 +8185,7 @@ nonisolated struct LWApplicationRelinkMount: Codable, Sendable {
     }
 }
 
-/// application::relink::Mounts (vendor/PhotoCatalog/src/application/relink.rs:292).
+/// application::relink::Mounts (engines/catalog/src/application/relink.rs:292).
 nonisolated struct LWApplicationRelinkMounts: Codable, Sendable {
     var rows: [LWApplicationRelinkMount]
     var complete: Bool
@@ -8205,7 +8209,7 @@ nonisolated struct LWApplicationRelinkMounts: Codable, Sendable {
     }
 }
 
-/// application::relink::Operation (vendor/PhotoCatalog/src/application/relink.rs:334).
+/// application::relink::Operation (engines/catalog/src/application/relink.rs:334).
 nonisolated struct LWApplicationRelinkOperation: Codable, Sendable {
     var id: String
     var action: LWApplicationRelinkAction
@@ -8253,7 +8257,7 @@ nonisolated struct LWApplicationRelinkOperation: Codable, Sendable {
     }
 }
 
-/// application::relink::Original (vendor/PhotoCatalog/src/application/relink.rs:298).
+/// application::relink::Original (engines/catalog/src/application/relink.rs:298).
 nonisolated struct LWApplicationRelinkOriginal: Codable, Sendable {
     var key: LWCatalogEditsVariantKey
     var status: LWCatalogStorageStorageStatus
@@ -8273,7 +8277,7 @@ nonisolated struct LWApplicationRelinkOriginal: Codable, Sendable {
     }
 }
 
-/// application::relink::Outcome (vendor/PhotoCatalog/src/application/relink.rs:328).
+/// application::relink::Outcome (engines/catalog/src/application/relink.rs:328).
 nonisolated indirect enum LWApplicationRelinkOutcome: Codable, Sendable {
     case Plan(LWApplicationRelinkPlan)
     case Mounts(LWApplicationRelinkMounts)
@@ -8309,7 +8313,7 @@ nonisolated indirect enum LWApplicationRelinkOutcome: Codable, Sendable {
     }
 }
 
-/// application::relink::Override (vendor/PhotoCatalog/src/application/relink.rs:52).
+/// application::relink::Override (engines/catalog/src/application/relink.rs:52).
 nonisolated indirect enum LWApplicationRelinkOverride: Codable, Sendable {
     case Asset(asset_id: String, candidates: [LWCatalogNativePath])
     case Source(source_id: LWCatalogI64, candidates: [LWCatalogNativePath])
@@ -8366,7 +8370,7 @@ nonisolated indirect enum LWApplicationRelinkOverride: Codable, Sendable {
     }
 }
 
-/// application::relink::Phase (vendor/PhotoCatalog/src/application/relink.rs:304).
+/// application::relink::Phase (engines/catalog/src/application/relink.rs:304).
 nonisolated enum LWApplicationRelinkPhase: String, Codable, Sendable {
     case Preparing = "preparing"
     case Observing = "observing"
@@ -8379,7 +8383,7 @@ nonisolated enum LWApplicationRelinkPhase: String, Codable, Sendable {
     case Failed = "failed"
 }
 
-/// application::relink::Plan (vendor/PhotoCatalog/src/application/relink.rs:202).
+/// application::relink::Plan (engines/catalog/src/application/relink.rs:202).
 nonisolated struct LWApplicationRelinkPlan: Codable, Sendable {
     var id: String
     var state: String
@@ -8447,7 +8451,7 @@ nonisolated struct LWApplicationRelinkPlan: Codable, Sendable {
     }
 }
 
-/// application::relink::Request (vendor/PhotoCatalog/src/application/relink.rs:73).
+/// application::relink::Request (engines/catalog/src/application/relink.rs:73).
 nonisolated indirect enum LWApplicationRelinkRequest: Codable, Sendable {
     case Rules(plan: String, revision: LWCatalogI64, after: LWApplicationRelinkRuleCursor?, limit: LWCatalogU64)
     case Begin(scope: LWApplicationRelinkScope)
@@ -8671,7 +8675,7 @@ nonisolated indirect enum LWApplicationRelinkRequest: Codable, Sendable {
     }
 }
 
-/// application::relink::Response (vendor/PhotoCatalog/src/application/relink.rs:347).
+/// application::relink::Response (engines/catalog/src/application/relink.rs:347).
 nonisolated indirect enum LWApplicationRelinkResponse: Codable, Sendable {
     case Rules(rows: [LWApplicationRelinkRuleRow], next: LWApplicationRelinkRuleCursor?, scanned: LWCatalogU64)
     case Plan(LWApplicationRelinkPlan)
@@ -8749,7 +8753,7 @@ nonisolated indirect enum LWApplicationRelinkResponse: Codable, Sendable {
     }
 }
 
-/// application::relink::Rule (vendor/PhotoCatalog/src/application/relink.rs:192).
+/// application::relink::Rule (engines/catalog/src/application/relink.rs:192).
 nonisolated indirect enum LWApplicationRelinkRule: Codable, Sendable {
     case Scope(LWApplicationRelinkSavedScope)
     case Override(LWApplicationRelinkOverride)
@@ -8778,7 +8782,7 @@ nonisolated indirect enum LWApplicationRelinkRule: Codable, Sendable {
     }
 }
 
-/// application::relink::RuleCursor (vendor/PhotoCatalog/src/application/relink.rs:165).
+/// application::relink::RuleCursor (engines/catalog/src/application/relink.rs:165).
 nonisolated struct LWApplicationRelinkRuleCursor: Codable, Sendable {
     var plan: String
     var revision: LWCatalogI64
@@ -8815,7 +8819,7 @@ nonisolated struct LWApplicationRelinkRuleCursor: Codable, Sendable {
     }
 }
 
-/// application::relink::RuleRow (vendor/PhotoCatalog/src/application/relink.rs:197).
+/// application::relink::RuleRow (engines/catalog/src/application/relink.rs:197).
 nonisolated struct LWApplicationRelinkRuleRow: Codable, Sendable {
     var rule: LWApplicationRelinkRule
     var label: String?
@@ -8835,7 +8839,7 @@ nonisolated struct LWApplicationRelinkRuleRow: Codable, Sendable {
     }
 }
 
-/// application::relink::RuleStage (vendor/PhotoCatalog/src/application/relink.rs:154).
+/// application::relink::RuleStage (engines/catalog/src/application/relink.rs:154).
 nonisolated enum LWApplicationRelinkRuleStage: String, Codable, Sendable {
     case Scope = "scope"
     case Prefix = "prefix"
@@ -8846,7 +8850,7 @@ nonisolated enum LWApplicationRelinkRuleStage: String, Codable, Sendable {
     case End = "end"
 }
 
-/// application::relink::SavedScope (vendor/PhotoCatalog/src/application/relink.rs:175).
+/// application::relink::SavedScope (engines/catalog/src/application/relink.rs:175).
 nonisolated indirect enum LWApplicationRelinkSavedScope: Codable, Sendable {
     case Prefix(from: LWCatalogStoragePathReference, destinations: [LWCatalogNativePath])
     case Asset(asset_id: String, destinations: [LWCatalogNativePath])
@@ -8898,7 +8902,7 @@ nonisolated indirect enum LWApplicationRelinkSavedScope: Codable, Sendable {
     }
 }
 
-/// application::relink::Scope (vendor/PhotoCatalog/src/application/relink.rs:31).
+/// application::relink::Scope (engines/catalog/src/application/relink.rs:31).
 nonisolated indirect enum LWApplicationRelinkScope: Codable, Sendable {
     case Prefix(from: LWCatalogStoragePathReference, destinations: [LWCatalogNativePath])
     case Asset(asset_id: String, destinations: [LWCatalogNativePath])
@@ -8955,7 +8959,7 @@ nonisolated indirect enum LWApplicationRelinkScope: Codable, Sendable {
     }
 }
 
-/// application::relink::Source (vendor/PhotoCatalog/src/application/relink.rs:264).
+/// application::relink::Source (engines/catalog/src/application/relink.rs:264).
 nonisolated struct LWApplicationRelinkSource: Codable, Sendable {
     var source_id: LWCatalogI64
     var status: String
@@ -8991,7 +8995,7 @@ nonisolated struct LWApplicationRelinkSource: Codable, Sendable {
     }
 }
 
-/// catalog_backup::Phase (vendor/PhotoCatalog/src/catalog_backup.rs:85).
+/// catalog_backup::Phase (engines/catalog/src/catalog_backup.rs:85).
 nonisolated enum LWCatalogBackupPhase: String, Codable, Sendable {
     case Snapshot = "Snapshot"
     case Copy = "Copy"
@@ -9001,7 +9005,7 @@ nonisolated enum LWCatalogBackupPhase: String, Codable, Sendable {
     case Publish = "Publish"
 }
 
-/// catalog_edits::VariantKey (vendor/PhotoCatalog/src/catalog_edits.rs:59).
+/// catalog_edits::VariantKey (engines/catalog/src/catalog_edits.rs:59).
 nonisolated struct LWCatalogEditsVariantKey: Codable, Sendable {
     var asset_id: String
     var variant_id: String
@@ -9022,7 +9026,7 @@ nonisolated struct LWCatalogEditsVariantKey: Codable, Sendable {
     }
 }
 
-/// catalog_images::ImageMetadataIdentity (vendor/PhotoCatalog/src/catalog_images.rs:59).
+/// catalog_images::ImageMetadataIdentity (engines/catalog/src/catalog_images.rs:59).
 nonisolated struct LWCatalogImagesImageMetadataIdentity: Codable, Sendable {
     var image_id: String
     var key: LWCatalogEditsVariantKey
@@ -9059,7 +9063,7 @@ nonisolated struct LWCatalogImagesImageMetadataIdentity: Codable, Sendable {
     }
 }
 
-/// catalog_metadata_write::Owner (vendor/PhotoCatalog/src/catalog_metadata_write.rs:21).
+/// catalog_metadata_write::Owner (engines/catalog/src/catalog_metadata_write.rs:21).
 nonisolated indirect enum LWCatalogMetadataWriteOwner: Codable, Sendable {
     case Image(identity: LWCatalogImagesImageMetadataIdentity)
     case LegacyAsset(asset_id: String, revision: Int64)
@@ -9091,7 +9095,7 @@ nonisolated indirect enum LWCatalogMetadataWriteOwner: Codable, Sendable {
     }
 }
 
-/// catalog_metadata_write::Receipt (vendor/PhotoCatalog/src/catalog_metadata_write.rs:28).
+/// catalog_metadata_write::Receipt (engines/catalog/src/catalog_metadata_write.rs:28).
 nonisolated struct LWCatalogMetadataWriteReceipt: Codable, Sendable {
     var attempt: String
     var request_digest: String
@@ -9128,7 +9132,7 @@ nonisolated struct LWCatalogMetadataWriteReceipt: Codable, Sendable {
     }
 }
 
-/// catalog_migration::history::Classification (vendor/PhotoCatalog/src/catalog_migration/history.rs:34).
+/// catalog_migration::history::Classification (engines/catalog/src/catalog_migration/history.rs:34).
 nonisolated enum LWCatalogMigrationHistoryClassification: String, Codable, Sendable {
     case Image = "Image"
     case CurrentSettings = "CurrentSettings"
@@ -9141,7 +9145,7 @@ nonisolated enum LWCatalogMigrationHistoryClassification: String, Codable, Senda
     case Unsupported = "Unsupported"
 }
 
-/// catalog_migration::history::Compatibility (vendor/PhotoCatalog/src/catalog_migration/history.rs:46).
+/// catalog_migration::history::Compatibility (engines/catalog/src/catalog_migration/history.rs:46).
 nonisolated enum LWCatalogMigrationHistoryCompatibility: String, Codable, Sendable {
     case RetainedOnly = "RetainedOnly"
     case Missing = "Missing"
@@ -9151,13 +9155,13 @@ nonisolated enum LWCatalogMigrationHistoryCompatibility: String, Codable, Sendab
     case TraversalLimit = "TraversalLimit"
 }
 
-/// catalog_migration::history::Direction (vendor/PhotoCatalog/src/catalog_migration/history.rs:29).
+/// catalog_migration::history::Direction (engines/catalog/src/catalog_migration/history.rs:29).
 nonisolated enum LWCatalogMigrationHistoryDirection: String, Codable, Sendable {
     case Incoming = "Incoming"
     case Outgoing = "Outgoing"
 }
 
-/// catalog_session::PhysicalObjectId (vendor/PhotoCatalog/src/catalog_session.rs:32).
+/// catalog_session::PhysicalObjectId (engines/catalog/src/catalog_session.rs:32).
 nonisolated indirect enum LWCatalogSessionPhysicalObjectId: Codable, Sendable {
     case Unix(device: LWCatalogU64, inode: LWCatalogU64)
     case Windows(volume_serial: LWCatalogU64, file_index: LWCatalogU64)
@@ -9190,7 +9194,7 @@ nonisolated indirect enum LWCatalogSessionPhysicalObjectId: Codable, Sendable {
     }
 }
 
-/// catalog_session::metadata_files::DiscoveryEntry (vendor/PhotoCatalog/src/catalog_session/metadata_files.rs:209).
+/// catalog_session::metadata_files::DiscoveryEntry (engines/catalog/src/catalog_session/metadata_files.rs:209).
 nonisolated struct LWCatalogSessionMetadataFilesDiscoveryEntry: Codable, Sendable {
     var directory: LWCatalogNativePath
     var name: LWCatalogNativePath
@@ -9227,7 +9231,7 @@ nonisolated struct LWCatalogSessionMetadataFilesDiscoveryEntry: Codable, Sendabl
     }
 }
 
-/// catalog_storage::Candidate (vendor/PhotoCatalog/src/catalog_storage.rs:117).
+/// catalog_storage::Candidate (engines/catalog/src/catalog_storage.rs:117).
 nonisolated struct LWCatalogStorageCandidate: Codable, Sendable {
     var path: LWCatalogNativePath
     var status: LWCatalogStorageMatchStatus
@@ -9251,7 +9255,7 @@ nonisolated struct LWCatalogStorageCandidate: Codable, Sendable {
     }
 }
 
-/// catalog_storage::MatchStatus (vendor/PhotoCatalog/src/catalog_storage.rs:90).
+/// catalog_storage::MatchStatus (engines/catalog/src/catalog_storage.rs:90).
 nonisolated enum LWCatalogStorageMatchStatus: String, Codable, Sendable {
     case Matched = "Matched"
     case Unverified = "Unverified"
@@ -9264,7 +9268,7 @@ nonisolated enum LWCatalogStorageMatchStatus: String, Codable, Sendable {
     case Excluded = "Excluded"
 }
 
-/// catalog_storage::PathReference (vendor/PhotoCatalog/src/catalog_storage.rs:62).
+/// catalog_storage::PathReference (engines/catalog/src/catalog_storage.rs:62).
 nonisolated indirect enum LWCatalogStoragePathReference: Codable, Sendable {
     case Unspecified([UInt8])
     case Native(LWCatalogNativePath)
@@ -9308,7 +9312,7 @@ nonisolated indirect enum LWCatalogStoragePathReference: Codable, Sendable {
     }
 }
 
-/// catalog_storage::StorageStatus (vendor/PhotoCatalog/src/catalog_storage.rs:161).
+/// catalog_storage::StorageStatus (engines/catalog/src/catalog_storage.rs:161).
 nonisolated struct LWCatalogStorageStorageStatus: Codable, Sendable {
     var asset_id: String
     var state: String
@@ -9344,7 +9348,7 @@ nonisolated struct LWCatalogStorageStorageStatus: Codable, Sendable {
     }
 }
 
-/// edit::recipe::AdjustmentGroup (vendor/PhotoCatalog/src/edit/recipe.rs:58).
+/// edit::recipe::AdjustmentGroup (engines/catalog/src/edit/recipe.rs:58).
 nonisolated enum LWEditRecipeAdjustmentGroup: String, Codable, Sendable {
     case Geometry = "geometry"
     case Exposure = "exposure"
@@ -9355,7 +9359,7 @@ nonisolated enum LWEditRecipeAdjustmentGroup: String, Codable, Sendable {
     case NoiseReduction = "noise_reduction"
 }
 
-/// edit::recipe::NoiseReduction (vendor/PhotoCatalog/src/edit/recipe.rs:52).
+/// edit::recipe::NoiseReduction (engines/catalog/src/edit/recipe.rs:52).
 nonisolated struct LWEditRecipeNoiseReduction: Codable, Sendable {
     var luminance: LWCatalogFloat32
     var chroma: LWCatalogFloat32
@@ -9376,7 +9380,7 @@ nonisolated struct LWEditRecipeNoiseReduction: Codable, Sendable {
     }
 }
 
-/// edit::recipe::NormalizedRect (vendor/PhotoCatalog/src/edit/recipe.rs:32).
+/// edit::recipe::NormalizedRect (engines/catalog/src/edit/recipe.rs:32).
 nonisolated struct LWEditRecipeNormalizedRect: Codable, Sendable {
     var left: LWCatalogFloat32
     var top: LWCatalogFloat32
@@ -9405,7 +9409,7 @@ nonisolated struct LWEditRecipeNormalizedRect: Codable, Sendable {
     }
 }
 
-/// edit::recipe::Recipe (vendor/PhotoCatalog/src/edit/recipe.rs:8).
+/// edit::recipe::Recipe (engines/catalog/src/edit/recipe.rs:8).
 nonisolated indirect enum LWEditRecipeRecipe: Codable, Sendable {
     case V1(LWEditRecipeRecipeV1)
     init(from decoder: any Decoder) throws {
@@ -9428,7 +9432,7 @@ nonisolated indirect enum LWEditRecipeRecipe: Codable, Sendable {
     }
 }
 
-/// edit::recipe::RecipeV1 (vendor/PhotoCatalog/src/edit/recipe.rs:14).
+/// edit::recipe::RecipeV1 (engines/catalog/src/edit/recipe.rs:14).
 nonisolated struct LWEditRecipeRecipeV1: Codable, Sendable {
     var crop: LWEditRecipeNormalizedRect?
     var straighten_degrees: LWCatalogFloat32
@@ -9485,7 +9489,7 @@ nonisolated struct LWEditRecipeRecipeV1: Codable, Sendable {
     }
 }
 
-/// edit::recipe::Sharpening (vendor/PhotoCatalog/src/edit/recipe.rs:46).
+/// edit::recipe::Sharpening (engines/catalog/src/edit/recipe.rs:46).
 nonisolated struct LWEditRecipeSharpening: Codable, Sendable {
     var amount: LWCatalogFloat32
     var radius_px: LWCatalogFloat32
@@ -9506,7 +9510,7 @@ nonisolated struct LWEditRecipeSharpening: Codable, Sendable {
     }
 }
 
-/// edit::recipe::WhiteBalance (vendor/PhotoCatalog/src/edit/recipe.rs:40).
+/// edit::recipe::WhiteBalance (engines/catalog/src/edit/recipe.rs:40).
 nonisolated indirect enum LWEditRecipeWhiteBalance: Codable, Sendable {
     case AsShot
     case TemperatureTint(kelvin: UInt32, tint: LWCatalogFloat32)
@@ -9537,7 +9541,7 @@ nonisolated indirect enum LWEditRecipeWhiteBalance: Codable, Sendable {
     }
 }
 
-/// filesystem_worker::wire::LightroomArtifactPreparation (vendor/PhotoCatalog/src/filesystem_worker/wire.rs:350).
+/// filesystem_worker::wire::LightroomArtifactPreparation (engines/catalog/src/filesystem_worker/wire.rs:350).
 nonisolated indirect enum LWFilesystemWorkerWireLightroomArtifactPreparation: Codable, Sendable {
     case Begin(session: String, directory: LWCatalogNativePath, capture_revision: String, manifest_blake3: String, maximum_bytes: LWCatalogU64, open_deadline_ms: LWCatalogU64)
     case Member(session: String, member_index: LWCatalogU64)
@@ -9598,7 +9602,7 @@ nonisolated indirect enum LWFilesystemWorkerWireLightroomArtifactPreparation: Co
     }
 }
 
-/// filesystem_worker::wire::LightroomArtifactPreparationReply (vendor/PhotoCatalog/src/filesystem_worker/wire.rs:421).
+/// filesystem_worker::wire::LightroomArtifactPreparationReply (engines/catalog/src/filesystem_worker/wire.rs:421).
 nonisolated indirect enum LWFilesystemWorkerWireLightroomArtifactPreparationReply: Codable, Sendable {
     case Begun(session: String, directory: LWCatalogNativePath, manifest_path: LWCatalogNativePath, manifest_physical: LWCatalogSessionPhysicalObjectId, capture_revision: String, manifest_blake3: String, manifest_bytes: LWCatalogU64, members: LWCatalogU64)
     case Prepared(session: String, member_index: LWCatalogU64, receipt: String)
@@ -9648,13 +9652,13 @@ nonisolated indirect enum LWFilesystemWorkerWireLightroomArtifactPreparationRepl
     }
 }
 
-/// filesystem_worker::wire::LightroomSealedDocument (vendor/PhotoCatalog/src/filesystem_worker/wire.rs:280).
+/// filesystem_worker::wire::LightroomSealedDocument (engines/catalog/src/filesystem_worker/wire.rs:280).
 nonisolated enum LWFilesystemWorkerWireLightroomSealedDocument: String, Codable, Sendable {
     case Seal = "seal"
     case Approval = "approval"
 }
 
-/// filesystem_worker::wire::LightroomSealedDocumentPage (vendor/PhotoCatalog/src/filesystem_worker/wire.rs:335).
+/// filesystem_worker::wire::LightroomSealedDocumentPage (engines/catalog/src/filesystem_worker/wire.rs:335).
 nonisolated struct LWFilesystemWorkerWireLightroomSealedDocumentPage: Codable, Sendable {
     var session: String
     var directory: LWCatalogNativePath
@@ -9707,7 +9711,7 @@ nonisolated struct LWFilesystemWorkerWireLightroomSealedDocumentPage: Codable, S
     }
 }
 
-/// filesystem_worker::wire::LightroomSealedRead (vendor/PhotoCatalog/src/filesystem_worker/wire.rs:287).
+/// filesystem_worker::wire::LightroomSealedRead (engines/catalog/src/filesystem_worker/wire.rs:287).
 nonisolated indirect enum LWFilesystemWorkerWireLightroomSealedRead: Codable, Sendable {
     case Begin(session: String, directory: LWCatalogNativePath, document: LWFilesystemWorkerWireLightroomSealedDocument)
     case Page(session: String, offset: LWCatalogU64, limit: LWCatalogU64)
@@ -9750,7 +9754,7 @@ nonisolated indirect enum LWFilesystemWorkerWireLightroomSealedRead: Codable, Se
     }
 }
 
-/// image_export::specification::AlphaPolicy (vendor/PhotoCatalog/src/image_export/specification.rs:43).
+/// image_export::specification::AlphaPolicy (engines/catalog/src/image_export/specification.rs:43).
 nonisolated indirect enum LWImageExportSpecificationAlphaPolicy: Codable, Sendable {
     case Preserve
     case Composite(linear_rgb: LWCatalogTriple<LWCatalogFloat32, LWCatalogFloat32, LWCatalogFloat32>)
@@ -9780,13 +9784,13 @@ nonisolated indirect enum LWImageExportSpecificationAlphaPolicy: Codable, Sendab
     }
 }
 
-/// image_export::specification::IntegerDepth (vendor/PhotoCatalog/src/image_export/specification.rs:6).
+/// image_export::specification::IntegerDepth (engines/catalog/src/image_export/specification.rs:6).
 nonisolated enum LWImageExportSpecificationIntegerDepth: String, Codable, Sendable {
     case Eight = "eight"
     case Sixteen = "sixteen"
 }
 
-/// image_export::specification::OutputFormat (vendor/PhotoCatalog/src/image_export/specification.rs:19).
+/// image_export::specification::OutputFormat (engines/catalog/src/image_export/specification.rs:19).
 nonisolated indirect enum LWImageExportSpecificationOutputFormat: Codable, Sendable {
     case Jpeg(quality: UInt8)
     case Png(depth: LWImageExportSpecificationIntegerDepth)
@@ -9825,7 +9829,7 @@ nonisolated indirect enum LWImageExportSpecificationOutputFormat: Codable, Senda
     }
 }
 
-/// image_export::specification::OutputSize (vendor/PhotoCatalog/src/image_export/specification.rs:26).
+/// image_export::specification::OutputSize (engines/catalog/src/image_export/specification.rs:26).
 nonisolated indirect enum LWImageExportSpecificationOutputSize: Codable, Sendable {
     case Original
     case Fit(width: UInt32, height: UInt32, allow_upscale: Bool)
@@ -9857,14 +9861,14 @@ nonisolated indirect enum LWImageExportSpecificationOutputSize: Codable, Sendabl
     }
 }
 
-/// image_export::specification::TiffDepth (vendor/PhotoCatalog/src/image_export/specification.rs:12).
+/// image_export::specification::TiffDepth (engines/catalog/src/image_export/specification.rs:12).
 nonisolated enum LWImageExportSpecificationTiffDepth: String, Codable, Sendable {
     case Eight = "eight"
     case Sixteen = "sixteen"
     case Float32 = "float32"
 }
 
-/// lightroom::adobe::Disposition (vendor/PhotoCatalog/src/lightroom/adobe.rs:159).
+/// lightroom::adobe::Disposition (engines/catalog/src/lightroom/adobe.rs:159).
 nonisolated enum LWLightroomAdobeDisposition: String, Codable, Sendable {
     case MappedParameter = "mapped_parameter"
     case RetainedOnly = "retained_only"
@@ -9872,7 +9876,7 @@ nonisolated enum LWLightroomAdobeDisposition: String, Codable, Sendable {
     case Conflict = "conflict"
 }
 
-/// lightroom::adobe::Failure (vendor/PhotoCatalog/src/lightroom/adobe.rs:187).
+/// lightroom::adobe::Failure (engines/catalog/src/lightroom/adobe.rs:187).
 nonisolated struct LWLightroomAdobeFailure: Codable, Sendable {
     var kind: LWLightroomAdobeFailureKind
     var message: String
@@ -9892,14 +9896,14 @@ nonisolated struct LWLightroomAdobeFailure: Codable, Sendable {
     }
 }
 
-/// lightroom::adobe::FailureKind (vendor/PhotoCatalog/src/lightroom/adobe.rs:181).
+/// lightroom::adobe::FailureKind (engines/catalog/src/lightroom/adobe.rs:181).
 nonisolated enum LWLightroomAdobeFailureKind: String, Codable, Sendable {
     case ResourceLimit = "resource_limit"
     case InvalidSyntax = "invalid_syntax"
     case Conflict = "conflict"
 }
 
-/// lightroom::plan::Cell (vendor/PhotoCatalog/src/lightroom/plan.rs:97).
+/// lightroom::plan::Cell (engines/catalog/src/lightroom/plan.rs:97).
 nonisolated indirect enum LWLightroomPlanCell: Codable, Sendable {
     case Null
     case Integer(Int64)
@@ -9948,7 +9952,7 @@ nonisolated indirect enum LWLightroomPlanCell: Codable, Sendable {
     }
 }
 
-/// lightroom::plan::selection::preparation::PreparationDocument (vendor/PhotoCatalog/src/lightroom/plan/selection/preparation.rs:11).
+/// lightroom::plan::selection::preparation::PreparationDocument (engines/catalog/src/lightroom/plan/selection/preparation.rs:11).
 nonisolated indirect enum LWLightroomPlanSelectionPreparationPreparationDocument: Codable, Sendable {
     case Manifest(revision: String)
     case OriginalEvidence(revision: String, source_id: String)
@@ -9980,7 +9984,7 @@ nonisolated indirect enum LWLightroomPlanSelectionPreparationPreparationDocument
     }
 }
 
-/// lightroom_migration_worker::input::PartDescriptor (vendor/PhotoCatalog/src/lightroom_migration_worker/input.rs:49).
+/// lightroom_migration_worker::input::PartDescriptor (engines/catalog/src/lightroom_migration_worker/input.rs:49).
 nonisolated struct LWLightroomMigrationWorkerInputPartDescriptor: Codable, Sendable {
     var role: LWLightroomMigrationWorkerProtocolInputRole
     var bytes: LWCatalogU64
@@ -10005,7 +10009,7 @@ nonisolated struct LWLightroomMigrationWorkerInputPartDescriptor: Codable, Senda
     }
 }
 
-/// lightroom_migration_worker::protocol::Guard (vendor/PhotoCatalog/src/lightroom_migration_worker/protocol.rs:33).
+/// lightroom_migration_worker::protocol::Guard (engines/catalog/src/lightroom_migration_worker/protocol.rs:33).
 nonisolated struct LWLightroomMigrationWorkerProtocolGuard: Codable, Sendable {
     var session: String
     var generation: String
@@ -10030,7 +10034,7 @@ nonisolated struct LWLightroomMigrationWorkerProtocolGuard: Codable, Sendable {
     }
 }
 
-/// lightroom_migration_worker::protocol::InputRole (vendor/PhotoCatalog/src/lightroom_migration_worker/protocol.rs:22).
+/// lightroom_migration_worker::protocol::InputRole (engines/catalog/src/lightroom_migration_worker/protocol.rs:22).
 nonisolated enum LWLightroomMigrationWorkerProtocolInputRole: String, Codable, Sendable {
     case Operation = "operation"
     case Seal = "seal"
@@ -10041,7 +10045,7 @@ nonisolated enum LWLightroomMigrationWorkerProtocolInputRole: String, Codable, S
     case ExecutionAuthorization = "execution_authorization"
 }
 
-/// lightroom_migration_worker::worker::Operation (vendor/PhotoCatalog/src/lightroom_migration_worker/worker.rs:66).
+/// lightroom_migration_worker::worker::Operation (engines/catalog/src/lightroom_migration_worker/worker.rs:66).
 nonisolated indirect enum LWLightroomMigrationWorkerWorkerOperation: Codable, Sendable {
     case Run(approval_blake3: String, max_steps: LWCatalogU64, max_seconds: LWCatalogU64, source_open_ms: LWCatalogU64, artifact_open_ms: LWCatalogU64, max_artifact_bytes: LWCatalogU64)
     case Status(run: String)
@@ -10120,7 +10124,7 @@ nonisolated indirect enum LWLightroomMigrationWorkerWorkerOperation: Codable, Se
     }
 }
 
-/// media::Metadata (vendor/PhotoCatalog/src/media.rs:19).
+/// media::Metadata (engines/catalog/src/media.rs:19).
 nonisolated struct LWMediaMetadata: Codable, Sendable {
     var format: String
     var width: UInt32
@@ -10168,7 +10172,7 @@ nonisolated struct LWMediaMetadata: Codable, Sendable {
     }
 }
 
-/// media::full::ColorCalibration (vendor/PhotoCatalog/src/media/full.rs:95).
+/// media::full::ColorCalibration (engines/catalog/src/media/full.rs:95).
 nonisolated struct LWMediaFullColorCalibration: Codable, Sendable {
     var table: String
     var applied_pixels: UInt64
@@ -10196,7 +10200,7 @@ nonisolated struct LWMediaFullColorCalibration: Codable, Sendable {
     }
 }
 
-/// media::full::DecodeLimits (vendor/PhotoCatalog/src/media/full.rs:21).
+/// media::full::DecodeLimits (engines/catalog/src/media/full.rs:21).
 nonisolated struct LWMediaFullDecodeLimits: Codable, Sendable {
     var max_encoded_bytes: UInt64
     var max_intermediate_pixels: UInt64
@@ -10220,7 +10224,7 @@ nonisolated struct LWMediaFullDecodeLimits: Codable, Sendable {
     }
 }
 
-/// media::full::DecodeStatus (vendor/PhotoCatalog/src/media/full.rs:69).
+/// media::full::DecodeStatus (engines/catalog/src/media/full.rs:69).
 nonisolated enum LWMediaFullDecodeStatus: String, Codable, Sendable {
     case Unsupported = "unsupported"
     case Corrupt = "corrupt"
@@ -10228,7 +10232,7 @@ nonisolated enum LWMediaFullDecodeStatus: String, Codable, Sendable {
     case Io = "io"
 }
 
-/// media::full::RenderProvenance (vendor/PhotoCatalog/src/media/full.rs:102).
+/// media::full::RenderProvenance (engines/catalog/src/media/full.rs:102).
 nonisolated struct LWMediaFullRenderProvenance: Codable, Sendable {
     var pipeline_version: String
     var decoder: String
@@ -10276,20 +10280,20 @@ nonisolated struct LWMediaFullRenderProvenance: Codable, Sendable {
     }
 }
 
-/// organization::Flag (vendor/PhotoCatalog/src/organization.rs:74).
+/// organization::Flag (engines/catalog/src/organization.rs:74).
 nonisolated enum LWOrganizationFlag: String, Codable, Sendable {
     case Unflagged = "unflagged"
     case Pick = "pick"
     case Reject = "reject"
 }
 
-/// organization::KeywordKind (vendor/PhotoCatalog/src/organization.rs:60).
+/// organization::KeywordKind (engines/catalog/src/organization.rs:60).
 nonisolated enum LWOrganizationKeywordKind: String, Codable, Sendable {
     case Flat = "flat"
     case Hierarchical = "hierarchical"
 }
 
-/// organization::Operation (vendor/PhotoCatalog/src/organization.rs:119).
+/// organization::Operation (engines/catalog/src/organization.rs:119).
 nonisolated indirect enum LWOrganizationOperation: Codable, Sendable {
     case Rating(value: UInt8)
     case Label(value: String)
@@ -10363,13 +10367,13 @@ nonisolated indirect enum LWOrganizationOperation: Codable, Sendable {
     }
 }
 
-/// organization_search::Direction (vendor/PhotoCatalog/src/organization_search.rs:32).
+/// organization_search::Direction (engines/catalog/src/organization_search.rs:32).
 nonisolated enum LWOrganizationSearchDirection: String, Codable, Sendable {
     case Ascending = "ascending"
     case Descending = "descending"
 }
 
-/// organization_search::Sort (vendor/PhotoCatalog/src/organization_search.rs:23).
+/// organization_search::Sort (engines/catalog/src/organization_search.rs:23).
 nonisolated enum LWOrganizationSearchSort: String, Codable, Sendable {
     case Sequence = "sequence"
     case Capture = "capture"
@@ -10377,14 +10381,14 @@ nonisolated enum LWOrganizationSearchSort: String, Codable, Sendable {
     case Rating = "rating"
 }
 
-/// preview::codec::Codec (vendor/PhotoCatalog/src/preview/codec.rs:16).
+/// preview::codec::Codec (engines/catalog/src/preview/codec.rs:16).
 nonisolated enum LWPreviewCodecCodec: String, Codable, Sendable {
     case Jpeg = "jpeg"
     case Webp = "webp"
     case Avif = "avif"
 }
 
-/// preview::codec::CodecSettings (vendor/PhotoCatalog/src/preview/codec.rs:31).
+/// preview::codec::CodecSettings (engines/catalog/src/preview/codec.rs:31).
 nonisolated struct LWPreviewCodecCodecSettings: Codable, Sendable {
     var codec: LWPreviewCodecCodec
     var quality: UInt8
@@ -10404,7 +10408,7 @@ nonisolated struct LWPreviewCodecCodecSettings: Codable, Sendable {
     }
 }
 
-/// preview::service::PreviewPolicy (vendor/PhotoCatalog/src/preview/service.rs:33).
+/// preview::service::PreviewPolicy (engines/catalog/src/preview/service.rs:33).
 nonisolated struct LWPreviewServicePreviewPolicy: Codable, Sendable {
     var thumbnail: LWPreviewServiceTierPolicy
     var large: LWPreviewServiceTierPolicy
@@ -10424,7 +10428,7 @@ nonisolated struct LWPreviewServicePreviewPolicy: Codable, Sendable {
     }
 }
 
-/// preview::service::ServiceLimits (vendor/PhotoCatalog/src/preview/service.rs:56).
+/// preview::service::ServiceLimits (engines/catalog/src/preview/service.rs:56).
 nonisolated struct LWPreviewServiceServiceLimits: Codable, Sendable {
     var requests: UInt
     var workers: UInt
@@ -10492,7 +10496,7 @@ nonisolated struct LWPreviewServiceServiceLimits: Codable, Sendable {
     }
 }
 
-/// preview::service::TierPolicy (vendor/PhotoCatalog/src/preview/service.rs:28).
+/// preview::service::TierPolicy (engines/catalog/src/preview/service.rs:28).
 nonisolated struct LWPreviewServiceTierPolicy: Codable, Sendable {
     var edge: UInt32
     var encoding: LWPreviewCodecCodecSettings
@@ -10512,13 +10516,13 @@ nonisolated struct LWPreviewServiceTierPolicy: Codable, Sendable {
     }
 }
 
-/// preview::store::Tier (vendor/PhotoCatalog/src/preview/store.rs:26).
+/// preview::store::Tier (engines/catalog/src/preview/store.rs:26).
 nonisolated enum LWPreviewStoreTier: String, Codable, Sendable {
     case Thumbnail = "thumbnail"
     case Large = "large"
 }
 
-/// storage_volume::IssueKind (vendor/PhotoCatalog/src/storage_volume.rs:99).
+/// storage_volume::IssueKind (engines/catalog/src/storage_volume.rs:99).
 nonisolated enum LWStorageVolumeIssueKind: String, Codable, Sendable {
     case IdentityUnavailable = "IdentityUnavailable"
     case IdentityAmbiguous = "IdentityAmbiguous"
@@ -10530,7 +10534,7 @@ nonisolated enum LWStorageVolumeIssueKind: String, Codable, Sendable {
     case Unsupported = "Unsupported"
 }
 
-/// storage_volume::VolumeIssue (vendor/PhotoCatalog/src/storage_volume.rs:110).
+/// storage_volume::VolumeIssue (engines/catalog/src/storage_volume.rs:110).
 nonisolated struct LWStorageVolumeVolumeIssue: Codable, Sendable {
     var kind: LWStorageVolumeIssueKind
     var path: LWCatalogNativePath?

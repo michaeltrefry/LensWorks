@@ -42,6 +42,7 @@ extension ProjectController {
         while externalChanges.pending {
             externalChanges.pending = false
             guard let url = session.projectURL, session.document != nil, !externalChanges.saving else { return }
+            defer { externalChanges.checksCompleted += 1 }
             // Compare content, not modification dates: sync clients touch metadata without changing anything.
             guard let digest = await Task.detached(priority: .utility, operation: { try? ProjectDigest.compute(for: url) }).value,
                   digest != externalChanges.knownDigest else { continue }
@@ -110,4 +111,7 @@ final class ExternalChangeState {
     var recheckAttempt = 0
     /// Reloads performed because the package changed on disk. Read by tests.
     var reloadCount = 0
+    /// Changes on disk examined to a decision (ignored, deferred, kept or reloaded). Read by tests, which wait on
+    /// it instead of sleeping before they assert that a change was not applied.
+    var checksCompleted = 0
 }

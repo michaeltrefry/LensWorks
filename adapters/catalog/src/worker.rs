@@ -1,7 +1,7 @@
-// Compile the exact pinned executable dispatch, including every descendant
-// worker mode. The upstream checkout is never edited or copied.
+// Compile the exact owned executable dispatch, including every descendant
+// worker mode. The complete dispatch is copied into LensWorks; upstream remains unchanged.
 mod retained {
-    include!("../../../vendor/PhotoCatalog/src/main.rs");
+    include!("../../../engines/catalog/src/main.rs");
     pub fn run() -> anyhow::Result<()> {
         main()
     }
@@ -11,6 +11,7 @@ fn main() -> anyhow::Result<()> {
         .nth(1)
         .is_some_and(|v| v == "--lensworks-full-decode")
     {
+        photocatalog::worker_lifeline::install();
         return lensworks_catalog::full_decode::worker_main();
     }
     retained::run()

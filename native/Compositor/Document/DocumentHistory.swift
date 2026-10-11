@@ -22,6 +22,20 @@ final class DocumentHistory {
     private var pending: Snapshot?
     private var pendingName = "Edit"
     private var depth = 0
+    private var interactionToken: UUID?
+    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?) -> UUID? {
+        guard depth == 0 else { return nil }
+        let token = UUID(); interactionToken = token
+        begin(name, document: document, selection: selection); return token
+    }
+    func endInteraction(_ token: UUID, document: CanvasDocument?, selection: UUID?) -> Bool {
+        guard interactionToken == token, depth == 1 else { return false }
+        interactionToken = nil; end(document: document, selection: selection); return true
+    }
+    func cancelInteraction(_ token: UUID) -> Snapshot? {
+        guard interactionToken == token, depth == 1, let starting = pending else { return nil }
+        interactionToken = nil; pending = nil; depth = 0; return starting
+    }
     let entryLimit: Int
     let retainedByteLimit: Int
 
@@ -47,6 +61,7 @@ final class DocumentHistory {
         future.removeAll()
         pending = nil
         depth = 0
+        interactionToken = nil
         revision = UUID()
         savedRevision = revision
     }

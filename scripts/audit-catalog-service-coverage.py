@@ -7,10 +7,11 @@ import json
 import re
 import struct
 import subprocess
+import catalog_source
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'vendor/PhotoCatalog/src'
+SOURCE = ROOT / 'engines/catalog/src'
 PIN = 'f4f8d3f12acc77fe5632720702c52a7cfefb5b58'
 OUTPUT = ROOT / 'docs/CATALOG_SERVICE_COVERAGE.json'
 MARKDOWN = ROOT / 'docs/CATALOG_SERVICE_COVERAGE.md'
@@ -299,7 +300,7 @@ def graph():
                     unresolved.append({'owner': identity, 'field': field['name'], 'token': token, 'rust_type': field['rust_type']})
             field['type_refs'] = references
     used_files = {node['file'] for node in visited.values()}
-    return {'schema_version': 1, 'story_id': 'sc-24658', 'baseline': {'revision': PIN, 'source': 'vendor/PhotoCatalog'},
+    return {'schema_version': 1, 'story_id': 'sc-24658', 'baseline': {'revision': PIN, 'source': 'engines/catalog', 'source_digest': catalog_source.verify()},
             'root_type_ids': roots, 'missing_roots': missing_roots,
             'types': list(sorted(visited.values(), key=lambda node: node['id'])),
             'source_files': [item for item in files if item['file'] in used_files],
@@ -497,10 +498,10 @@ def baseline_test_evidence(family):
 def enrich(data):
     nodes={node['id']:node for node in data['types']}; paths=reachable(nodes,'application::dto::Request'); caps=[]; profiles={}
     for family,(name,steps,observables,faults) in FAMILIES.items():
-        profiles[name]={'id':name,'family':family,'status':'planned_unrun','setup':'Temporary catalog/source/cache roots only; real returned identities/tokens and bounded worker.','actions':steps,'observables':observables,'faults':faults,'source_revision':PIN,'baseline_test_evidence':baseline_test_evidence(family)}
-    profiles['source-identity']={'id':'source-identity','family':'public_core','status':'planned_unrun','actions':['Obtain real logical/physical/edit identity through retained Catalog methods.','Change recipe/metadata/source observations separately and retry stale CAS.'],'observables':['Physical fingerprint binds original bytes; logical metadata and edit generations remain independently scoped.','Stale identity callback is not executed.'],'faults':['Invalid VariantKey fails; mixed source/image key is rejected.'],'source_revision':PIN}
-    profiles['full-float-original']={'id':'full-float-original','family':'public_core','status':'planned_unrun','actions':['Use CPU-only native full TIFF decoder with negative/high fractional f32 pixels and known BLAKE3.','Apply exact retained recipe renderer and stage to a fresh destination.'],'observables':['Linear f32 precision survives; provenance and receipt bind actual source and recipe identities.','Source bytes remain identical and browse JPEG cannot satisfy exact input.'],'faults':['Wrong fingerprint or decoded allocation limit fails before admission.','Cancellation/stale source blocks publication.'],'source_revision':PIN}
-    profiles['wire-conformance']={'id':'wire-conformance','family':'typed_transport','status':'planned_unrun','actions':['For every wire case, deserialize into exact Rust application::Request and Swift LWApplicationRequest.','Serialize Swift request back and deserialize Rust again; compare typed value via JSON tree, including defaults and flattened fields.'],'observables':['Every source enum discriminator and associated field survives its exact serde representation.','Canonical decimal strings and lossless NativePath byte/wide units are preserved.'],'faults':['Unknown enum discriminator/denied unknown field and noncanonical decimal forms fail.'],'source_revision':PIN}
+        profiles[name]={'id':name,'family':family,'status':'planned_unrun','setup':'Temporary catalog/source/cache roots only; real returned identities/tokens and bounded worker.','actions':steps,'observables':observables,'faults':faults,'source_revision':catalog_source.verify(), 'upstream_revision':PIN,'baseline_test_evidence':baseline_test_evidence(family)}
+    profiles['source-identity']={'id':'source-identity','family':'public_core','status':'planned_unrun','actions':['Obtain real logical/physical/edit identity through retained Catalog methods.','Change recipe/metadata/source observations separately and retry stale CAS.'],'observables':['Physical fingerprint binds original bytes; logical metadata and edit generations remain independently scoped.','Stale identity callback is not executed.'],'faults':['Invalid VariantKey fails; mixed source/image key is rejected.'],'source_revision':catalog_source.verify(), 'upstream_revision':PIN}
+    profiles['full-float-original']={'id':'full-float-original','family':'public_core','status':'planned_unrun','actions':['Use CPU-only native full TIFF decoder with negative/high fractional f32 pixels and known BLAKE3.','Apply exact retained recipe renderer and stage to a fresh destination.'],'observables':['Linear f32 precision survives; provenance and receipt bind actual source and recipe identities.','Source bytes remain identical and browse JPEG cannot satisfy exact input.'],'faults':['Wrong fingerprint or decoded allocation limit fails before admission.','Cancellation/stale source blocks publication.'],'source_revision':catalog_source.verify(), 'upstream_revision':PIN}
+    profiles['wire-conformance']={'id':'wire-conformance','family':'typed_transport','status':'planned_unrun','actions':['For every wire case, deserialize into exact Rust application::Request and Swift LWApplicationRequest.','Serialize Swift request back and deserialize Rust again; compare typed value via JSON tree, including defaults and flattened fields.'],'observables':['Every source enum discriminator and associated field survives its exact serde representation.','Canonical decimal strings and lossless NativePath byte/wide units are preserved.'],'faults':['Unknown enum discriminator/denied unknown field and noncanonical decimal forms fail.'],'source_revision':catalog_source.verify(), 'upstream_revision':PIN}
     for profile in profiles.values():
         profile.setdefault('baseline_test_evidence',baseline_test_evidence(profile['family']))
     cases=[]
@@ -530,7 +531,7 @@ def enrich(data):
         caps.append({'id':'core::'+key,'kind':'public_core_seam','story_id':'sc-24658','source':{'file':str(path.relative_to(ROOT)),'symbol':symbol,'line':text.count('\n',0,match.start())+1},'fixture_profile':profile,'actions':actions,'acceptance_status':'planned_unrun','fault_fixture':profile})
     ledger={item['file']:item for item in data['source_files']}
     extra={cap['source']['file'] for cap in caps}|{e['file'] for profile in profiles.values() for e in profile['baseline_test_evidence']}
-    extra |= {'vendor/PhotoCatalog/src/application/exports/read.rs','vendor/PhotoCatalog/src/application/exports/worker.rs','vendor/PhotoCatalog/src/application/desktop/migration.rs'}
+    extra |= {'engines/catalog/src/application/exports/read.rs','engines/catalog/src/application/exports/worker.rs','engines/catalog/src/application/desktop/migration.rs'}
     for filename in sorted(extra): ledger[filename]={'file':filename,'sha256':sha((ROOT/filename).read_bytes())}
     data['source_files']=[ledger[k] for k in sorted(ledger)]
     typed_wire_cases=[]
@@ -550,7 +551,7 @@ def enrich(data):
 def markdown(data):
     variants = sum(len(node['variants']) for node in data['types'])
     counts = collections.Counter(cap['kind'] for cap in data['capabilities'])
-    out = ['# Catalog service capability coverage', '', f"Frozen PhotoCatalog `{PIN}`; story `sc-24658`. {len(data['types'])} reachable request/result/config/core types and {variants} enum variants; {data['request_variant_count']} commands and {data['request_reachable_variant_count']} input enum choices. Source coverage is not native acceptance.", '',
+    out = ['# Catalog service capability coverage', '', f"LensWorks-owned catalog (upstream provenance `{PIN}`); story `sc-24658`. {len(data['types'])} reachable request/result/config/core types and {variants} enum variants; {data['request_variant_count']} commands and {data['request_reachable_variant_count']} input enum choices. Source coverage is not native acceptance.", '',
            f"The matrix contains {counts['request_variant']} command rows, {counts['nested_input_variant']} nested input choice rows, {counts['request_field']} associated/struct field rows and {counts['public_core_seam']} public original/render identity seams. Every row maps to a concrete fixture profile. All execution is planned/unrun unless exact evidence appears in the JSON execution ledger.", '',
            f"The JSON contains the complete field/type/serde/import graph, all source hashes, all capability rows and {len(data['wire_cases'])} full Request specimens. Its {len(data['typed_wire_cases'])} standalone specimens cover serialized enum variants and every nongeneric serialized struct, with populated vectors/options and concrete generic Page rows/cursors. Workbench Rows projects public lightroom::plan::Cell, retained as an explicit result root. Specimens establish serialization shape only; real session/job/guard/token/revision/digest/path values must come from preceding successful lifecycle replies, and specimen strings grant no authority.", '',
            '## Public request and typed result matrix', '', '| Source type / command | Typed successful result | Lifecycle fixture | Status |', '| --- | --- | --- | --- |']
@@ -569,14 +570,14 @@ def markdown(data):
         if cap['kind'] == 'public_core_seam':
             out.append(f"| `{cap['source']['file']}:{cap['source']['line']}::{cap['source']['symbol']}` | `{cap['fixture_profile']}` | {' '.join(cap['actions'])} |")
     out += ['', 'Full precision linear f32 decoding and verified source identity are independent public Rust seams; retained preview/browse JPEG or Compositor RGBA8 is insufficient acceptance. PSD/PSB import does not grant an export route. Frozen license/provenance remain in DEPENDENCIES.json and THIRD_PARTY_NOTICES.md.', '',
-            '## Audit contract', '', 'Run `python3 scripts/audit-catalog-service-coverage.py --check-swift`. The audit independently extracts module-scope declarations/imports and exact fields/serde tags/macro-expanded limits and decimal wrappers, verifies the frozen revision/file hashes, and rejects missing coverage or changed source authority. It checks actual Swift associated/struct payload types, not just member names. `--self-test-source-resolution` executes lexical-scope/local-shadow/module-alias/reexport-cycle/wildcard-ambiguity regressions, populated generic pages, and negative wrong graph/Swift type bindings. `--write` regenerates source-derived artifacts; none of these commands execute operational acceptance fixtures.', '',
+            '## Audit contract', '', 'Run `python3 scripts/audit-catalog-service-coverage.py --check-swift`. The audit independently extracts module-scope declarations/imports and exact fields/serde tags/macro-expanded limits and decimal wrappers, verifies the owned source digest and file hashes, and rejects missing coverage or changed source authority. It checks actual Swift associated/struct payload types, not just member names. `--self-test-source-resolution` executes lexical-scope/local-shadow/module-alias/reexport-cycle/wildcard-ambiguity regressions, populated generic pages, and negative wrong graph/Swift type bindings. `--write` regenerates source-derived artifacts; none of these commands execute operational acceptance fixtures.', '',
             '## Source ambiguities and execution limits', '',
             'All reachable type references resolve. Runtime authority values and lifecycle success are intentionally unresolved until actual fixture setup returns them. Typed Error replies are fault evidence and never count as a successful workflow. Migration Cancel can return Discarded before upload activation; export inactive Cancel returns Job while active Cancel returns Operation. These alternate successful result forms are explicitly retained.', '']
     return '\n'.join(out).rstrip() + '\n'
 
 def validate(recorded, actual):
     errors = []
-    for key in ['types','source_files','capabilities','wire_cases','typed_wire_cases','request_type_ids','request_reachable_type_ids','fixture_profiles']:
+    for key in ['baseline','types','source_files','capabilities','wire_cases','typed_wire_cases','request_type_ids','request_reachable_type_ids','fixture_profiles']:
         if recorded.get(key) != actual[key]: errors.append(key + ' source-derived coverage changed, missing or falsely accepted')
     nodes = {node['id']:node for node in actual['types']}
     seen = set()
@@ -592,8 +593,8 @@ def validate(recorded, actual):
     for identity, profile in recorded.get('fixture_profiles', {}).items():
         if any(not profile.get(key) for key in ['actions','observables','faults','source_revision']): errors.append('incomplete fixture profile: ' + identity)
     for evidence in recorded.get('execution_evidence', []):
-        if evidence.get('baseline_revision') != PIN or not evidence.get('command') or not evidence.get('adapter_revision') or not evidence.get('result_file') or not evidence.get('result_sha256'):
-            errors.append('execution evidence lacks exact baseline/adapter/command/result hash')
+        if evidence.get('baseline_revision') != PIN or evidence.get('source_digest') != actual['baseline']['source_digest'] or not evidence.get('command') or not evidence.get('adapter_revision') or not evidence.get('result_file') or not evidence.get('result_sha256'):
+            errors.append('execution evidence lacks exact owned-source/upstream/adapter/command/result hash')
         else:
             result = ROOT / evidence['result_file']
             if not result.is_file() or sha(result.read_bytes()) != evidence['result_sha256']: errors.append('execution evidence file/hash unavailable')
@@ -666,7 +667,7 @@ def validate_swift(data, text=None):
 
 
 def rust_wire_fixture(data):
-    """Emit executable serde assertions using the pinned crate's public reexports."""
+    """Emit executable serde assertions using the owned crate's public reexports."""
     aliases = {
         'application::dto::': 'application::',
         'application::exports::dto::': 'application::exports::',
@@ -760,8 +761,7 @@ def main():
     args = parser.parse_args()
     if args.self_test_source_resolution:
         source_resolution_regressions();return
-    changed=subprocess.check_output(['git','-C',str(ROOT/'vendor/PhotoCatalog'),'status','--porcelain','--untracked-files=all','--','src'],text=True).strip()
-    if changed: raise SystemExit('FAIL: frozen source is dirty; restore approved baseline before extracting: '+changed)
+    catalog_source.verify()
     actual = enrich(graph())
     if args.emit_rust_wire_fixture:
         print(rust_wire_fixture(actual)); return
@@ -776,8 +776,6 @@ def main():
     if recorded['source_files'] != actual['source_files']: errors.append('source file/hash ledger changed')
     if actual['missing_roots']: errors.append('missing source roots: ' + repr(actual['missing_roots']))
     if actual['unresolved_type_references'] and not args.allow_unresolved: errors.append('unresolved reachable type references: ' + repr(actual['unresolved_type_references']))
-    head = subprocess.check_output(['git', '-C', str(ROOT/'vendor/PhotoCatalog'), 'rev-parse', 'HEAD'], text=True).strip()
-    if head != PIN: errors.append('frozen source revision changed: ' + head)
     if args.check_swift:
         errors += validate_swift(actual)
     for error in errors: print('FAIL:', error)
