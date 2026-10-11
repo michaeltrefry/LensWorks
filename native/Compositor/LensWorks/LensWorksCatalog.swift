@@ -28,7 +28,17 @@ nonisolated struct LensWorksCatalogAsset: Decodable, Sendable, Identifiable {
     var origin = "native"
     var translationState = "native"
     var rating: Int64? = nil
+    var flag = "unflagged"
+    var label = ""
     var photoID: String { key?.asset_id ?? id }
+    /// Compact rating/flag/label text shown on the grid cell and exposed to accessibility.
+    var organizationSummary: String {
+        var parts: [String] = []
+        if let rating, rating > 0 { parts.append(String(repeating: "★", count: Int(min(rating, 5)))) }
+        if flag != "unflagged" { parts.append(flag.capitalized) }
+        if !label.isEmpty { parts.append(label) }
+        return parts.joined(separator: " · ")
+    }
     enum CodingKeys: String, CodingKey {
         case sequence, id, state
         case originalPath = "original_path", previewPath = "preview_path"
@@ -363,8 +373,20 @@ actor LensWorksCatalogService {
         guard case .Folders(let rows, let next) = try await owner.perform(.Folders(catalog: token, parent: parent, after: after, limit: rowLimit)), rows.count <= 100 else { throw LensWorksManagedError.protocolViolation("Expected a bounded folder page.") }
         return LensWorksFolderPage(rows: rows, next: next)
     }
+    #if DEBUG
+    /// Test observation of bounded organization list fetches (keywords, collections, members).
+    private(set) var organizationListCalls = 0
+    private(set) var organizationListLimitHighWater: UInt16 = 0
+    #endif
     func organization(_ request: LWApplicationOrganizationRequest) async throws -> LWApplicationOrganizationResponse {
         let (owner, token) = try context()
+        #if DEBUG
+        switch request {
+        case .Keywords(_, _, _, let limit), .Collections(_, let limit), .Members(_, _, let limit):
+            organizationListCalls += 1; organizationListLimitHighWater = max(organizationListLimitHighWater, limit)
+        default: break
+        }
+        #endif
         guard case .Organization(let result) = try await owner.perform(.Organization(catalog: token, request: request)) else { throw LensWorksManagedError.protocolViolation("Expected an organization response.") }
         return result
     }
@@ -480,22 +502,6 @@ actor LensWorksCatalogService {
         }
         return row
     }
-    fileprivate func catalogRating(catalog: String, key: LWCatalogEditsVariantKey, value: UInt8) async throws -> LWApplicationOrganizationImageIdentity {
-        let (owner, token) = try context()
-        guard token == catalog, value <= 5 else { throw LensWorksCatalogError.message("Rating must be 0–5 in the current catalog.") }
-        guard case .Organization(.Identity(let before)) = try await owner.perform(.Organization(catalog: token, request: .Identity(key: key))),
-              before.key.asset_id == key.asset_id, before.key.variant_id == key.variant_id else {
-            throw LensWorksManagedError.protocolViolation("Expected current catalog rating authority.")
-        }
-        guard case .Organization(.Changed(let revision)) = try await owner.perform(.Organization(catalog: token, request: .Apply(key: key, expected_revision: before.metadata_revision, operation: .Rating(value: value)))),
-              revision.value > before.metadata_revision.value,
-              case .Organization(.Identity(let after)) = try await owner.perform(.Organization(catalog: token, request: .Identity(key: key))),
-              after.key.asset_id == key.asset_id, after.key.variant_id == key.variant_id, after.metadata_revision == revision else {
-            throw LensWorksManagedError.protocolViolation("Expected committed catalog rating authority.")
-        }
-        return after
-    }
-
     func variant(_ key: LWCatalogEditsVariantKey) async throws -> LWApplicationDtoVariant {
         let (owner, token) = try context()
         guard case .Variant(let variant) = try await owner.perform(.Variant(catalog: token, key: key)) else { throw LensWorksManagedError.protocolViolation("Expected edit authority.") }
@@ -581,6 +587,57 @@ nonisolated struct LensWorksCatalogControlAdmission: Sendable {
     fileprivate let action: LensWorksCatalogControlAction
 }
 
+/// One organization change applied to the selected photos as a single undoable step.
+nonisolated enum LensWorksOrganizationChange: Sendable, Equatable {
+    case rating(UInt8)
+    case flag(LWOrganizationFlag)
+    case label(String)
+    case addKeyword([String])
+    case removeKeyword([String])
+    case addCollection(String)
+    case removeCollection(String)
+    var operation: LWOrganizationOperation {
+        switch self {
+        case .rating(let value): .Rating(value: value)
+        case .flag(let value): .Flag(value: value)
+        case .label(let value): .Label(value: value)
+        case .addKeyword(let path): .AddKeyword(kind: .Hierarchical, path: path)
+        case .removeKeyword(let path): .RemoveKeyword(kind: .Hierarchical, path: path)
+        case .addCollection(let id): .AddCollection(collection: id)
+        case .removeCollection(let id): .RemoveCollection(collection: id)
+        }
+    }
+    var title: String {
+        switch self {
+        case .rating(let value): value == 0 ? "Clear Rating" : "Rating \(value)"
+        case .flag(let value): "Flag " + value.rawValue.capitalized
+        case .label(let value): value.isEmpty ? "Clear Label" : "Label " + value
+        case .addKeyword(let path): "Add Keyword " + path.joined(separator: " > ")
+        case .removeKeyword(let path): "Remove Keyword " + path.joined(separator: " > ")
+        case .addCollection: "Add to Virtual Folder"
+        case .removeCollection: "Remove from Virtual Folder"
+        }
+    }
+    func validate() throws {
+        switch self {
+        case .rating(let value): guard value <= 5 else { throw LensWorksCatalogError.message("Rating must be 0–5.") }
+        case .label(let value): guard value.utf8.count <= 1024, !value.contains("\0") else { throw LensWorksCatalogError.message("Labels are at most 1,024 UTF-8 bytes.") }
+        case .addKeyword(let path), .removeKeyword(let path):
+            guard !path.isEmpty, path.count <= 64, path.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 1024 && !$0.contains("|") && !$0.contains("\0") }) else {
+                throw LensWorksCatalogError.message("A keyword path needs 1–64 nonempty levels without “|”.")
+            }
+        case .flag, .addCollection, .removeCollection: break
+        }
+    }
+}
+
+/// An undoable organization step; its per-photo records live in the disk-backed index.
+nonisolated struct LensWorksOrganizationStep: Sendable, Equatable {
+    let id: Int64
+    let title: String
+    let photos: Int64
+}
+
 nonisolated struct LensWorksCatalogScope: Sendable {
     let epoch: UInt64
     let token: String?
@@ -634,6 +691,25 @@ final class LensWorksCatalog {
     private(set) var groupNext: String?
     private(set) var placements: [String: LWApplicationOrganizationPlacement] = [:]
     private(set) var navigationHighWater = 0
+    private(set) var keywords: [LWApplicationOrganizationKeyword] = []
+    private(set) var keywordParent: LWApplicationOrganizationKeyword?
+    private(set) var keywordNext: LWCatalogI64?
+    @ObservationIgnored private var keywordTrail: [LWApplicationOrganizationKeyword] = []
+    @ObservationIgnored private var keywordEpoch: UInt64 = 0
+    private(set) var organizationUndo: [LensWorksOrganizationStep] = []
+    private(set) var organizationRedo: [LensWorksOrganizationStep] = []
+    @ObservationIgnored private var organizationStepID: Int64 = 0
+    static let organizationHistoryLimit = 50
+    /// Active metadata filters, combined with folder, virtual folder and text scope.
+    var filterSummary: [String] {
+        var parts: [String] = []
+        if let rating = browseOptions.rating { parts.append("Rating = \(rating)") }
+        if let flag = browseOptions.flag { parts.append("Flag: " + flag.rawValue.capitalized) }
+        if let label = browseOptions.label { parts.append("Label: " + label) }
+        if browseOptions.keyword != nil { parts.append("Keyword: " + (filterKeywordName ?? "selected")) }
+        return parts
+    }
+    @ObservationIgnored private(set) var filterKeywordName: String?
     private(set) var importProgress: LWApplicationDtoImportStatus?
     private(set) var importSamples: [LWApplicationDtoImportStatus] = []
     private(set) var previewGeneration: UInt64 = 0
@@ -673,7 +749,7 @@ final class LensWorksCatalog {
     @ObservationIgnored var browseOptions = LWApplicationBrowseOptions(text: nil, keyword: nil, keyword_direct: false, folder: nil, folder_recursive: true, collection: nil, date_from: nil, date_until: nil, camera_make: nil, camera: nil, lens: nil, format: nil, rating: nil, flag: nil, label: nil, only_conflicted: false, sort: .Sequence, direction: .Ascending)
     var hasPrevious: Bool { !cursorWindow.previous.isEmpty }
     var folderNavigationGeneration: UInt64 { folderEpoch }
-    var navigationResidency: Int { folders.count + groups.count + placements.count + folderTrail.count }
+    var navigationResidency: Int { folders.count + groups.count + placements.count + folderTrail.count + keywords.count + keywordTrail.count }
     var cursorHistoryCount: Int { cursorWindow.previous.count }
     var currentCursor: String? { cursorWindow.current }
     var pageAuthority: LensWorksCatalogPageAuthority {
@@ -738,6 +814,9 @@ final class LensWorksCatalog {
         catalogPath = nil; assets = []; versions = []; selectedPhotoID = nil
         hasMore = false; pageStart = 0; cursorWindow.reset()
         folders = []; groups = []; placements = [:]; folderTrail = []; folderParent = nil; folderNext = nil; groupNext = nil; catalogToken = nil; selection = []; importProgress = nil
+        keywords = []; keywordParent = nil; keywordNext = nil; keywordTrail = []; keywordEpoch &+= 1
+        browseOptions.rating = nil; browseOptions.flag = nil; browseOptions.label = nil; browseOptions.keyword = nil; filterKeywordName = nil
+        await resetOrganizationHistory()
         error = nil
         do {
             importMonitor?.cancel(); await service.cancelPreviews(catalog: previousCatalog)
@@ -777,6 +856,8 @@ final class LensWorksCatalog {
             try await loadFolders()
             guard !closingRequested, catalogEpoch == epoch else { return }
             try await loadGroups()
+            guard !closingRequested, catalogEpoch == epoch else { return }
+            try await loadKeywords()
             guard !closingRequested, catalogEpoch == epoch else { return }
             let progress = try await service.importStatus()
             guard !closingRequested, catalogEpoch == epoch else { return }
@@ -981,7 +1062,7 @@ final class LensWorksCatalog {
         let admittedAssets = page.rows.map { row in
             LensWorksCatalogAsset(sequence: row.sequence.value, id: row.image_id, originalPath: row.filename, state: row.state,
                 previewPath: nil, key: row.key, displayFilename: row.filename, metadataRevision: row.metadata_revision.value,
-                origin: row.origin, translationState: row.translation_state, rating: row.rating?.value)
+                origin: row.origin, translationState: row.translation_state, rating: row.rating?.value, flag: row.flag, label: row.label)
         }
         try await index.rememberPage(owner: query, page: ordinal, rows: admittedAssets.compactMap { row in row.key.map { LensWorksSelectedRow(imageID: row.id, key: $0) } })
         let (projected, count) = try await index.selectionProjection(owner: owner, images: admittedAssets.map(\.id))
@@ -1212,7 +1293,7 @@ final class LensWorksCatalog {
         let (owner, token) = try await service.context()
         try checkScope(scope)
         guard token == scope.token, groupEpoch == admitted else { throw CancellationError() }
-        guard case .Organization(.Collections(let page)) = try await owner.perform(.Organization(catalog: token, request: .Collections(after: after, limit: rowLimit))), page.rows.count <= 100 else { throw LensWorksManagedError.protocolViolation("Expected a bounded virtual-folder page.") }
+        guard case .Collections(let page) = try await service.organization(.Collections(after: after, limit: rowLimit)), page.rows.count <= 100 else { throw LensWorksManagedError.protocolViolation("Expected a bounded virtual-folder page.") }
         try checkScope(scope)
         guard groupEpoch == admitted else { throw CancellationError() }
         var admittedPlacements: [String: LWApplicationOrganizationPlacement] = [:]
@@ -1398,7 +1479,7 @@ final class LensWorksCatalog {
         try checkCatalogSelection(scope, image: asset.id, query: query)
         let focus = LensWorksCatalogAsset(sequence: row.sequence.value, id: row.image_id, originalPath: row.filename, state: row.state,
             previewPath: nil, key: row.key, displayFilename: row.filename, metadataRevision: row.metadata_revision.value,
-            origin: row.origin, translationState: row.translation_state, rating: row.rating?.value)
+            origin: row.origin, translationState: row.translation_state, rating: row.rating?.value, flag: row.flag, label: row.label)
         try await index.setSelection(owner: selectedOwner, rows: [LensWorksSelectedRow(imageID: row.image_id, key: row.key)], replace: true, remove: false)
         try checkCatalogSelection(scope, image: asset.id, query: query)
         guard selectedOwner == selectionOwner else { throw CancellationError() }
@@ -1464,64 +1545,251 @@ final class LensWorksCatalog {
         guard owner == selectionOwner, query == queryOwner, selectedPhotoID == previous else { throw CancellationError() }
         focusedCatalogVariant = LensWorksCatalogAsset(sequence: row.sequence.value, id: row.image_id, originalPath: row.filename, state: row.state,
             previewPath: nil, key: row.key, displayFilename: row.filename, metadataRevision: row.metadata_revision.value,
-            origin: row.origin, translationState: row.translation_state, rating: row.rating?.value)
+            origin: row.origin, translationState: row.translation_state, rating: row.rating?.value, flag: row.flag, label: row.label)
         focusedCatalogVariantScope = scope; selectedPhotoID = row.image_id
         selection = []; selectionCount = 1; selectionAnchor = row.image_id
         await refreshVersions()
     }
     func setCatalogRating(_ value: UInt8) async throws {
         try admitCatalogWork()
-        guard !isBusy, let asset = selectedAsset, let key = asset.key, let token = catalogToken else { throw CancellationError() }
-        let busy = beginBusy(); defer { finishBusy(busy) }
-        let scope = captureScope(), query = queryOwner
-        _ = try await service.catalogRating(catalog: token, key: key, value: value)
-        try checkCatalogSelection(scope, image: asset.id, query: query)
-        // Query ordering/filter/cursors may change, but no pixel cache is invalidated.
-        try await refreshAssets(); try checkScope(scope)
+        guard !isBusy, let asset = selectedAsset, let key = asset.key else { throw CancellationError() }
+        // The explicitly selected photo, independent of any wider grid selection.
+        try await organize(.rating(value), rows: [LensWorksSelectedRow(imageID: asset.id, key: key)])
     }
 
     func setSelectedMembership(_ group: LWApplicationOrganizationCollection, remove: Bool = false) async throws {
+        let scope = captureScope(), afterGroups = groupAfter, navigation = groupEpoch
+        try await organize(remove ? .removeCollection(group.id) : .addCollection(group.id))
+        try checkScope(scope)
+        guard groupEpoch == navigation else { throw CancellationError() }
+        try await loadGroups(after: afterGroups); try checkScope(scope)
+    }
+
+    /// Apply one change to every selected photo (or the focused photo when nothing is
+    /// selected), paging the disk-backed selection and recording exact per-photo
+    /// inverses so the whole change is one undoable step.
+    func organize(_ change: LensWorksOrganizationChange, rows explicit: [LensWorksSelectedRow]? = nil) async throws {
         try admitCatalogWork()
+        try change.validate()
         guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
         let busy = beginBusy(); isOrganizing = true; organizationCancelRequested = false
         defer { if busyOwner == busy { isOrganizing = false }; finishBusy(busy) }
-        let scope = captureScope(), selectedOwner = selectionOwner, query = queryOwner, afterGroups = groupAfter, navigation = groupEpoch
-        let (owner, token) = try await service.context()
+        let scope = captureScope(), selectedOwner = selectionOwner, query = queryOwner
+        let (_, token) = try await service.context()
         try checkScope(scope)
-        guard token == scope.token, selectedOwner == selectionOwner, query == queryOwner else { throw CancellationError() }
-        if selectionCount == 0, let selectedAsset {
+        guard token == scope.token else { throw CancellationError() }
+        if explicit == nil, selectionCount == 0, let selectedAsset {
             await select(selectedAsset); try checkScope(scope)
             guard selectedOwner == selectionOwner, query == queryOwner else { throw CancellationError() }
         }
-        let total = selectionCount
+        let total = explicit.map { Int64($0.count) } ?? selectionCount
         guard total > 0 else { throw LensWorksCatalogError.message("Select photos to organize.") }
-        var after = "", processed: Int64 = 0
-        while true {
-            try Task.checkCancellation(); try checkScope(scope)
-            guard !organizationCancelRequested, selectedOwner == selectionOwner, query == queryOwner else { throw CancellationError() }
-            let page = try await index.selection(owner: selectedOwner, after: after)
-            try checkScope(scope)
-            guard !organizationCancelRequested, selectedOwner == selectionOwner, query == queryOwner else { throw CancellationError() }
-            if page.isEmpty { break }
-            for row in page {
-                guard case .Organization(.Identity(let identity)) = try await owner.perform(.Organization(catalog: token, request: .Identity(key: row.key))) else { throw LensWorksManagedError.protocolViolation("Expected current photo membership authority.") }
-                #if DEBUG
-                await continuationFixture?(.membershipIdentity)
-                #endif
-                try checkScope(scope)
-                guard !organizationCancelRequested, selectedOwner == selectionOwner, query == queryOwner else { throw CancellationError() }
-                let request: LWApplicationOrganizationRequest = remove ? .Apply(key: row.key, expected_revision: identity.metadata_revision, operation: .RemoveCollection(collection: group.id)) : .SetMember(identity: identity, collection: group.id, position: LWCatalogI64(0))
-                _ = try await owner.perform(.Organization(catalog: token, request: request))
-                try checkScope(scope)
-                guard !organizationCancelRequested, selectedOwner == selectionOwner, query == queryOwner else { throw CancellationError() }
-                processed += 1; status = "Organized \(processed) of \(total) selected photos."
-            }
-            after = page.last!.imageID
+        let current = { [unowned self] in
+            try Task.checkCancellation(); try self.checkScope(scope)
+            guard !self.organizationCancelRequested, selectedOwner == self.selectionOwner, query == self.queryOwner else { throw CancellationError() }
         }
+        organizationStepID &+= 1
+        let step = organizationStepID
+        var after = "", processed: Int64 = 0, changed: Int64 = 0
+        var failure: (any Error)?
+        do {
+            while true {
+                try current()
+                let page: [LensWorksSelectedRow]
+                if let explicit { page = after.isEmpty ? explicit : [] }
+                else { page = try await index.selection(owner: selectedOwner, after: after) }
+                try current()
+                if page.isEmpty { break }
+                var records: [LensWorksOrganizationRecord] = []
+                do {
+                    for row in page {
+                        if let record = try await organizeRow(change, row: row, token: token, admitted: current) { records.append(record) }
+                        processed += 1; status = "Organized \(processed) of \(total) selected photos."
+                    }
+                } catch { try await index.recordOrganization(step: step, records: records); changed += Int64(records.count); throw error }
+                try await index.recordOrganization(step: step, records: records)
+                changed += Int64(records.count)
+                after = page.last!.imageID
+            }
+        } catch { failure = error }
+        // Even a partially applied change stays undoable as recorded.
+        if changed > 0 {
+            if !organizationRedo.isEmpty { try? await index.discardOrganization(steps: organizationRedo.map(\.id)); organizationRedo = [] }
+            organizationUndo.append(LensWorksOrganizationStep(id: step, title: change.title, photos: changed))
+            if organizationUndo.count > Self.organizationHistoryLimit {
+                let dropped = organizationUndo.removeFirst()
+                try? await index.discardOrganization(steps: [dropped.id])
+            }
+        }
+        if let failure { throw failure }
+        try checkScope(scope)
         let refreshedQuery = queryEpoch &+ 1
         try await refreshAssets(); try checkScope(scope)
-        guard queryEpoch == refreshedQuery, groupEpoch == navigation else { throw CancellationError() }
-        try await loadGroups(after: afterGroups); try checkScope(scope)
+        guard queryEpoch == refreshedQuery else { throw CancellationError() }
+        status = change.title + " · \(changed) of \(total) photos changed."
+    }
+
+    /// Reads the photo's prior state, applies the change, and returns its exact inverse;
+    /// nil when the photo already holds the requested state (nothing is written).
+    private func organizeRow(_ change: LensWorksOrganizationChange, row: LensWorksSelectedRow, token: String, admitted: () throws -> Void) async throws -> LensWorksOrganizationRecord? {
+        let inverse: LWOrganizationOperation
+        switch change {
+        case .rating(let value):
+            let image = try await service.catalogImage(catalog: token, key: row.key)
+            if image.rating?.value == Int64(value) { return nil }
+            inverse = .Rating(value: UInt8(clamping: max(0, image.rating?.value ?? 0)))
+        case .flag(let value):
+            let image = try await service.catalogImage(catalog: token, key: row.key)
+            let prior = LWOrganizationFlag(rawValue: image.flag) ?? .Unflagged
+            if prior == value { return nil }
+            inverse = .Flag(value: prior)
+        case .label(let value):
+            let image = try await service.catalogImage(catalog: token, key: row.key)
+            if image.label == value { return nil }
+            inverse = .Label(value: image.label)
+        case .addKeyword(let path), .removeKeyword(let path):
+            guard case .Membership(let reported, _) = try await service.organization(.Membership(key: row.key, keyword: LWApplicationOrganizationKeywordTarget(kind: .Hierarchical, path: path), collection: nil)), let held = reported else {
+                throw LensWorksManagedError.protocolViolation("Expected keyword membership authority.")
+            }
+            let adding = if case .addKeyword = change { true } else { false }
+            if held == adding { return nil }
+            inverse = adding ? .RemoveKeyword(kind: .Hierarchical, path: path) : .AddKeyword(kind: .Hierarchical, path: path)
+        case .addCollection(let id), .removeCollection(let id):
+            guard case .Membership(_, let reported) = try await service.organization(.Membership(key: row.key, keyword: nil, collection: id)), let member = reported else {
+                throw LensWorksManagedError.protocolViolation("Expected virtual-folder membership authority.")
+            }
+            let adding = if case .addCollection = change { true } else { false }
+            if member == adding { return nil }
+            inverse = adding ? .RemoveCollection(collection: id) : .AddCollection(collection: id)
+        }
+        try admitted()
+        try await performOrganization(change.operation, key: row.key, admitted: admitted)
+        return LensWorksOrganizationRecord(row: row, forward: try LWCatalogCodec.encode(change.operation), inverse: try LWCatalogCodec.encode(inverse))
+    }
+
+    /// One compare-and-set organization write against the photo's current metadata revision.
+    private func performOrganization(_ operation: LWOrganizationOperation, key: LWCatalogEditsVariantKey, admitted: () throws -> Void) async throws {
+        guard case .Identity(let identity) = try await service.organization(.Identity(key: key)),
+              identity.key.asset_id == key.asset_id, identity.key.variant_id == key.variant_id else {
+            throw LensWorksManagedError.protocolViolation("Expected current photo organization authority.")
+        }
+        #if DEBUG
+        await continuationFixture?(.membershipIdentity)
+        #endif
+        try admitted()
+        let request: LWApplicationOrganizationRequest
+        if case .AddCollection(let collection) = operation {
+            // Ordered virtual folders keep their explicit position authority.
+            request = .SetMember(identity: identity, collection: collection, position: LWCatalogI64(0))
+        } else {
+            request = .Apply(key: key, expected_revision: identity.metadata_revision, operation: operation)
+        }
+        guard case .Changed(let revision) = try await service.organization(request), revision.value > identity.metadata_revision.value else {
+            throw LensWorksManagedError.protocolViolation("Expected a committed organization revision.")
+        }
+    }
+
+    func undoOrganization() async throws { try await replayOrganization(undo: true) }
+    func redoOrganization() async throws { try await replayOrganization(undo: false) }
+
+    /// Replays a recorded step page by page. Every recorded operation is an absolute
+    /// set or idempotent add/remove, so a step interrupted mid-way can be retried.
+    private func replayOrganization(undo: Bool) async throws {
+        try admitCatalogWork()
+        guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
+        guard let step = undo ? organizationUndo.last : organizationRedo.last else {
+            throw LensWorksCatalogError.message(undo ? "There is no organization change to undo." : "There is no organization change to redo.")
+        }
+        let busy = beginBusy(); isOrganizing = true; organizationCancelRequested = false
+        defer { if busyOwner == busy { isOrganizing = false }; finishBusy(busy) }
+        let scope = captureScope()
+        let current = { [unowned self] in
+            try Task.checkCancellation(); try self.checkScope(scope)
+            guard !self.organizationCancelRequested else { throw CancellationError() }
+        }
+        var after = "", processed: Int64 = 0
+        while true {
+            try current()
+            let page = try await index.organizationRecords(step: step.id, after: after)
+            try current()
+            if page.isEmpty { break }
+            for record in page {
+                if let data = undo ? record.inverse : record.forward {
+                    try await performOrganization(try LWCatalogCodec.decode(LWOrganizationOperation.self, from: data), key: record.row.key, admitted: current)
+                }
+                processed += 1; status = (undo ? "Undoing " : "Redoing ") + step.title + " · \(processed) of \(step.photos)"
+            }
+            after = page.last!.row.imageID
+        }
+        if undo { organizationUndo.removeLast(); organizationRedo.append(step) }
+        else { organizationRedo.removeLast(); organizationUndo.append(step) }
+        let refreshedQuery = queryEpoch &+ 1
+        try await refreshAssets(); try checkScope(scope)
+        guard queryEpoch == refreshedQuery else { throw CancellationError() }
+        status = (undo ? "Undid " : "Redid ") + step.title + "."
+    }
+
+    private func resetOrganizationHistory() async {
+        let steps = (organizationUndo + organizationRedo).map(\.id)
+        organizationUndo = []; organizationRedo = []
+        if !steps.isEmpty { try? await index.discardOrganization(steps: steps) }
+    }
+
+    // MARK: Keywords and metadata filters
+
+    func loadKeywords(parent: LWApplicationOrganizationKeyword? = nil, after: LWCatalogI64 = LWCatalogI64(0)) async throws {
+        try admitCatalogWork()
+        keywordEpoch &+= 1
+        let admitted = keywordEpoch, scope = captureScope()
+        guard case .Keywords(let page) = try await service.organization(.Keywords(kind: .Hierarchical, parent: parent?.id, after: after, limit: rowLimit)), page.rows.count <= 100,
+              page.rows.allSatisfy({ $0.parent?.value == parent?.id.value }) else {
+            throw LensWorksManagedError.protocolViolation("Expected a bounded keyword page.")
+        }
+        try checkScope(scope)
+        guard keywordEpoch == admitted else { throw CancellationError() }
+        if parent == nil { keywordTrail = [] }
+        else if parent?.id.value != keywordParent?.id.value {
+            if let found = keywordTrail.firstIndex(where: { $0.id.value == parent?.id.value }) { keywordTrail = Array(keywordTrail.prefix(found)) }
+            else if let current = keywordParent, parent?.parent?.value == current.id.value { keywordTrail.append(current) }
+            if keywordTrail.count > 64 { keywordTrail.removeFirst(keywordTrail.count - 64) }
+        }
+        keywords = page.rows; keywordParent = parent; keywordNext = page.next
+        navigationHighWater = max(navigationHighWater, navigationResidency)
+    }
+    func enterKeyword(_ keyword: LWApplicationOrganizationKeyword) async throws { try await loadKeywords(parent: keyword) }
+    func upKeyword() async throws { try await loadKeywords(parent: keywordParent == nil ? nil : keywordTrail.last) }
+    func nextKeywords() async throws {
+        guard let next = keywordNext else { return }
+        try await loadKeywords(parent: keywordParent, after: next)
+    }
+    /// Accepts “People/Ada” or “People > Ada”; the new keyword nests under the current level.
+    static func keywordPath(_ text: String) -> [String] {
+        text.replacingOccurrences(of: ">", with: "/").split(separator: "/").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+    func createKeyword(_ text: String) async throws {
+        try admitCatalogWork()
+        let path = (keywordParent?.path ?? []) + Self.keywordPath(text)
+        try LensWorksOrganizationChange.addKeyword(path).validate()
+        let scope = captureScope()
+        guard case .KeywordCreated = try await service.organization(.CreateKeyword(kind: .Hierarchical, path: path)) else {
+            throw LensWorksManagedError.protocolViolation("Expected a created keyword identity.")
+        }
+        try checkScope(scope)
+        try await loadKeywords(parent: keywordParent)
+    }
+
+    /// Combine one more metadata filter with the current scope and restart from the first page.
+    func setFilters(rating: UInt8?? = .none, flag: LWOrganizationFlag?? = .none, label: String?? = .none, keyword: LWApplicationOrganizationKeyword?? = .none) async throws {
+        try admitCatalogWork()
+        if let rating { guard rating.map({ $0 <= 5 }) ?? true else { throw LensWorksCatalogError.message("Rating must be 0–5.") }; browseOptions.rating = rating }
+        if let flag { browseOptions.flag = flag }
+        if let label { browseOptions.label = label }
+        if let keyword { browseOptions.keyword = keyword?.id; browseOptions.keyword_direct = false; filterKeywordName = keyword?.path.joined(separator: " > ") }
+        showingCatalog = true
+        try await refreshAssets()
+    }
+    func clearFilters() async throws {
+        try await setFilters(rating: .some(nil), flag: .some(nil), label: .some(nil), keyword: .some(nil))
     }
 
     func settings(_ request: LWApplicationPreviewSettingsRequest = .Status) async throws {
@@ -1771,6 +2039,8 @@ final class LensWorksCatalog {
         lastClosedCatalogPath = catalogPath
         try await index.clearSelection(owner: selectionOwner); try await index.clearVisits(owner: queryOwner)
         catalogPath = nil; catalogToken = nil; assets = []; folders = []; groups = []; placements = [:]
+        keywords = []; keywordParent = nil; keywordNext = nil; keywordTrail = []
+        await resetOrganizationHistory()
         selection = []; selectedPhotoID = nil; cursorWindow.reset(); hasMore = false
         importProgress = nil; importSamples = []; importMonitor = nil
         busyOwner = nil; isOrganizing = false

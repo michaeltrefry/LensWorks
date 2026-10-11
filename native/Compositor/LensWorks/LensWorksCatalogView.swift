@@ -13,6 +13,9 @@ struct LensWorksCatalogWorkspace: View {
     @State private var settingsScope: LensWorksCatalogScope?
     @State private var movingGroup: LWApplicationOrganizationCollection?
     @State private var largePhoto: LensWorksCatalogAsset?
+    @State private var keywordName = ""
+    @State private var keywordPrompt = false
+    static let labels = ["Red", "Yellow", "Green", "Blue", "Purple"]
 
     var body: some View {
         HStack(spacing: 0) {
@@ -66,7 +69,7 @@ struct LensWorksCatalogWorkspace: View {
             LensWorksLaunchTrace.record("catalog.workspace.task.end", details: ["canceled": String(Task.isCancelled)])
         }
         .onChange(of: catalog.catalogEpoch) { _, _ in
-            showingSettings = false; movingGroup = nil; largePhoto = nil; groupPrompt = false; editingGroup = nil
+            showingSettings = false; movingGroup = nil; largePhoto = nil; groupPrompt = false; editingGroup = nil; keywordPrompt = false
         }
         .onChange(of: workspace.selectedID) { _, _ in
             if let version = workspace.current.controller.workingVersion, version.catalogPath == catalog.catalogPath {
@@ -84,6 +87,11 @@ struct LensWorksCatalogWorkspace: View {
                 Task { await action { if let editingGroup { try await catalog.renameGroup(editingGroup, name: groupName) } else { try await catalog.createGroup(groupName) } } }
             }
         }
+        .alert("New Keyword", isPresented: $keywordPrompt) {
+            TextField("People/Ada", text: $keywordName)
+            Button("Cancel", role: .cancel) { }
+            Button("Create") { let text = keywordName; Task { await action { try await catalog.createKeyword(text) } } }
+        } message: { Text(catalog.keywordParent.map { "Nested under " + $0.path.joined(separator: " > ") + ". Use “/” for deeper levels." } ?? "Use “/” to nest levels, for example People/Ada.") }
         .sheet(isPresented: $showingSettings, onDismiss: {
             guard let scope = settingsScope, catalog.scopeIsCurrent(scope) else { return }
             Task {
@@ -200,6 +208,32 @@ struct LensWorksCatalogWorkspace: View {
                         }
                         if catalog.groupNext != nil { Button("More Virtual Folders") { Task { await catalog.nextGroups() } } }
                         Button("First Virtual Folders") { Task { await action { try await catalog.loadGroups() } } }
+                        Divider()
+                        HStack {
+                            Text("Keywords").font(.headline)
+                            Spacer()
+                            Button { keywordName = ""; keywordPrompt = true } label: { Image(systemName: "plus") }.help("New Keyword")
+                                .accessibilityIdentifier("LensWorks.newKeyword")
+                        }
+                        if let parent = catalog.keywordParent {
+                            HStack {
+                                Button("Up", systemImage: "chevron.up") { Task { await action { try await catalog.upKeyword() } } }
+                                Text(parent.path.joined(separator: " > ")).lineLimit(1)
+                            }
+                        }
+                        ForEach(catalog.keywords, id: \.id.value) { keyword in
+                            Button { Task { await action { try await catalog.setFilters(keyword: .some(keyword)) } } } label: {
+                                Label(keyword.name, systemImage: catalog.browseOptions.keyword?.value == keyword.id.value ? "tag.fill" : "tag")
+                                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.plain).padding(.vertical, 3)
+                                .accessibilityIdentifier("LensWorks.keyword." + keyword.path.joined(separator: "/"))
+                                .contextMenu {
+                                    Button("Show Nested Keywords") { Task { await action { try await catalog.enterKeyword(keyword) } } }
+                                    Button("Add to Selected Photos") { Task { await action { try await catalog.organize(.addKeyword(keyword.path)) } } }
+                                    Button("Remove from Selected Photos") { Task { await action { try await catalog.organize(.removeKeyword(keyword.path)) } } }
+                                }
+                        }
+                        if catalog.keywordNext != nil { Button("More Keywords") { Task { await action { try await catalog.nextKeywords() } } } }
                         if let asset = catalog.selectedAsset {
                             Divider()
                             Text(asset.filename).font(.headline).lineLimit(2)
@@ -263,6 +297,7 @@ struct LensWorksCatalogWorkspace: View {
                 Button("Select Page") { Task { await catalog.selectCurrentPage() } }
                 Button("Clear") { Task { await catalog.clearSelection() } }
             }.padding(10)
+            organizeBar.padding(.horizontal, 10).padding(.bottom, 6)
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200))], spacing: 12) {
                     ForEach(catalog.assets) { asset in
@@ -270,10 +305,73 @@ struct LensWorksCatalogWorkspace: View {
                     }
                 }.padding(12)
             }
+            // On the scroll view only, so toolbar controls keep their own identifiers.
+            .accessibilityIdentifier("LensWorks.catalogGrid")
         }.focusable()
             .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in Task { await catalog.moveSelection(1, range: press.modifiers.contains(.shift)) }; return .handled }
             .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in Task { await catalog.moveSelection(-1, range: press.modifiers.contains(.shift)) }; return .handled }
-            .accessibilityIdentifier("LensWorks.catalogGrid")
+            // Lightroom-style culling keys: 0–5 rate, P/X/U flag, 6–9 label.
+            .onKeyPress(characters: CharacterSet(charactersIn: "0123456789pxuPXU"), phases: .down) { press in
+                guard press.modifiers.isEmpty || press.modifiers == .shift, !catalog.isBusy else { return .ignored }
+                switch press.characters.lowercased() {
+                case let digit where Int(digit).map({ (0...5).contains($0) }) == true: organize(.rating(UInt8(digit)!))
+                case let digit where Int(digit).map({ (6...9).contains($0) }) == true: organize(.label(Self.labels[Int(digit)! - 6]))
+                case "p": organize(.flag(.Pick))
+                case "x": organize(.flag(.Reject))
+                case "u": organize(.flag(.Unflagged))
+                default: return .ignored
+                }
+                return .handled
+            }
+    }
+    private func organize(_ change: LensWorksOrganizationChange) { Task { await action { try await catalog.organize(change) } } }
+    private var organizeBar: some View {
+        HStack {
+            Menu("Rate") {
+                ForEach(0...5, id: \.self) { value in Button(value == 0 ? "Unrated" : String(repeating: "★", count: value)) { organize(.rating(UInt8(value))) } }
+            }.fixedSize().accessibilityIdentifier("LensWorks.rateMenu")
+            Menu("Flag") {
+                Button("Pick") { organize(.flag(.Pick)) }
+                Button("Reject") { organize(.flag(.Reject)) }
+                Button("Unflagged") { organize(.flag(.Unflagged)) }
+            }.fixedSize().accessibilityIdentifier("LensWorks.flagMenu")
+            Menu("Label") {
+                ForEach(Self.labels, id: \.self) { label in Button(label) { organize(.label(label)) } }
+                Button("None") { organize(.label("")) }
+            }.fixedSize().accessibilityIdentifier("LensWorks.labelMenu")
+            Button("Undo", systemImage: "arrow.uturn.backward") { Task { await action { try await catalog.undoOrganization() } } }
+                .disabled(catalog.organizationUndo.isEmpty || catalog.isBusy)
+                .help(catalog.organizationUndo.last.map { "Undo " + $0.title } ?? "Nothing to undo")
+                .accessibilityIdentifier("LensWorks.undoOrganization")
+            Button("Redo", systemImage: "arrow.uturn.forward") { Task { await action { try await catalog.redoOrganization() } } }
+                .disabled(catalog.organizationRedo.isEmpty || catalog.isBusy)
+                .help(catalog.organizationRedo.last.map { "Redo " + $0.title } ?? "Nothing to redo")
+                .accessibilityIdentifier("LensWorks.redoOrganization")
+            Divider().frame(height: 16)
+            Menu("Filter") {
+                Menu("Rating") {
+                    Button("Any") { Task { await action { try await catalog.setFilters(rating: .some(nil)) } } }
+                    ForEach(0...5, id: \.self) { value in Button(value == 0 ? "Unrated (0)" : String(repeating: "★", count: value)) { Task { await action { try await catalog.setFilters(rating: .some(UInt8(value))) } } } }
+                }
+                Menu("Flag") {
+                    Button("Any") { Task { await action { try await catalog.setFilters(flag: .some(nil)) } } }
+                    Button("Pick") { Task { await action { try await catalog.setFilters(flag: .some(.Pick)) } } }
+                    Button("Reject") { Task { await action { try await catalog.setFilters(flag: .some(.Reject)) } } }
+                    Button("Unflagged") { Task { await action { try await catalog.setFilters(flag: .some(.Unflagged)) } } }
+                }
+                Menu("Label") {
+                    Button("Any") { Task { await action { try await catalog.setFilters(label: .some(nil)) } } }
+                    ForEach(Self.labels, id: \.self) { label in Button(label) { Task { await action { try await catalog.setFilters(label: .some(label)) } } } }
+                }
+                Button("Any Keyword") { Task { await action { try await catalog.setFilters(keyword: .some(nil)) } } }
+                Divider()
+                Button("Clear Filters") { Task { await action { try await catalog.clearFilters() } } }
+            }.fixedSize().accessibilityIdentifier("LensWorks.filterMenu")
+            Text(catalog.filterSummary.isEmpty ? "No metadata filters" : catalog.filterSummary.joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .accessibilityIdentifier("LensWorks.filterSummary")
+            Spacer()
+        }.disabled(catalog.closingRequested)
     }
     private var filmstrip: some View {
         ScrollView(.horizontal) {
@@ -311,6 +409,7 @@ private struct LensWorksGridCell: View {
             Text(asset.filename).font(.caption).lineLimit(1)
             if let key = asset.key { Text(key.variant_id == "master" ? "Master" : "Copy " + String(key.variant_id.prefix(8))).font(.caption2).foregroundStyle(.secondary) }
             if asset.origin != "native" || asset.translationState != "native" { Text(asset.origin + " · " + asset.translationState).font(.caption2).foregroundStyle(.secondary) }
+            if !asset.organizationSummary.isEmpty { Text(asset.organizationSummary).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
         }.padding(6).frame(maxWidth: .infinity)
             .background(background, in: RoundedRectangle(cornerRadius: 8))
             .onTapGesture(count: 2, perform: openEditor)
@@ -318,6 +417,7 @@ private struct LensWorksGridCell: View {
             .contextMenu { Button("Open in Editor", action: openEditor) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(asset.filename)
+            .accessibilityValue(asset.organizationSummary)
             .accessibilityIdentifier("LensWorks.catalogAsset." + asset.filename)
     }
 }

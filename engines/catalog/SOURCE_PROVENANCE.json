@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "a35fe0af1de6a1fde831d94d60b66ea383cc862cc21f0d95d16226f0185f6759",
+  "source_digest": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1945,8 +1945,8 @@
     {
       "path": "src/application.rs",
       "mode": "100644",
-      "bytes": 143916,
-      "sha256": "b66d68763f86da3f9c7926d5d94fcb0ff8ef9cd841bb0392abef2dff550db31e"
+      "bytes": 143975,
+      "sha256": "5428be0787dcecf33de5a394a9504d2f3ac3cb48e68807d6b66318a34a107561"
     },
     {
       "path": "src/application/backup.rs",
@@ -2281,8 +2281,8 @@
     {
       "path": "src/application/organization.rs",
       "mode": "100644",
-      "bytes": 59113,
-      "sha256": "8389b27d46d76d71ab16c1faeb27e4df870addf4f28a1e9db0d30eb09a346e94"
+      "bytes": 62720,
+      "sha256": "59591a085c03f33a8868a97a8d147e5d1fb4ff88d6528f4a19baa6651f1e5a1e"
     },
     {
       "path": "src/application/owner_progress_tests.rs",
@@ -2515,8 +2515,8 @@
     {
       "path": "src/catalog_metadata.rs",
       "mode": "100644",
-      "bytes": 124084,
-      "sha256": "98bcb0d339c34eda0bdcbf3f7d7e0250fae63276ec677b1308bc5f4f17b1c71b"
+      "bytes": 126718,
+      "sha256": "e94fe0202479f33dcd348fd22ffc2e2d37afae8736284b6b163385cc34439e03"
     },
     {
       "path": "src/catalog_metadata/prepared_edit_tests.rs",
@@ -3817,8 +3817,8 @@
     {
       "path": "src/organization.rs",
       "mode": "100644",
-      "bytes": 54381,
-      "sha256": "4a61ec7d8732684dda7560116a7d621f73db508efe06f69139170506e4a5a212"
+      "bytes": 55781,
+      "sha256": "b52bc838cddc9167753746e2f472c98c8a1a088a670bb39e2ca84fe4d6e9c917"
     },
     {
       "path": "src/organization_search.rs",

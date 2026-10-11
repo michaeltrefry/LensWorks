@@ -4,7 +4,7 @@
   "baseline": {
     "revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
     "source": "engines/catalog",
-    "source_digest": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729"
+    "source_digest": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647"
   },
   "root_type_ids": [
     "application::dto::Request",
@@ -22629,7 +22629,7 @@
       "name": "BatchItem",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 124,
+      "line": 136,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -22651,7 +22651,7 @@
           "serde": {
             "raw": []
           },
-          "line": 124,
+          "line": 136,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22666,7 +22666,7 @@
           "serde": {
             "raw": []
           },
-          "line": 125,
+          "line": 137,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22688,7 +22688,7 @@
       "name": "Collection",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 219,
+      "line": 231,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -22708,7 +22708,7 @@
           "serde": {
             "raw": []
           },
-          "line": 219,
+          "line": 231,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -22718,7 +22718,7 @@
           "serde": {
             "raw": []
           },
-          "line": 220,
+          "line": 232,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -22728,7 +22728,7 @@
           "serde": {
             "raw": []
           },
-          "line": 221,
+          "line": 233,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22743,7 +22743,7 @@
           "serde": {
             "raw": []
           },
-          "line": 222,
+          "line": 234,
           "generic_parameter_refs": [],
           "type_refs": []
         }
@@ -22760,7 +22760,7 @@
       "name": "ImageIdentity",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 130,
+      "line": 142,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -22782,7 +22782,7 @@
           "serde": {
             "raw": []
           },
-          "line": 130,
+          "line": 142,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -22792,7 +22792,7 @@
           "serde": {
             "raw": []
           },
-          "line": 131,
+          "line": 143,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22807,7 +22807,7 @@
           "serde": {
             "raw": []
           },
-          "line": 132,
+          "line": 144,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22822,7 +22822,7 @@
           "serde": {
             "raw": []
           },
-          "line": 133,
+          "line": 145,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22837,7 +22837,7 @@
           "serde": {
             "raw": []
           },
-          "line": 134,
+          "line": 146,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22852,7 +22852,7 @@
           "serde": {
             "raw": []
           },
-          "line": 135,
+          "line": 147,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22874,7 +22874,7 @@
       "name": "Job",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 243,
+      "line": 255,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -22894,7 +22894,7 @@
           "serde": {
             "raw": []
           },
-          "line": 243,
+          "line": 255,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -22904,7 +22904,7 @@
           "serde": {
             "raw": []
           },
-          "line": 244,
+          "line": 256,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22919,7 +22919,7 @@
           "serde": {
             "raw": []
           },
-          "line": 245,
+          "line": 257,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -22929,7 +22929,7 @@
           "serde": {
             "raw": []
           },
-          "line": 246,
+          "line": 258,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22944,7 +22944,7 @@
           "serde": {
             "raw": []
           },
-          "line": 247,
+          "line": 259,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22959,7 +22959,7 @@
           "serde": {
             "raw": []
           },
-          "line": 248,
+          "line": 260,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22974,7 +22974,7 @@
           "serde": {
             "raw": []
           },
-          "line": 249,
+          "line": 261,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -22996,7 +22996,7 @@
       "name": "JobItem",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 266,
+      "line": 278,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23016,7 +23016,7 @@
           "serde": {
             "raw": []
           },
-          "line": 266,
+          "line": 278,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23031,7 +23031,7 @@
           "serde": {
             "raw": []
           },
-          "line": 267,
+          "line": 279,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23046,7 +23046,7 @@
           "serde": {
             "raw": []
           },
-          "line": 268,
+          "line": 280,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23056,7 +23056,7 @@
           "serde": {
             "raw": []
           },
-          "line": 269,
+          "line": 281,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23071,7 +23071,7 @@
           "serde": {
             "raw": []
           },
-          "line": 270,
+          "line": 282,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23081,7 +23081,7 @@
           "serde": {
             "raw": []
           },
-          "line": 271,
+          "line": 283,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23091,7 +23091,7 @@
           "serde": {
             "raw": []
           },
-          "line": 272,
+          "line": 284,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23113,7 +23113,7 @@
       "name": "Keyword",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 211,
+      "line": 223,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23133,7 +23133,7 @@
           "serde": {
             "raw": []
           },
-          "line": 211,
+          "line": 223,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23148,7 +23148,7 @@
           "serde": {
             "raw": []
           },
-          "line": 212,
+          "line": 224,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23163,7 +23163,7 @@
           "serde": {
             "raw": []
           },
-          "line": 213,
+          "line": 225,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23178,7 +23178,7 @@
           "serde": {
             "raw": []
           },
-          "line": 214,
+          "line": 226,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23188,7 +23188,61 @@
           "serde": {
             "raw": []
           },
-          "line": 215,
+          "line": 227,
+          "generic_parameter_refs": [],
+          "type_refs": []
+        }
+      ],
+      "variants": [],
+      "generic_parameters": [],
+      "struct_shape": "named",
+      "wire_serializable": true,
+      "role": "wire_dto"
+    },
+    {
+      "id": "application::organization::KeywordTarget",
+      "module": "application::organization",
+      "name": "KeywordTarget",
+      "kind": "struct",
+      "file": "engines/catalog/src/application/organization.rs",
+      "line": 130,
+      "visibility": "pub",
+      "serde": {
+        "raw": [
+          "derive(Debug, Clone, Serialize, Deserialize)",
+          "serde(deny_unknown_fields)"
+        ],
+        "derive": [
+          "Debug",
+          "Clone",
+          "Serialize",
+          "Deserialize"
+        ],
+        "deny_unknown_fields": true
+      },
+      "fields": [
+        {
+          "name": "kind",
+          "rust_type": "core::KeywordKind",
+          "serde": {
+            "raw": []
+          },
+          "line": 130,
+          "generic_parameter_refs": [],
+          "type_refs": [
+            {
+              "rust_token": "core::KeywordKind",
+              "type_id": "organization::KeywordKind"
+            }
+          ]
+        },
+        {
+          "name": "path",
+          "rust_type": "Vec<String>",
+          "serde": {
+            "raw": []
+          },
+          "line": 131,
           "generic_parameter_refs": [],
           "type_refs": []
         }
@@ -23205,7 +23259,7 @@
       "name": "Member",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 237,
+      "line": 249,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23225,7 +23279,7 @@
           "serde": {
             "raw": []
           },
-          "line": 237,
+          "line": 249,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23240,7 +23294,7 @@
           "serde": {
             "raw": []
           },
-          "line": 238,
+          "line": 250,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23255,7 +23309,7 @@
           "serde": {
             "raw": []
           },
-          "line": 239,
+          "line": 251,
           "generic_parameter_refs": [],
           "type_refs": []
         }
@@ -23272,7 +23326,7 @@
       "name": "MemberCursor",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 164,
+      "line": 176,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23294,7 +23348,7 @@
           "serde": {
             "raw": []
           },
-          "line": 164,
+          "line": 176,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23309,7 +23363,7 @@
           "serde": {
             "raw": []
           },
-          "line": 165,
+          "line": 177,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23331,7 +23385,7 @@
       "name": "MembershipCursor",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 170,
+      "line": 182,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23353,7 +23407,7 @@
           "serde": {
             "raw": []
           },
-          "line": 170,
+          "line": 182,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23363,7 +23417,7 @@
           "serde": {
             "raw": []
           },
-          "line": 171,
+          "line": 183,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23378,7 +23432,7 @@
           "serde": {
             "raw": []
           },
-          "line": 172,
+          "line": 184,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23388,7 +23442,7 @@
           "serde": {
             "raw": []
           },
-          "line": 173,
+          "line": 185,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23403,7 +23457,7 @@
           "serde": {
             "raw": []
           },
-          "line": 174,
+          "line": 186,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23425,7 +23479,7 @@
       "name": "MembershipPage",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 200,
+      "line": 212,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23445,7 +23499,7 @@
           "serde": {
             "raw": []
           },
-          "line": 200,
+          "line": 212,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23460,7 +23514,7 @@
           "serde": {
             "raw": []
           },
-          "line": 201,
+          "line": 213,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23475,7 +23529,7 @@
           "serde": {
             "raw": []
           },
-          "line": 202,
+          "line": 214,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -23497,7 +23551,7 @@
       "name": "Page",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 206,
+      "line": 218,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23517,7 +23571,7 @@
           "serde": {
             "raw": []
           },
-          "line": 206,
+          "line": 218,
           "generic_parameter_refs": [
             "T"
           ],
@@ -23529,7 +23583,7 @@
           "serde": {
             "raw": []
           },
-          "line": 207,
+          "line": 219,
           "generic_parameter_refs": [
             "C"
           ],
@@ -23551,7 +23605,7 @@
       "name": "Placement",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 226,
+      "line": 238,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -23571,7 +23625,7 @@
           "serde": {
             "raw": []
           },
-          "line": 226,
+          "line": 238,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23581,7 +23635,7 @@
           "serde": {
             "raw": []
           },
-          "line": 227,
+          "line": 239,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -23591,7 +23645,7 @@
           "serde": {
             "raw": []
           },
-          "line": 228,
+          "line": 240,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -24189,8 +24243,8 @@
           ]
         },
         {
-          "name": "Apply",
-          "line": 83,
+          "name": "Membership",
+          "line": 84,
           "serde": {
             "raw": []
           },
@@ -24202,7 +24256,57 @@
               "serde": {
                 "raw": []
               },
-              "line": 83,
+              "line": 84,
+              "generic_parameter_refs": [],
+              "type_refs": [
+                {
+                  "rust_token": "VariantKey",
+                  "type_id": "catalog_edits::VariantKey"
+                }
+              ]
+            },
+            {
+              "name": "keyword",
+              "rust_type": "Option<KeywordTarget>",
+              "serde": {
+                "raw": []
+              },
+              "line": 85,
+              "generic_parameter_refs": [],
+              "type_refs": [
+                {
+                  "rust_token": "KeywordTarget",
+                  "type_id": "application::organization::KeywordTarget"
+                }
+              ]
+            },
+            {
+              "name": "collection",
+              "rust_type": "Option<String>",
+              "serde": {
+                "raw": []
+              },
+              "line": 86,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            }
+          ]
+        },
+        {
+          "name": "Apply",
+          "line": 89,
+          "serde": {
+            "raw": []
+          },
+          "shape": "struct",
+          "fields": [
+            {
+              "name": "key",
+              "rust_type": "VariantKey",
+              "serde": {
+                "raw": []
+              },
+              "line": 89,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24217,7 +24321,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 84,
+              "line": 90,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24232,7 +24336,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 85,
+              "line": 91,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24245,7 +24349,7 @@
         },
         {
           "name": "Begin",
-          "line": 88,
+          "line": 94,
           "serde": {
             "raw": []
           },
@@ -24257,7 +24361,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 88,
+              "line": 94,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24270,7 +24374,7 @@
         },
         {
           "name": "Append",
-          "line": 91,
+          "line": 97,
           "serde": {
             "raw": []
           },
@@ -24282,7 +24386,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 91,
+              "line": 97,
               "generic_parameter_refs": [],
               "type_refs": []
             },
@@ -24292,7 +24396,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 92,
+              "line": 98,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24305,46 +24409,6 @@
         },
         {
           "name": "Seal",
-          "line": 95,
-          "serde": {
-            "raw": []
-          },
-          "shape": "struct",
-          "fields": [
-            {
-              "name": "job",
-              "rust_type": "String",
-              "serde": {
-                "raw": []
-              },
-              "line": 95,
-              "generic_parameter_refs": [],
-              "type_refs": []
-            }
-          ]
-        },
-        {
-          "name": "Step",
-          "line": 98,
-          "serde": {
-            "raw": []
-          },
-          "shape": "struct",
-          "fields": [
-            {
-              "name": "job",
-              "rust_type": "String",
-              "serde": {
-                "raw": []
-              },
-              "line": 98,
-              "generic_parameter_refs": [],
-              "type_refs": []
-            }
-          ]
-        },
-        {
-          "name": "Cancel",
           "line": 101,
           "serde": {
             "raw": []
@@ -24364,7 +24428,7 @@
           ]
         },
         {
-          "name": "Job",
+          "name": "Step",
           "line": 104,
           "serde": {
             "raw": []
@@ -24384,38 +24448,8 @@
           ]
         },
         {
-          "name": "Jobs",
+          "name": "Cancel",
           "line": 107,
-          "serde": {
-            "raw": []
-          },
-          "shape": "struct",
-          "fields": [
-            {
-              "name": "after",
-              "rust_type": "String",
-              "serde": {
-                "raw": []
-              },
-              "line": 107,
-              "generic_parameter_refs": [],
-              "type_refs": []
-            },
-            {
-              "name": "limit",
-              "rust_type": "u16",
-              "serde": {
-                "raw": []
-              },
-              "line": 108,
-              "generic_parameter_refs": [],
-              "type_refs": []
-            }
-          ]
-        },
-        {
-          "name": "Items",
-          "line": 111,
           "serde": {
             "raw": []
           },
@@ -24427,7 +24461,77 @@
               "serde": {
                 "raw": []
               },
-              "line": 111,
+              "line": 107,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            }
+          ]
+        },
+        {
+          "name": "Job",
+          "line": 110,
+          "serde": {
+            "raw": []
+          },
+          "shape": "struct",
+          "fields": [
+            {
+              "name": "job",
+              "rust_type": "String",
+              "serde": {
+                "raw": []
+              },
+              "line": 110,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            }
+          ]
+        },
+        {
+          "name": "Jobs",
+          "line": 113,
+          "serde": {
+            "raw": []
+          },
+          "shape": "struct",
+          "fields": [
+            {
+              "name": "after",
+              "rust_type": "String",
+              "serde": {
+                "raw": []
+              },
+              "line": 113,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            },
+            {
+              "name": "limit",
+              "rust_type": "u16",
+              "serde": {
+                "raw": []
+              },
+              "line": 114,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            }
+          ]
+        },
+        {
+          "name": "Items",
+          "line": 117,
+          "serde": {
+            "raw": []
+          },
+          "shape": "struct",
+          "fields": [
+            {
+              "name": "job",
+              "rust_type": "String",
+              "serde": {
+                "raw": []
+              },
+              "line": 117,
               "generic_parameter_refs": [],
               "type_refs": []
             },
@@ -24437,7 +24541,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 112,
+              "line": 118,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24452,7 +24556,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 113,
+              "line": 119,
               "generic_parameter_refs": [],
               "type_refs": []
             }
@@ -24460,7 +24564,7 @@
         },
         {
           "name": "Review",
-          "line": 116,
+          "line": 122,
           "serde": {
             "raw": []
           },
@@ -24472,7 +24576,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 116,
+              "line": 122,
               "generic_parameter_refs": [],
               "type_refs": []
             },
@@ -24482,7 +24586,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 117,
+              "line": 123,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24497,7 +24601,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 118,
+              "line": 124,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24519,7 +24623,7 @@
       "name": "Response",
       "kind": "enum",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 277,
+      "line": 289,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -24540,7 +24644,7 @@
       "variants": [
         {
           "name": "Keywords",
-          "line": 278,
+          "line": 290,
           "serde": {
             "raw": []
           },
@@ -24552,7 +24656,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 278,
+              "line": 290,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24573,7 +24677,7 @@
         },
         {
           "name": "KeywordCreated",
-          "line": 279,
+          "line": 291,
           "serde": {
             "raw": []
           },
@@ -24585,7 +24689,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 279,
+              "line": 291,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24598,7 +24702,7 @@
         },
         {
           "name": "Synonyms",
-          "line": 280,
+          "line": 292,
           "serde": {
             "raw": []
           },
@@ -24610,7 +24714,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 280,
+              "line": 292,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24627,7 +24731,7 @@
         },
         {
           "name": "Collections",
-          "line": 281,
+          "line": 293,
           "serde": {
             "raw": []
           },
@@ -24639,7 +24743,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 281,
+              "line": 293,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24656,7 +24760,7 @@
         },
         {
           "name": "Collection",
-          "line": 282,
+          "line": 294,
           "serde": {
             "raw": []
           },
@@ -24668,7 +24772,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 282,
+              "line": 294,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24681,7 +24785,7 @@
         },
         {
           "name": "CollectionCreated",
-          "line": 283,
+          "line": 295,
           "serde": {
             "raw": []
           },
@@ -24693,7 +24797,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 283,
+              "line": 295,
               "generic_parameter_refs": [],
               "type_refs": []
             }
@@ -24701,7 +24805,7 @@
         },
         {
           "name": "Placement",
-          "line": 284,
+          "line": 296,
           "serde": {
             "raw": []
           },
@@ -24713,7 +24817,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 284,
+              "line": 296,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24726,7 +24830,7 @@
         },
         {
           "name": "Members",
-          "line": 285,
+          "line": 297,
           "serde": {
             "raw": []
           },
@@ -24738,7 +24842,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 285,
+              "line": 297,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24751,7 +24855,7 @@
         },
         {
           "name": "Identity",
-          "line": 286,
+          "line": 298,
           "serde": {
             "raw": []
           },
@@ -24763,7 +24867,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 286,
+              "line": 298,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24775,8 +24879,38 @@
           ]
         },
         {
+          "name": "Membership",
+          "line": 299,
+          "serde": {
+            "raw": []
+          },
+          "shape": "struct",
+          "fields": [
+            {
+              "name": "keyword",
+              "rust_type": "Option<bool>",
+              "serde": {
+                "raw": []
+              },
+              "line": 299,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            },
+            {
+              "name": "collection",
+              "rust_type": "Option<bool>",
+              "serde": {
+                "raw": []
+              },
+              "line": 300,
+              "generic_parameter_refs": [],
+              "type_refs": []
+            }
+          ]
+        },
+        {
           "name": "Changed",
-          "line": 287,
+          "line": 303,
           "serde": {
             "raw": []
           },
@@ -24788,7 +24922,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 287,
+              "line": 303,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24801,7 +24935,7 @@
         },
         {
           "name": "Acknowledged",
-          "line": 288,
+          "line": 304,
           "serde": {
             "raw": []
           },
@@ -24810,7 +24944,7 @@
         },
         {
           "name": "Job",
-          "line": 289,
+          "line": 305,
           "serde": {
             "raw": []
           },
@@ -24822,7 +24956,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 289,
+              "line": 305,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24835,7 +24969,7 @@
         },
         {
           "name": "Jobs",
-          "line": 290,
+          "line": 306,
           "serde": {
             "raw": []
           },
@@ -24847,7 +24981,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 290,
+              "line": 306,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24864,7 +24998,7 @@
         },
         {
           "name": "Items",
-          "line": 291,
+          "line": 307,
           "serde": {
             "raw": []
           },
@@ -24876,7 +25010,7 @@
               "serde": {
                 "raw": []
               },
-              "line": 291,
+              "line": 307,
               "generic_parameter_refs": [],
               "type_refs": [
                 {
@@ -24906,7 +25040,7 @@
       "name": "Synonym",
       "kind": "struct",
       "file": "engines/catalog/src/application/organization.rs",
-      "line": 232,
+      "line": 244,
       "visibility": "pub",
       "serde": {
         "raw": [
@@ -24926,7 +25060,7 @@
           "serde": {
             "raw": []
           },
-          "line": 232,
+          "line": 244,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -24936,7 +25070,7 @@
           "serde": {
             "raw": []
           },
-          "line": 233,
+          "line": 245,
           "generic_parameter_refs": [],
           "type_refs": []
         }
@@ -33897,7 +34031,7 @@
   "source_files": [
     {
       "file": "engines/catalog/src/application.rs",
-      "sha256": "95e08bc22f927eca06aa35b083d43abd25531be02ff94665cb16cefc635ebc51"
+      "sha256": "5428be0787dcecf33de5a394a9504d2f3ac3cb48e68807d6b66318a34a107561"
     },
     {
       "file": "engines/catalog/src/application/backup.rs",
@@ -33917,7 +34051,7 @@
     },
     {
       "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-      "sha256": "77f2fcf17d653ca0b71019f16a103f82e62b3cd7709f870bcda5ac6bb63ccafe"
+      "sha256": "b0cfb64d0ee3ba09edb127b1b75f56691e93456ea2f7cea2cd4bbeb7fc6e98c3"
     },
     {
       "file": "engines/catalog/src/application/desktop/lightroom_migration/tests.rs",
@@ -33933,7 +34067,7 @@
     },
     {
       "file": "engines/catalog/src/application/desktop/tests.rs",
-      "sha256": "1db159dfe769e6609ab5f56b23f86e5239e1b5b49071a1a8c9d7fe0791994cd1"
+      "sha256": "90bc11f356f1cbdc6a52c8ef69b6f7f621fc4d50701c3c015aca2d8a9f175267"
     },
     {
       "file": "engines/catalog/src/application/desktop/workbench_capability_tests.rs",
@@ -33993,7 +34127,7 @@
     },
     {
       "file": "engines/catalog/src/application/organization.rs",
-      "sha256": "8389b27d46d76d71ab16c1faeb27e4df870addf4f28a1e9db0d30eb09a346e94"
+      "sha256": "59591a085c03f33a8868a97a8d147e5d1fb4ff88d6528f4a19baa6651f1e5a1e"
     },
     {
       "file": "engines/catalog/src/application/preview_delivery/tests.rs",
@@ -34013,7 +34147,7 @@
     },
     {
       "file": "engines/catalog/src/application/tests.rs",
-      "sha256": "47ae236199cd0afb03a1760e892ba6e93c75d46b52326c83070d4e3af97a776d"
+      "sha256": "3e83fa54fff34038c1e38adcbabd8024d77922f6fc8e4b99127f606c16e22382"
     },
     {
       "file": "engines/catalog/src/catalog_backup.rs",
@@ -34101,7 +34235,7 @@
     },
     {
       "file": "engines/catalog/src/organization.rs",
-      "sha256": "4a61ec7d8732684dda7560116a7d621f73db508efe06f69139170506e4a5a212"
+      "sha256": "b52bc838cddc9167753746e2f472c98c8a1a088a670bb39e2ca84fe4d6e9c917"
     },
     {
       "file": "engines/catalog/src/organization_search.rs",
@@ -34117,7 +34251,7 @@
     },
     {
       "file": "engines/catalog/src/preview/service.rs",
-      "sha256": "58bd9cefc9559e4cef5a5bb9d41bca1ff28375c51f87f0f79ed95dc54b5a7472"
+      "sha256": "cdaa2c557ac51fc06a0a331c2bcf23e8e5e01a7b780ce5a6bafe55ed0070f85a"
     },
     {
       "file": "engines/catalog/src/preview/store.rs",
@@ -56677,7 +56811,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::BatchItem.key",
-        "line": 124
+        "line": 136
       },
       "rust_type": "VariantKey",
       "serde": {
@@ -56708,7 +56842,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::BatchItem.expected_revision",
-        "line": 125
+        "line": 137
       },
       "rust_type": "I64",
       "serde": {
@@ -56739,7 +56873,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::ImageIdentity.image_id",
-        "line": 130
+        "line": 142
       },
       "rust_type": "String",
       "serde": {
@@ -56770,7 +56904,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::ImageIdentity.key",
-        "line": 131
+        "line": 143
       },
       "rust_type": "VariantKey",
       "serde": {
@@ -56801,7 +56935,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::ImageIdentity.metadata_revision",
-        "line": 132
+        "line": 144
       },
       "rust_type": "I64",
       "serde": {
@@ -56832,7 +56966,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::ImageIdentity.pixel_generation",
-        "line": 133
+        "line": 145
       },
       "rust_type": "I64",
       "serde": {
@@ -56863,7 +56997,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::ImageIdentity.shared_source_epoch",
-        "line": 134
+        "line": 146
       },
       "rust_type": "I64",
       "serde": {
@@ -56894,7 +57028,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::ImageIdentity.physical_generation",
-        "line": 135
+        "line": 147
       },
       "rust_type": "I64",
       "serde": {
@@ -56919,13 +57053,75 @@
       "fault_fixture": "metadata-resolution"
     },
     {
+      "id": "application::organization::KeywordTarget.kind",
+      "kind": "request_field",
+      "story_id": "sc-24658",
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "symbol": "application::organization::KeywordTarget.kind",
+        "line": 130
+      },
+      "rust_type": "core::KeywordKind",
+      "serde": {
+        "raw": []
+      },
+      "request_path": [
+        {
+          "type_id": "application::dto::Request",
+          "variant": "Organization",
+          "field": "request",
+          "target_type_id": "application::organization::Request"
+        },
+        {
+          "type_id": "application::organization::Request",
+          "variant": "Membership",
+          "field": "keyword",
+          "target_type_id": "application::organization::KeywordTarget"
+        }
+      ],
+      "fixture_profile": "organization-revisions",
+      "acceptance_status": "planned_unrun",
+      "fault_fixture": "organization-revisions"
+    },
+    {
+      "id": "application::organization::KeywordTarget.path",
+      "kind": "request_field",
+      "story_id": "sc-24658",
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "symbol": "application::organization::KeywordTarget.path",
+        "line": 131
+      },
+      "rust_type": "Vec<String>",
+      "serde": {
+        "raw": []
+      },
+      "request_path": [
+        {
+          "type_id": "application::dto::Request",
+          "variant": "Organization",
+          "field": "request",
+          "target_type_id": "application::organization::Request"
+        },
+        {
+          "type_id": "application::organization::Request",
+          "variant": "Membership",
+          "field": "keyword",
+          "target_type_id": "application::organization::KeywordTarget"
+        }
+      ],
+      "fixture_profile": "organization-revisions",
+      "acceptance_status": "planned_unrun",
+      "fault_fixture": "organization-revisions"
+    },
+    {
       "id": "application::organization::MembershipCursor.collection",
       "kind": "request_field",
       "story_id": "sc-24658",
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::MembershipCursor.collection",
-        "line": 170
+        "line": 182
       },
       "rust_type": "String",
       "serde": {
@@ -56956,7 +57152,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::MembershipCursor.revision",
-        "line": 171
+        "line": 183
       },
       "rust_type": "I64",
       "serde": {
@@ -56987,7 +57183,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::MembershipCursor.ordered",
-        "line": 172
+        "line": 184
       },
       "rust_type": "bool",
       "serde": {
@@ -57018,7 +57214,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::MembershipCursor.position",
-        "line": 173
+        "line": 185
       },
       "rust_type": "I64",
       "serde": {
@@ -57049,7 +57245,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::MembershipCursor.sequence",
-        "line": 174
+        "line": 186
       },
       "rust_type": "I64",
       "serde": {
@@ -57614,13 +57810,49 @@
       "fault_fixture": "organization-revisions"
     },
     {
+      "id": "application::organization::Request::Membership",
+      "kind": "request_variant",
+      "story_id": "sc-24658",
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "symbol": "application::organization::Request::Membership",
+        "line": 84
+      },
+      "request_path": [
+        {
+          "type_id": "application::dto::Request",
+          "variant": "Organization",
+          "field": "request",
+          "target_type_id": "application::organization::Request"
+        }
+      ],
+      "typed_results": [
+        {
+          "type_id": "application::dto::Response",
+          "variants": [
+            "Organization"
+          ]
+        },
+        {
+          "type_id": "application::organization::Response",
+          "variants": [
+            "Membership"
+          ]
+        }
+      ],
+      "fixture_profile": "organization-revisions",
+      "wire_fixture": "application::organization::Request::Membership",
+      "acceptance_status": "planned_unrun",
+      "fault_fixture": "organization-revisions"
+    },
+    {
       "id": "application::organization::Request::Apply",
       "kind": "request_variant",
       "story_id": "sc-24658",
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Apply",
-        "line": 83
+        "line": 89
       },
       "request_path": [
         {
@@ -57656,7 +57888,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Begin",
-        "line": 88
+        "line": 94
       },
       "request_path": [
         {
@@ -57692,7 +57924,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Append",
-        "line": 91
+        "line": 97
       },
       "request_path": [
         {
@@ -57728,7 +57960,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Seal",
-        "line": 95
+        "line": 101
       },
       "request_path": [
         {
@@ -57764,7 +57996,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Step",
-        "line": 98
+        "line": 104
       },
       "request_path": [
         {
@@ -57800,7 +58032,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Cancel",
-        "line": 101
+        "line": 107
       },
       "request_path": [
         {
@@ -57836,7 +58068,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Job",
-        "line": 104
+        "line": 110
       },
       "request_path": [
         {
@@ -57872,7 +58104,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Jobs",
-        "line": 107
+        "line": 113
       },
       "request_path": [
         {
@@ -57908,7 +58140,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Items",
-        "line": 111
+        "line": 117
       },
       "request_path": [
         {
@@ -57944,7 +58176,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Review",
-        "line": 116
+        "line": 122
       },
       "request_path": [
         {
@@ -58799,13 +59031,88 @@
       "fault_fixture": "organization-revisions"
     },
     {
+      "id": "application::organization::Request::Membership.key",
+      "kind": "request_field",
+      "story_id": "sc-24658",
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "symbol": "application::organization::Request::Membership.key",
+        "line": 84
+      },
+      "rust_type": "VariantKey",
+      "serde": {
+        "raw": []
+      },
+      "request_path": [
+        {
+          "type_id": "application::dto::Request",
+          "variant": "Organization",
+          "field": "request",
+          "target_type_id": "application::organization::Request"
+        }
+      ],
+      "fixture_profile": "organization-revisions",
+      "acceptance_status": "planned_unrun",
+      "fault_fixture": "organization-revisions"
+    },
+    {
+      "id": "application::organization::Request::Membership.keyword",
+      "kind": "request_field",
+      "story_id": "sc-24658",
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "symbol": "application::organization::Request::Membership.keyword",
+        "line": 85
+      },
+      "rust_type": "Option<KeywordTarget>",
+      "serde": {
+        "raw": []
+      },
+      "request_path": [
+        {
+          "type_id": "application::dto::Request",
+          "variant": "Organization",
+          "field": "request",
+          "target_type_id": "application::organization::Request"
+        }
+      ],
+      "fixture_profile": "organization-revisions",
+      "acceptance_status": "planned_unrun",
+      "fault_fixture": "organization-revisions"
+    },
+    {
+      "id": "application::organization::Request::Membership.collection",
+      "kind": "request_field",
+      "story_id": "sc-24658",
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "symbol": "application::organization::Request::Membership.collection",
+        "line": 86
+      },
+      "rust_type": "Option<String>",
+      "serde": {
+        "raw": []
+      },
+      "request_path": [
+        {
+          "type_id": "application::dto::Request",
+          "variant": "Organization",
+          "field": "request",
+          "target_type_id": "application::organization::Request"
+        }
+      ],
+      "fixture_profile": "organization-revisions",
+      "acceptance_status": "planned_unrun",
+      "fault_fixture": "organization-revisions"
+    },
+    {
       "id": "application::organization::Request::Apply.key",
       "kind": "request_field",
       "story_id": "sc-24658",
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Apply.key",
-        "line": 83
+        "line": 89
       },
       "rust_type": "VariantKey",
       "serde": {
@@ -58830,7 +59137,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Apply.expected_revision",
-        "line": 84
+        "line": 90
       },
       "rust_type": "I64",
       "serde": {
@@ -58855,7 +59162,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Apply.operation",
-        "line": 85
+        "line": 91
       },
       "rust_type": "core::Operation",
       "serde": {
@@ -58880,7 +59187,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Begin.operation",
-        "line": 88
+        "line": 94
       },
       "rust_type": "core::Operation",
       "serde": {
@@ -58905,7 +59212,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Append.job",
-        "line": 91
+        "line": 97
       },
       "rust_type": "String",
       "serde": {
@@ -58930,7 +59237,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Append.items",
-        "line": 92
+        "line": 98
       },
       "rust_type": "Vec<BatchItem>",
       "serde": {
@@ -58955,7 +59262,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Seal.job",
-        "line": 95
+        "line": 101
       },
       "rust_type": "String",
       "serde": {
@@ -58980,7 +59287,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Step.job",
-        "line": 98
+        "line": 104
       },
       "rust_type": "String",
       "serde": {
@@ -59005,7 +59312,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Cancel.job",
-        "line": 101
+        "line": 107
       },
       "rust_type": "String",
       "serde": {
@@ -59030,7 +59337,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Job.job",
-        "line": 104
+        "line": 110
       },
       "rust_type": "String",
       "serde": {
@@ -59055,7 +59362,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Jobs.after",
-        "line": 107
+        "line": 113
       },
       "rust_type": "String",
       "serde": {
@@ -59080,7 +59387,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Jobs.limit",
-        "line": 108
+        "line": 114
       },
       "rust_type": "u16",
       "serde": {
@@ -59105,7 +59412,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Items.job",
-        "line": 111
+        "line": 117
       },
       "rust_type": "String",
       "serde": {
@@ -59130,7 +59437,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Items.after",
-        "line": 112
+        "line": 118
       },
       "rust_type": "I64",
       "serde": {
@@ -59155,7 +59462,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Items.limit",
-        "line": 113
+        "line": 119
       },
       "rust_type": "u16",
       "serde": {
@@ -59180,7 +59487,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Review.job",
-        "line": 116
+        "line": 122
       },
       "rust_type": "String",
       "serde": {
@@ -59205,7 +59512,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Review.key",
-        "line": 117
+        "line": 123
       },
       "rust_type": "VariantKey",
       "serde": {
@@ -59230,7 +59537,7 @@
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
         "symbol": "application::organization::Request::Review.new_revision",
-        "line": 118
+        "line": 124
       },
       "rust_type": "Option<I64>",
       "serde": {
@@ -68641,7 +68948,7 @@
         "Use a foreign catalog token: Reply::Error StaleSession.",
         "Use page limit 0: InvalidRequest; request bytes over configured cap: ResourceLimit."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -68712,7 +69019,7 @@
         "Reject stale token/generation/review digest and wrong epoch; no overwrite from a stale review.",
         "Interrupted publication retains recovery evidence instead of reporting successful rollback."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -68741,60 +69048,66 @@
         "Stale image revision rejects the edit without changing rating/member rows.",
         "Collection placement cycle and deleting an in-use keyword fail; current rows remain unchanged."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 952,
+          "line": 1016,
+          "symbol": "membership_reports_direct_keyword_and_collection_before_and_after_apply",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/organization.rs",
+          "line": 1068,
           "symbol": "variant_batch_is_durable_single_unit_cancelable_and_never_becomes_master",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1025,
+          "line": 1141,
           "symbol": "stale_variant_revision_pauses_then_explicit_review_resumes",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1096,
+          "line": 1212,
           "symbol": "hierarchy_collection_cas_membership_and_synonyms_preserve_evidence",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1318,
+          "line": 1434,
           "symbol": "collection_lookup_preserves_exact_values_and_bounds_retained_payload",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1360,
+          "line": 1476,
           "symbol": "bounds_and_decimal_wire_reject_without_mutating_jobs",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1425,
+          "line": 1541,
           "symbol": "membership_progress_handles_sparse_defaults_byte_cuts_and_revision_changes",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1574,
+          "line": 1690,
           "symbol": "copying_a_member_invalidates_paused_cursor_before_earlier_position_can_be_skipped",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1667,
+          "line": 1783,
           "symbol": "schema_eleven_prepares_old_memberships_in_existing_bounded_maintenance",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/organization.rs",
-          "line": 1735,
+          "line": 1851,
           "symbol": "restored_external_hold_keeps_local_organization_batch_available",
           "status": "source_discovered_not_executed_here"
         }
@@ -68818,7 +69131,7 @@
         "Changed candidate bytes or stale plan revision prevents Apply.",
         "Ambiguous candidates remain unresolved until explicit review; cancellation preserves the previous mapping."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -68883,7 +69196,7 @@
         "Mutate target recipe after Append; Run reports conflict and preserves newer target.",
         "Active cancellation requires the matching operation id; no overwrite of newer edits."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -68942,7 +69255,7 @@
         "Overlapping original/cache roots reject admission.",
         "Stale original-root review token or changed storage epoch cannot validate another mapping; StepRelocation selects exact tier."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69013,7 +69326,7 @@
         "Wrong offset, byte total, digest, role, operation or Guard fails before migration authority is admitted.",
         "Cancel with uncertain drain reports DrainPending; no false successful close/discard."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69438,7 +69751,7 @@
         "Stale workbench/generation/evidence or wrong input offset rejects the action.",
         "Open read-only never writes source SQLite; Cancel/Close drains before releasing authority."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69545,7 +69858,7 @@
         "Stale plan authority/source fingerprint or changed destination blocks publication.",
         "Existing output is preserved when overwrite=false; truncated staged output is recoverable and is never reported complete."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69712,151 +70025,151 @@
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1605,
+          "line": 1607,
           "symbol": "lifecycle_subprocess_entrypoint",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1627,
+          "line": 1629,
           "symbol": "held_begin_retire_keeps_charge",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1632,
+          "line": 1634,
           "symbol": "successful_start_keeps_reserved_stop_and_status_available",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1637,
+          "line": 1639,
           "symbol": "successful_exit_lost_drain_replays_exact_terminal",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1642,
+          "line": 1644,
           "symbol": "concrete_failed_exit_lost_drain_replays_exact_terminal",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1647,
+          "line": 1649,
           "symbol": "broken_pipe_checked_wait_and_join_allow_release_and_reuse",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1652,
+          "line": 1654,
           "symbol": "real_f_lost_arm_then_close_reconciles_without_c_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1657,
+          "line": 1659,
           "symbol": "real_f_cached_partial_begin_allows_captured_identity_abort",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1662,
+          "line": 1664,
           "symbol": "real_f_cached_failed_seal_allows_release",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1931,
+          "line": 1933,
           "symbol": "streaming_error_bound_stops_formatting_and_preserves_utf8",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 1945,
+          "line": 1947,
           "symbol": "mismatched_failure_receipt_retains_exact_pending_and_native_charge",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2002,
+          "line": 2004,
           "symbol": "maximum_enriched_receipt_and_pending_release_retain_full_graph_until_exact_replay",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2086,
+          "line": 2088,
           "symbol": "exhausted_cleanup_sequence_retains_custody_without_dispatch",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2124,
+          "line": 2126,
           "symbol": "real_f_failed_arm_is_terminal_and_permits_unarmed_abort",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2129,
+          "line": 2131,
           "symbol": "real_f_drain_lease_refusal_retains_charge_then_recovers_after_unlock",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2134,
+          "line": 2136,
           "symbol": "real_f_post_drain_invalidation_and_lost_failure_reply_allow_exact_cleanup",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2139,
+          "line": 2141,
           "symbol": "close_racing_real_f_drain_adopts_completed_identity_without_redispatch",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2144,
+          "line": 2146,
           "symbol": "writer_thread_creation_failure_closes_pipe_before_drain_and_pool_reuse",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2487,
+          "line": 2489,
           "symbol": "combined_bootstrap_lost_stage_and_executor_close_reopen_and_stale_lifecycles",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2706,
+          "line": 2708,
           "symbol": "executor_generation_is_root_scoped_noncanonical_and_exhaustion_safe",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2787,
+          "line": 2789,
           "symbol": "f_invalid_first_or_later_attempt_blocks_complete_inventory_admission",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2881,
+          "line": 2883,
           "symbol": "combined_root_close_finishes_each_interrupted_discard_phase",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 2999,
+          "line": 3001,
           "symbol": "managed_c_retire_ack_replays_exact_identity_without_second_budget_release",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 3042,
+          "line": 3044,
           "symbol": "managed_c_retire_waits_for_reservation_and_retires_captured_arc_without_deadlock",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/export_native/tests.rs",
-          "line": 3092,
+          "line": 3094,
           "symbol": "managed_c_register_refusal_has_exact_negative_custody_receipt",
           "status": "source_discovered_not_executed_here"
         }
@@ -69880,66 +70193,66 @@
         "Open missing path fails without creating it.",
         "Wrong catalog token returns StaleSession; request after shutdown reports Closed."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 46,
+          "line": 47,
           "symbol": "managed_backup_routes_share_pre_effect_public_byte_boundary",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 86,
+          "line": 87,
           "symbol": "drain_attempts_retain_unknown_pending_and_ignore_stale_failure",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 108,
+          "line": 109,
           "symbol": "close_retires_only_matching_catalog_binary_and_ack_survives_drain",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 181,
+          "line": 182,
           "symbol": "frame_header_rejects_future_version_and_size_before_payload_read",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 203,
+          "line": 204,
           "symbol": "assembly_caps_and_continuity_refuse_unknown_or_repeated_frames",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 225,
+          "line": 226,
           "symbol": "binary_exact_cap_ack_and_renderer_release_are_separate_owners",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 246,
+          "line": 247,
           "symbol": "canceled_partial_bad_checksum_and_stale_binary_do_not_leak_or_replace",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 273,
+          "line": 274,
           "symbol": "outstanding_data_does_not_hide_control_or_early_cancellation",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 309,
+          "line": 310,
           "symbol": "config_and_wire_families_preserve_exact_native_and_decimal_authority",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 408,
+          "line": 409,
           "symbol": "managed_catalog_retirement_requires_identity_reap_join_and_g_drain",
           "status": "source_discovered_not_executed_here"
         },
@@ -69999,74 +70312,92 @@
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 616,
+          "line": 617,
           "symbol": "canceled_hydration_keeps_blocked_reader_owned_without_blocking_foreground",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 766,
+          "line": 767,
           "symbol": "failed_close_retains_catalog_import_and_cache_until_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 818,
+          "line": 819,
           "symbol": "checked_shutdown_returns_failed_drain_and_retries_same_actor",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 953,
+          "line": 954,
           "symbol": "actor_cancel_discards_pending_storage_binding_without_repeating_reservation",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1014,
+          "line": 1015,
           "symbol": "actor_commits_observed_root_before_acknowledging_managed_walk",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1049,
+          "line": 1050,
           "symbol": "actor_rejects_cache_root_before_managed_walk_acknowledgement",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1082,
+          "line": 1083,
           "symbol": "actor_rejects_stale_sidecar_and_original_before_publication",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1124,
+          "line": 1125,
           "symbol": "actor_lost_postcommit_release_cancels_consumer_and_keeps_receipt",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1156,
+          "line": 1157,
           "symbol": "checked_shutdown_reports_owner_panic_on_every_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1170,
+          "line": 1171,
           "symbol": "owner_unwind_retains_whole_open_when_worker_wait_fails",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1211,
+          "line": 1212,
           "symbol": "managed_catalog_refuses_independent_lightroom_at_submit_and_dispatch",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1257,
+          "line": 1258,
           "symbol": "retained_failed_admission_blocks_global_writes_until_explicit_close",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1351,
+          "symbol": "managed_close_retry_admission_queues_exact_token_without_retiring_owners",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1397,
+          "symbol": "managed_close_retry_admission_preserves_failed_admission_and_session_tokens",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1441,
+          "symbol": "managed_close_retry_admission_keeps_live_open_and_exact_epoch_until_checked_close",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -70089,7 +70420,7 @@
         "Relative source path is InvalidRequest.",
         "Overlapping import is Busy; wrong import id cannot cancel another operation."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70148,74 +70479,92 @@
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 616,
+          "line": 617,
           "symbol": "canceled_hydration_keeps_blocked_reader_owned_without_blocking_foreground",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 766,
+          "line": 767,
           "symbol": "failed_close_retains_catalog_import_and_cache_until_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 818,
+          "line": 819,
           "symbol": "checked_shutdown_returns_failed_drain_and_retries_same_actor",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 953,
+          "line": 954,
           "symbol": "actor_cancel_discards_pending_storage_binding_without_repeating_reservation",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1014,
+          "line": 1015,
           "symbol": "actor_commits_observed_root_before_acknowledging_managed_walk",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1049,
+          "line": 1050,
           "symbol": "actor_rejects_cache_root_before_managed_walk_acknowledgement",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1082,
+          "line": 1083,
           "symbol": "actor_rejects_stale_sidecar_and_original_before_publication",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1124,
+          "line": 1125,
           "symbol": "actor_lost_postcommit_release_cancels_consumer_and_keeps_receipt",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1156,
+          "line": 1157,
           "symbol": "checked_shutdown_reports_owner_panic_on_every_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1170,
+          "line": 1171,
           "symbol": "owner_unwind_retains_whole_open_when_worker_wait_fails",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1211,
+          "line": 1212,
           "symbol": "managed_catalog_refuses_independent_lightroom_at_submit_and_dispatch",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1257,
+          "line": 1258,
           "symbol": "retained_failed_admission_blocks_global_writes_until_explicit_close",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1351,
+          "symbol": "managed_close_retry_admission_queues_exact_token_without_retiring_owners",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1397,
+          "symbol": "managed_close_retry_admission_preserves_failed_admission_and_session_tokens",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1441,
+          "symbol": "managed_close_retry_admission_keeps_live_open_and_exact_epoch_until_checked_close",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -70238,66 +70587,66 @@
         "Wrong restore_id fails; refusal to acknowledge pending jobs leaves jobs held.",
         "Existing restore destination or altered bundle digest fails without replacing existing catalog."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 46,
+          "line": 47,
           "symbol": "managed_backup_routes_share_pre_effect_public_byte_boundary",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 86,
+          "line": 87,
           "symbol": "drain_attempts_retain_unknown_pending_and_ignore_stale_failure",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 108,
+          "line": 109,
           "symbol": "close_retires_only_matching_catalog_binary_and_ack_survives_drain",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 181,
+          "line": 182,
           "symbol": "frame_header_rejects_future_version_and_size_before_payload_read",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 203,
+          "line": 204,
           "symbol": "assembly_caps_and_continuity_refuse_unknown_or_repeated_frames",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 225,
+          "line": 226,
           "symbol": "binary_exact_cap_ack_and_renderer_release_are_separate_owners",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 246,
+          "line": 247,
           "symbol": "canceled_partial_bad_checksum_and_stale_binary_do_not_leak_or_replace",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 273,
+          "line": 274,
           "symbol": "outstanding_data_does_not_hide_control_or_early_cancellation",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 309,
+          "line": 310,
           "symbol": "config_and_wire_families_preserve_exact_native_and_decimal_authority",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/desktop/tests.rs",
-          "line": 408,
+          "line": 409,
           "symbol": "managed_catalog_retirement_requires_identity_reap_join_and_g_drain",
           "status": "source_discovered_not_executed_here"
         },
@@ -70357,7 +70706,7 @@
         "Search rating6 or limit0 is InvalidRequest.",
         "Stale edit/metadata revision cannot overwrite a newer recipe or cull."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70416,74 +70765,92 @@
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 616,
+          "line": 617,
           "symbol": "canceled_hydration_keeps_blocked_reader_owned_without_blocking_foreground",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 766,
+          "line": 767,
           "symbol": "failed_close_retains_catalog_import_and_cache_until_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 818,
+          "line": 819,
           "symbol": "checked_shutdown_returns_failed_drain_and_retries_same_actor",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 953,
+          "line": 954,
           "symbol": "actor_cancel_discards_pending_storage_binding_without_repeating_reservation",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1014,
+          "line": 1015,
           "symbol": "actor_commits_observed_root_before_acknowledging_managed_walk",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1049,
+          "line": 1050,
           "symbol": "actor_rejects_cache_root_before_managed_walk_acknowledgement",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1082,
+          "line": 1083,
           "symbol": "actor_rejects_stale_sidecar_and_original_before_publication",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1124,
+          "line": 1125,
           "symbol": "actor_lost_postcommit_release_cancels_consumer_and_keeps_receipt",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1156,
+          "line": 1157,
           "symbol": "checked_shutdown_reports_owner_panic_on_every_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1170,
+          "line": 1171,
           "symbol": "owner_unwind_retains_whole_open_when_worker_wait_fails",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1211,
+          "line": 1212,
           "symbol": "managed_catalog_refuses_independent_lightroom_at_submit_and_dispatch",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1257,
+          "line": 1258,
           "symbol": "retained_failed_admission_blocks_global_writes_until_explicit_close",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1351,
+          "symbol": "managed_close_retry_admission_queues_exact_token_without_retiring_owners",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1397,
+          "symbol": "managed_close_retry_admission_preserves_failed_admission_and_session_tokens",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1441,
+          "symbol": "managed_close_retry_admission_keeps_live_open_and_exact_epoch_until_checked_close",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -70506,7 +70873,7 @@
         "Expired/unknown ticket gives StaleSession.",
         "Canceled or superseded viewport request cannot deliver current-generation authority."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70595,74 +70962,92 @@
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 616,
+          "line": 617,
           "symbol": "canceled_hydration_keeps_blocked_reader_owned_without_blocking_foreground",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 766,
+          "line": 767,
           "symbol": "failed_close_retains_catalog_import_and_cache_until_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 818,
+          "line": 819,
           "symbol": "checked_shutdown_returns_failed_drain_and_retries_same_actor",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 953,
+          "line": 954,
           "symbol": "actor_cancel_discards_pending_storage_binding_without_repeating_reservation",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1014,
+          "line": 1015,
           "symbol": "actor_commits_observed_root_before_acknowledging_managed_walk",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1049,
+          "line": 1050,
           "symbol": "actor_rejects_cache_root_before_managed_walk_acknowledgement",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1082,
+          "line": 1083,
           "symbol": "actor_rejects_stale_sidecar_and_original_before_publication",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1124,
+          "line": 1125,
           "symbol": "actor_lost_postcommit_release_cancels_consumer_and_keeps_receipt",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1156,
+          "line": 1157,
           "symbol": "checked_shutdown_reports_owner_panic_on_every_retry",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1170,
+          "line": 1171,
           "symbol": "owner_unwind_retains_whole_open_when_worker_wait_fails",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1211,
+          "line": 1212,
           "symbol": "managed_catalog_refuses_independent_lightroom_at_submit_and_dispatch",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/application/tests.rs",
-          "line": 1257,
+          "line": 1258,
           "symbol": "retained_failed_admission_blocks_global_writes_until_explicit_close",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1351,
+          "symbol": "managed_close_retry_admission_queues_exact_token_without_retiring_owners",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1397,
+          "symbol": "managed_close_retry_admission_preserves_failed_admission_and_session_tokens",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/application/tests.rs",
+          "line": 1441,
+          "symbol": "managed_close_retry_admission_keeps_live_open_and_exact_epoch_until_checked_close",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -70682,7 +71067,7 @@
       "faults": [
         "Invalid VariantKey fails; mixed source/image key is rejected."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70805,7 +71190,7 @@
         "Wrong fingerprint or decoded allocation limit fails before admission.",
         "Cancellation/stale source blocks publication."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70927,7 +71312,7 @@
       "faults": [
         "Unknown enum discriminator/denied unknown field and noncanonical decimal forms fail."
       ],
-      "source_revision": "f71d8a030794bd48e4a1f585e289c097cc0d1ff30559dd58e72edf25862bd729",
+      "source_revision": "aff50f15a266ce60b7cc55dbe9d612cab94d50b92fb3c0b6d6a0eec965d1c647",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": []
     }
@@ -86020,7 +86405,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 124
+        "line": 136
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86037,7 +86422,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 219
+        "line": 231
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86059,7 +86444,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 130
+        "line": 142
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86082,7 +86467,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 243
+        "line": 255
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86105,7 +86490,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 266
+        "line": 278
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86125,7 +86510,24 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 211
+        "line": 223
+      },
+      "scope": "typed_serde_conformance_only",
+      "fixture_profile": "wire-conformance",
+      "status": "planned_unrun"
+    },
+    {
+      "id": "application::organization::KeywordTarget::struct",
+      "type_id": "application::organization::KeywordTarget",
+      "value": {
+        "kind": "flat",
+        "path": [
+          "fixture-path"
+        ]
+      },
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "line": 130
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86147,7 +86549,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 237
+        "line": 249
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86162,7 +86564,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 164
+        "line": 176
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86180,7 +86582,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 170
+        "line": 182
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86214,7 +86616,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 200
+        "line": 212
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86230,7 +86632,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 226
+        "line": 238
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86531,6 +86933,33 @@
       "status": "planned_unrun"
     },
     {
+      "id": "application::organization::Request::Membership",
+      "type_id": "application::organization::Request",
+      "value": {
+        "command": "membership",
+        "args": {
+          "key": {
+            "asset_id": "00000000-0000-4000-8000-000000000001",
+            "variant_id": "master"
+          },
+          "keyword": {
+            "kind": "flat",
+            "path": [
+              "fixture-path"
+            ]
+          },
+          "collection": "fixture-collection"
+        }
+      },
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "line": 84
+      },
+      "scope": "typed_serde_conformance_only",
+      "fixture_profile": "wire-conformance",
+      "status": "planned_unrun"
+    },
+    {
       "id": "application::organization::Request::Apply",
       "type_id": "application::organization::Request",
       "value": {
@@ -86549,7 +86978,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 83
+        "line": 89
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86569,7 +86998,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 88
+        "line": 94
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86595,7 +87024,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 91
+        "line": 97
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86612,7 +87041,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 95
+        "line": 101
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86629,7 +87058,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 98
+        "line": 104
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86646,7 +87075,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 101
+        "line": 107
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86663,7 +87092,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 104
+        "line": 110
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86681,7 +87110,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 107
+        "line": 113
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86700,7 +87129,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 111
+        "line": 117
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86722,7 +87151,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 116
+        "line": 122
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86750,7 +87179,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 278
+        "line": 290
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86767,7 +87196,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 279
+        "line": 291
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86790,7 +87219,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 280
+        "line": 292
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86815,7 +87244,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 281
+        "line": 293
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86835,7 +87264,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 282
+        "line": 294
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86852,7 +87281,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 283
+        "line": 295
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86871,7 +87300,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 284
+        "line": 296
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86908,7 +87337,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 285
+        "line": 297
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86933,7 +87362,25 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 286
+        "line": 298
+      },
+      "scope": "typed_serde_conformance_only",
+      "fixture_profile": "wire-conformance",
+      "status": "planned_unrun"
+    },
+    {
+      "id": "application::organization::Response::Membership",
+      "type_id": "application::organization::Response",
+      "value": {
+        "kind": "membership",
+        "value": {
+          "keyword": false,
+          "collection": false
+        }
+      },
+      "source": {
+        "file": "engines/catalog/src/application/organization.rs",
+        "line": 299
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86950,7 +87397,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 287
+        "line": 303
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86964,7 +87411,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 288
+        "line": 304
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -86990,7 +87437,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 289
+        "line": 305
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -87021,7 +87468,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 290
+        "line": 306
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -87052,7 +87499,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 291
+        "line": 307
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -87067,7 +87514,7 @@
       },
       "source": {
         "file": "engines/catalog/src/application/organization.rs",
-        "line": 232
+        "line": 244
       },
       "scope": "typed_serde_conformance_only",
       "fixture_profile": "wire-conformance",
@@ -101250,6 +101697,30 @@
       "fixture_profile": "wire-conformance"
     },
     {
+      "id": "application::organization::Request::Membership",
+      "request": {
+        "command": "organization",
+        "args": {
+          "catalog": "fixture-session",
+          "request": {
+            "command": "membership",
+            "args": {
+              "key": {
+                "asset_id": "00000000-0000-4000-8000-000000000001",
+                "variant_id": "master"
+              },
+              "keyword": null,
+              "collection": null
+            }
+          }
+        }
+      },
+      "status": "planned_unrun",
+      "scope": "typed_serde_conformance_only",
+      "semantic_context": "Session/job/guard/token/revision/digest/path values must be replaced by successful preceding lifecycle replies before operational invocation. Placeholder specimen strings do not grant filesystem or database authority.",
+      "fixture_profile": "wire-conformance"
+    },
+    {
       "id": "application::organization::Request::Apply",
       "request": {
         "command": "organization",
@@ -105758,6 +106229,7 @@
     "application::metadata_write::WriteLimits",
     "application::organization::BatchItem",
     "application::organization::ImageIdentity",
+    "application::organization::KeywordTarget",
     "application::organization::MembershipCursor",
     "application::organization::Request",
     "application::preview_settings::Request",
@@ -105797,6 +106269,6 @@
     "preview::store::Tier",
     "storage_volume::NativePath"
   ],
-  "request_variant_count": 171,
-  "request_reachable_variant_count": 357
+  "request_variant_count": 172,
+  "request_reachable_variant_count": 358
 }

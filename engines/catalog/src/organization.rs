@@ -1197,6 +1197,33 @@ impl Catalog {
             }
         }
     }
+    /// Whether one logical image directly holds a keyword and/or belongs to a
+    /// collection: two point lookups, so callers can record exact inverses.
+    pub fn image_organization_membership(
+        &self,
+        key: &crate::catalog_edits::VariantKey,
+        keyword: Option<(KeywordKind, &[String])>,
+        collection: Option<&str>,
+    ) -> Result<(Option<bool>, Option<bool>)> {
+        let image = crate::catalog_images::id(&self.db, key)?;
+        let seq: i64 = self.db.query_row(
+            "SELECT sequence FROM image_assets WHERE id=?",
+            [&image],
+            |r| r.get(0),
+        )?;
+        let keyword = keyword
+            .map(|(kind, path)| -> Result<bool> {
+                path_valid(kind, path)?;
+                Ok(self.db.query_row("SELECT EXISTS(SELECT 1 FROM organization_keyword_members m JOIN organization_keywords k ON k.id=m.keyword WHERE k.kind=?1 AND k.path=?2 AND m.sequence=?3 AND m.direct=1)",params![kind.sql(),serde_json::to_string(path)?,seq],|r|r.get(0))?)
+            })
+            .transpose()?;
+        let collection = collection
+            .map(|collection| -> Result<bool> {
+                Ok(self.db.query_row("SELECT EXISTS(SELECT 1 FROM organization_collection_members WHERE collection=?1 AND sequence=?2)",params![collection,seq],|r|r.get(0))?)
+            })
+            .transpose()?;
+        Ok((keyword, collection))
+    }
     pub fn organization_events(&self, after: i64, limit: usize) -> Result<Vec<serde_json::Value>> {
         page_limit(limit)?;
         let mut values = Vec::new();

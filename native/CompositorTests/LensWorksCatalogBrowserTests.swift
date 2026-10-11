@@ -1685,6 +1685,187 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
+    /// S05 AC1/AC3: ratings, flags, labels, nested keywords and virtual folders apply to the
+    /// focused photo or the whole selection, combine as metadata filters, undo/redo as single
+    /// steps with exact per-photo inverses, and persist across a worker restart.
+    @Test func organizationControlsApplyToSingleAndSelectedPhotosUndoAndPersistAcrossRestart() async throws {
+        let fixture = try Fixture(images: 4)
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            #expect(model.assets.count == 4)
+            @MainActor func row(_ id: String) throws -> LensWorksCatalogAsset { try #require(model.assets.first { $0.id == id }) }
+            let ids = model.assets.map(\.id)
+            let single = ids[0], multi = Array(ids[1...3])
+
+            // Single focused photo: only that photo changes.
+            await model.select(try row(single))
+            try await model.organize(.rating(4))
+            #expect(try row(single).rating == 4)
+            #expect(try multi.allSatisfy { try row($0).rating ?? 0 == 0 })
+
+            // A nested keyword created through the native control, assigned first to one photo.
+            try await model.createKeyword("People/Ada")
+            let people = try #require(model.keywords.first { $0.name == "People" })
+            try await model.enterKeyword(people)
+            let ada = try #require(model.keywords.first { $0.name == "Ada" })
+            #expect(ada.path == ["People", "Ada"] && model.keywordParent?.name == "People")
+            await model.select(try row(multi[0]))
+            try await model.organize(.addKeyword(ada.path))
+
+            // Multi-selection.
+            await model.select(try row(multi[0]))
+            for id in multi.dropFirst() { await model.select(try row(id), extending: true) }
+            #expect(model.selectionCount == 3)
+            try await model.organize(.flag(.Pick))
+            try await model.organize(.label("Blue"))
+            try await model.organize(.addKeyword(ada.path))
+            try await model.createGroup("Portraits")
+            let portraits = try model.group(named: "Portraits")
+            try await model.setSelectedMembership(portraits)
+            #expect(try multi.allSatisfy { try row($0).flag == "pick" && row($0).label == "Blue" })
+            #expect(try row(single).flag == "unflagged" && row(single).label == "")
+            #expect(model.organizationUndo.count == 6 && model.organizationRedo.isEmpty)
+
+            // Combined filters: keyword ∧ flag ∧ label, then ∧ rating, then virtual folder.
+            try await model.setFilters(flag: .some(.Pick), label: .some("Blue"), keyword: .some(ada))
+            #expect(Set(model.assets.map(\.id)) == Set(multi))
+            try await model.setFilters(rating: .some(4))
+            #expect(model.assets.isEmpty)
+            try await model.clearFilters()
+            #expect(model.assets.count == 4 && model.filterSummary.isEmpty)
+            try await model.browse(collection: portraits.id)
+            #expect(Set(model.assets.map(\.id)) == Set(multi))
+            try await model.browse()
+
+            // Undo is exact per photo: the keyword step leaves the photo that already held it.
+            try await model.undoOrganization() // membership
+            try await model.browse(collection: portraits.id)
+            #expect(model.assets.isEmpty)
+            try await model.browse()
+            try await model.undoOrganization() // keyword on three photos
+            try await model.setFilters(keyword: .some(ada))
+            #expect(model.assets.map(\.id) == [multi[0]])
+            try await model.clearFilters()
+            try await model.undoOrganization() // label
+            #expect(try multi.allSatisfy { try row($0).label == "" && row($0).flag == "pick" })
+            #expect(model.organizationRedo.count == 3)
+            try await model.redoOrganization() // label again
+            #expect(try multi.allSatisfy { try row($0).label == "Blue" })
+            // A new change discards the redo history.
+            await model.select(try row(single))
+            try await model.organize(.flag(.Reject))
+            #expect(model.organizationRedo.isEmpty)
+            try await model.undoOrganization()
+            #expect(try row(single).flag == "unflagged")
+            try await model.redoOrganization()
+            #expect(try row(single).flag == "reject")
+            // The single-photo rating control is an undoable step too.
+            try await model.undoOrganization()
+            try await model.setCatalogRating(2)
+            #expect(try row(single).rating == 2)
+            try await model.undoOrganization()
+            #expect(try row(single).rating == 4)
+            try await model.redoOrganization()
+
+            // Restart: retire the worker and reopen the catalog in a fresh process.
+            try await model.close()
+            await model.connect(fixture.catalog.path)
+            #expect(model.error == nil && model.organizationUndo.isEmpty)
+            #expect(try row(single).rating == 2 && row(single).flag == "unflagged")
+            #expect(try multi.allSatisfy { try row($0).flag == "pick" && row($0).label == "Blue" })
+            let reopenedPeople = try #require(model.keywords.first { $0.name == "People" })
+            try await model.enterKeyword(reopenedPeople)
+            let reopenedAda = try #require(model.keywords.first { $0.name == "Ada" })
+            try await model.setFilters(flag: .some(.Pick), keyword: .some(reopenedAda))
+            #expect(model.assets.map(\.id) == [multi[0]])
+            try await model.clearFilters()
+            try await model.browse(collection: try model.group(named: "Portraits").id)
+            #expect(model.assets.isEmpty)
+        }
+    }
+
+    /// S05 AC3: on a 100,000-photo catalog every metadata filter, keyword and virtual-folder
+    /// query is one bounded page fetch; neither results nor keyword lists materialize the catalog.
+    @Test func largeSyntheticCatalogMetadataFilterKeywordAndCollectionQueriesStayWindowed() async throws {
+        let photos = 100_000, pageRows = 100
+        let fixture = try Fixture(images: 1)
+        try fixture.prepareSyntheticCatalog(count: photos)
+        try await fixture.run(create: false) { model in
+            @MainActor func checkWindow() {
+                #expect(model.assets.count <= pageRows && model.keywords.count <= pageRows && model.groups.count <= pageRows)
+                #expect(model.selection.count <= pageRows)
+            }
+            @MainActor func browseFetch(_ step: () async throws -> Void) async throws {
+                let before = await model.service.browseCalls
+                let started = ContinuousClock.now
+                try await step()
+                #expect(await model.service.browseCalls - before == 1)
+                #expect(await model.service.browseLimitHighWater <= UInt16(pageRows))
+                #expect(ContinuousClock.now - started < .seconds(30))
+                #expect(model.error == nil)
+                checkWindow()
+            }
+            @MainActor func listFetch(_ step: () async throws -> Void) async throws {
+                let before = await model.service.organizationListCalls
+                try await step()
+                #expect(await model.service.organizationListCalls - before == 1)
+                #expect(await model.service.organizationListLimitHighWater <= UInt16(pageRows))
+                checkWindow()
+            }
+            #expect(model.assets.count == pageRows)
+
+            // Each metadata filter, alone and combined, is a single bounded fetch.
+            try await browseFetch { try await model.setFilters(rating: .some(4)) }
+            #expect(model.assets.count == pageRows && model.hasMore && model.assets.allSatisfy { $0.rating == 4 })
+            try await browseFetch { try await model.setFilters(flag: .some(.Pick)) }
+            #expect(!model.assets.isEmpty && model.assets.allSatisfy { $0.rating == 4 && $0.flag == "pick" })
+            try await browseFetch { try await model.setFilters(label: .some("red")) }
+            #expect(model.assets.count == pageRows && model.assets.allSatisfy { $0.rating == 4 && $0.flag == "pick" && $0.label == "red" })
+            for _ in 0..<5 { try await browseFetch { #expect(await model.nextPage()) } }
+            try await browseFetch { try await model.clearFilters() }
+            #expect(model.assets.count == pageRows)
+
+            // Keyword lists page through a 10,000-child level one bounded page at a time.
+            try await listFetch { try await model.loadKeywords() }
+            #expect(Set(model.keywords.map(\.name)) == ["H", "Wide"])
+            let wide = try #require(model.keywords.first { $0.name == "Wide" })
+            let hierarchy = try #require(model.keywords.first { $0.name == "H" })
+            try await listFetch { try await model.enterKeyword(wide) }
+            #expect(model.keywords.count == pageRows && model.keywordNext != nil)
+            var seen = Set(model.keywords.map(\.id.value))
+            for _ in 0..<20 {
+                try await listFetch { try await model.nextKeywords() }
+                #expect(model.keywords.count == pageRows)
+                seen.formUnion(model.keywords.map(\.id.value))
+            }
+            #expect(seen.count == 21 * pageRows)
+            try await listFetch { try await model.loadKeywords(parent: hierarchy) }
+            let group = try #require(model.keywords.first { $0.name == "Group3" })
+
+            // Keyword filter (nested) and its combination with metadata filters.
+            try await browseFetch { try await model.setFilters(keyword: .some(group)) }
+            #expect(model.assets.count == pageRows && model.hasMore)
+            for _ in 0..<5 { try await browseFetch { #expect(await model.nextPage()) } }
+            try await browseFetch { try await model.setFilters(rating: .some(1)) }
+            #expect(!model.assets.isEmpty && model.assets.allSatisfy { $0.rating == 1 })
+            try await browseFetch { try await model.setFilters(keyword: .some(hierarchy)) }
+            // A residual filter may end a page at its scan budget; it then reports an incomplete page to continue.
+            #expect(model.assets.allSatisfy { $0.rating == 1 } && (model.assets.count == pageRows || (!model.pageComplete && model.hasMore)))
+            try await browseFetch { try await model.clearFilters() }
+
+            // Virtual folder: listing and member browsing are bounded fetches.
+            try await listFetch { try await model.loadGroups() }
+            let collection = try #require(model.groups.first { $0.id == "fixture-collection" })
+            try await browseFetch { try await model.browse(collection: collection.id) }
+            #expect(model.assets.count == pageRows && model.hasMore)
+            for _ in 0..<5 { try await browseFetch { #expect(await model.nextPage()) } }
+            try await browseFetch { try await model.setFilters(flag: .some(.Reject)) }
+            #expect(!model.assets.isEmpty && model.assets.allSatisfy { $0.flag == "reject" })
+            try await browseFetch { try await model.clearFilters() }
+            #expect(model.rowsHighWater <= pageRows)
+        }
+    }
+
     @Test func indexedVersionsAndSelectionRemainPagedAndRecoverCorruptRecord() async throws {
         let fixture = try Fixture(images: 1)
         defer { try? FileManager.default.removeItem(at: fixture.root) }

@@ -24,9 +24,9 @@ jobs:
         run: |
           python3 -m unittest scripts.tests.test_generate_s47_procedural_photos
           python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s47-fixtures" --seed 25317 --catalog-directory "$RUNNER_TEMP/s47-fixtures/WorkingVersions-1/Demo.catalog"
-          # The three S38 UI tests each need their own empty private working folder.
+          # The three S38 UI tests and the S05 organization UI test each need their own empty private working folder.
           python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s38-fixtures" --seed 25316
-          mkdir -m 700 "$RUNNER_TEMP/s38-fixtures/WorkingVersions-3"
+          mkdir -m 700 "$RUNNER_TEMP/s38-fixtures/WorkingVersions-3" "$RUNNER_TEMP/s38-fixtures/WorkingVersions-4"
       - name: Build source-bound owned helpers and UI-test scheme
         run: |
           ./scripts/build-native.sh
@@ -34,7 +34,7 @@ jobs:
           test -x .build/rust-catalog/release/lensworks-decode-worker
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
-      - name: Run the 100k-photo, command registry and S38 native tests
+      - name: Run the 100k-photo, organization, command registry and S38 native tests
         timeout-minutes: 30
         env:
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
@@ -52,10 +52,13 @@ jobs:
           # or a refused UI automation mode.
           ./scripts/ci/xcodebuild_test.sh NativeTests.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/largeSyntheticCatalogNavigationSelectionAndEditorTransitionStayWindowed()' \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/largeSyntheticCatalogMetadataFilterKeywordAndCollectionQueriesStayWindowed()' \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationControlsApplyToSingleAndSelectedPhotosUndoAndPersistAcrossRestart()' \
             -only-testing:CompositorTests/CommandRegistryTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
-            -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason
+            -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
+            -only-testing:CompositorUITests/CompositorUITests/testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo
       - name: Deliver the source-declared measured screenshot tolerance
         run: |
           python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance

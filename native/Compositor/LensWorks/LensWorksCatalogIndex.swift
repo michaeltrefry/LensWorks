@@ -16,6 +16,13 @@ nonisolated struct LensWorksSelectedRow: Sendable {
     let imageID: String
     let key: LWCatalogEditsVariantKey
 }
+/// One photo's recorded organization change: the applied operation and its exact
+/// inverse (nil when the photo already held the requested state).
+nonisolated struct LensWorksOrganizationRecord: Sendable {
+    let row: LensWorksSelectedRow
+    let forward: Data
+    let inverse: Data?
+}
 
 /// Rebuildable LensWorks metadata only. Native package records remain the version authority.
 /// Selection is disk-backed TEMP storage; neither browse nor save materializes the global registry.
@@ -102,7 +109,7 @@ actor LensWorksCatalogIndex {
         do {
             sqlite3_busy_timeout(pointer, 3000)
             sqlite3_progress_handler(pointer, 1000, { _ in Task.isCancelled ? 1 : 0 }, nil)
-            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
+            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE organization_history(step INTEGER NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,forward BLOB NOT NULL,inverse BLOB,PRIMARY KEY(step,image)); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
         } catch { sqlite3_close_v2(pointer); database = nil; throw error }
     }
     private func execute(_ sql: String) throws {
@@ -305,6 +312,52 @@ actor LensWorksCatalogIndex {
                 if step == SQLITE_DONE { return rows }
                 guard step == SQLITE_ROW else { throw failure() }
                 rows.append(LensWorksSelectedRow(imageID: text(prepared, 0), key: LWCatalogEditsVariantKey(asset_id: text(prepared, 1), variant_id: text(prepared, 2))))
+            }
+        }
+    }
+    /// Undo history is disk-backed TEMP storage written and read one bounded page at a time.
+    func recordOrganization(step: Int64, records: [LensWorksOrganizationRecord]) throws {
+        guard records.count <= 100 else { throw LensWorksManagedError.resourceLimit("Organization history admission exceeds one page.") }
+        try validate(records.map(\.row))
+        try open(); try execute("BEGIN IMMEDIATE")
+        do {
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            for record in records {
+                try statement("INSERT OR REPLACE INTO organization_history(step,image,asset,variant,forward,inverse) VALUES(?,?,?,?,?,?)", strings: ["", record.row.imageID, record.row.key.asset_id, record.row.key.variant_id]) { prepared in
+                    sqlite3_bind_int64(prepared, 1, step)
+                    guard record.forward.withUnsafeBytes({ sqlite3_bind_blob(prepared, 5, $0.baseAddress, Int32($0.count), transient) }) == SQLITE_OK else { throw failure() }
+                    if let inverse = record.inverse {
+                        guard inverse.withUnsafeBytes({ sqlite3_bind_blob(prepared, 6, $0.baseAddress, Int32($0.count), transient) }) == SQLITE_OK else { throw failure() }
+                    } else { sqlite3_bind_null(prepared, 6) }
+                    guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
+                }
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    func organizationRecords(step: Int64, after: String = "") throws -> [LensWorksOrganizationRecord] {
+        try statement("SELECT image,asset,variant,forward,inverse FROM organization_history WHERE step=? AND image>? ORDER BY image LIMIT 100", strings: ["", after]) { prepared in
+            sqlite3_bind_int64(prepared, 1, step)
+            func blob(_ column: Int32) -> Data? {
+                guard sqlite3_column_type(prepared, column) != SQLITE_NULL else { return nil }
+                let count = Int(sqlite3_column_bytes(prepared, column))
+                guard let bytes = sqlite3_column_blob(prepared, column) else { return Data() }
+                return Data(bytes: bytes, count: count)
+            }
+            var rows: [LensWorksOrganizationRecord] = []
+            while true {
+                let step = sqlite3_step(prepared)
+                if step == SQLITE_DONE { return rows }
+                guard step == SQLITE_ROW else { throw failure() }
+                rows.append(LensWorksOrganizationRecord(row: LensWorksSelectedRow(imageID: text(prepared, 0), key: LWCatalogEditsVariantKey(asset_id: text(prepared, 1), variant_id: text(prepared, 2))), forward: blob(3) ?? Data(), inverse: blob(4)))
+            }
+        }
+    }
+    func discardOrganization(steps: [Int64]) throws {
+        for step in steps {
+            try statement("DELETE FROM organization_history WHERE step=?", strings: [""]) { prepared in
+                sqlite3_bind_int64(prepared, 1, step)
+                guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
             }
         }
     }

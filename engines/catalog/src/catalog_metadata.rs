@@ -1655,6 +1655,31 @@ impl Catalog {
         }
         Ok(input)
     }
+    fn current_catalog_model(&self, asset: &str) -> Result<Option<i64>> {
+        Ok(self.db.query_row("SELECT m.id FROM image_metadata_sources s JOIN metadata_models m ON m.observation_id=s.current_observation WHERE s.asset_id=?1 AND s.kind='catalog' AND s.locator=?2 AND m.error IS NULL ORDER BY m.id DESC LIMIT 1",params![asset, b"local-metadata".as_slice()],|r|r.get(0)).optional()?)
+    }
+    /// Fields currently chosen from the catalog's own current observation,
+    /// excluding organization fields the caller already reconciles.
+    fn carried_catalog_fields(
+        &self,
+        asset: &str,
+        organization_fields: &[String],
+    ) -> Result<Vec<(String, Option<Vec<u8>>)>> {
+        let chosen = self.db.prepare("SELECT c.field,c.model_id,v.value FROM metadata_choices c JOIN metadata_values v ON v.model_id=c.model_id AND v.field=c.field JOIN metadata_models m ON m.id=c.model_id JOIN metadata_observations o ON o.id=m.observation_id JOIN image_metadata_sources s ON s.id=o.source_id AND s.asset_id=c.asset_id WHERE c.asset_id=?1 AND s.kind='catalog' AND s.locator=?2 AND s.current_observation=o.id ORDER BY c.field")?.query_map(params![asset, b"local-metadata".as_slice()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut fields = Vec::new();
+        for (field, model, value) in chosen {
+            if organization_fields.contains(&field) || xmp::field_address(&field).is_none() {
+                continue;
+            }
+            let bytes = if serde_json::from_str::<Value>(&value)? == Value::Removed {
+                None
+            } else {
+                Some(self.editable_metadata_model(asset, model)?)
+            };
+            fields.push((field, bytes));
+        }
+        Ok(fields)
+    }
     pub(crate) fn edit_metadata_commit(
         &mut self,
         asset: &str,
@@ -1696,7 +1721,21 @@ impl Catalog {
             )),
             "organization field can affect pixels"
         );
-        let input = self.organization_edit_input(asset, base_model, organization_fields)?;
+        // Without an explicit base, continue from the catalog's current authored
+        // model so unknown/Adobe/structured properties it carries are not dropped.
+        let base_model = match base_model {
+            Some(model) => Some(model),
+            None => self.current_catalog_model(asset)?,
+        };
+        let mut input = self.organization_edit_input(asset, base_model, organization_fields)?;
+        // The new catalog observation supersedes the current one, so every field
+        // whose choice is catalog-authored is carried into it. Otherwise a later
+        // edit on a different base would orphan that choice (e.g. a keyword
+        // assigned before a rating edit) and surface a spurious conflict.
+        let carried = self.carried_catalog_fields(asset, organization_fields)?;
+        if !carried.is_empty() {
+            input = xmp::reconcile_fields(&input, &carried)?;
+        }
         let bytes = if organization_fields.is_empty() {
             xmp::apply_edits(&input, edits)?
         } else {

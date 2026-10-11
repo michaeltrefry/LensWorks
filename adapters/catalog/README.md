@@ -304,7 +304,7 @@ with the default parallel harness; the dedicated blocked-callback fixture itself
 cancellation and teardown. Planned inventory profiles and wire round trips
 are reported separately from actual retained-service lifecycle acceptance.
 
-The tests separately validate all 357 request specimens and 621 standalone
+The tests separately validate all 358 request specimens and 621 standalone
 enum specimens against the pinned public Rust serde types. Actual adapter
 fixtures exercise organization, metadata input/review/commit and sidecar
 publication, edit copy, preview byte ownership, backup restore, source authority,
@@ -317,15 +317,15 @@ TIFF has doubled RGB and unchanged alpha, exact frozen authority and a receipt;
 original bytes/mtime remain unchanged. A real stopped-worker fixture uses only
 its own child PID, verifies finite `draining` polls, resumes and checks reaping.
 
-The pin has a known combined-state fault: assigning a hierarchical keyword,
-then preparing/committing a rating edit with `base_model: null`, can leave a
-keyword choice pointing at an old model with no current candidate. Fields
-reports a conflict; Candidates has no legal replacement; SidecarPlan returns
-`resolve metadata conflicts before export`. The adapter forwards this failure
-and preserves source bytes. The regression fixture
-`managed_retained_organization_xmp_conflict_rejects_sidecar_without_source_effects`
-records the exact request sequence. Repair requires explicit full-base authority
-and candidate reconciliation or a reviewed retained-source correction; no model
-or database authority is synthesized here. Successful sidecar fixtures pass a
+A catalog metadata edit supersedes the catalog's current authored observation,
+so the engine carries every catalog-chosen field into the new model and, when no
+explicit base is given, continues from the current catalog model. A hierarchical
+keyword followed by a rating edit with `base_model: null` therefore keeps the
+keyword choice and unknown/Adobe/structured properties; sidecar output succeeds.
+`managed_organization_preserves_unknown_adobe_structured_xmp_through_sidecar_output`
+covers that path and
+`managed_source_conflict_is_surfaced_and_never_silently_overwritten` covers a
+genuine source disagreement, which organization edits and SidecarPlan refuse.
+Successful sidecar fixtures pass a
 physically canonical destination because the retained worker checks exact path
 authority against its canonical plan.

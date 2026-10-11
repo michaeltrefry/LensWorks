@@ -1305,6 +1305,7 @@ fn during_relink_hold(request: &Request) -> bool {
                 | organization::Request::Placement { .. }
                 | organization::Request::Members { .. }
                 | organization::Request::Identity { .. }
+                | organization::Request::Membership { .. }
                 | organization::Request::Job { .. }
                 | organization::Request::Jobs { .. }
                 | organization::Request::Items { .. }

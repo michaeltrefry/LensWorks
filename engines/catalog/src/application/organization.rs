@@ -80,6 +80,12 @@ pub enum Request {
         collection: String,
         position: I64,
     },
+    /// Point lookups of one image's direct keyword and collection membership.
+    Membership {
+        key: VariantKey,
+        keyword: Option<KeywordTarget>,
+        collection: Option<String>,
+    },
     Apply {
         key: VariantKey,
         expected_revision: I64,
@@ -118,6 +124,12 @@ pub enum Request {
         key: VariantKey,
         new_revision: Option<I64>,
     },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeywordTarget {
+    pub kind: core::KeywordKind,
+    pub path: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -284,6 +296,10 @@ pub enum Response {
     Placement(Placement),
     Members(MembershipPage),
     Identity(ImageIdentity),
+    Membership {
+        keyword: Option<bool>,
+        collection: Option<bool>,
+    },
     Changed { revision: I64 },
     Acknowledged,
     Job(Job),
@@ -656,6 +672,30 @@ pub fn execute(catalog: &mut Catalog, request: Request, bounds: &Limits) -> Resu
                     .into(),
             )
         }
+        Request::Membership {
+            key: target,
+            keyword,
+            collection,
+        } => {
+            key(&target)?;
+            if let Some(v) = &keyword {
+                path(v.kind, &v.path)?;
+            }
+            if let Some(v) = &collection {
+                text(v, false)?;
+            }
+            let (keyword, collection) = catalog
+                .image_organization_membership(
+                    &target,
+                    keyword.as_ref().map(|v| (v.kind, v.path.as_slice())),
+                    collection.as_deref(),
+                )
+                .map_err(native)?;
+            Response::Membership {
+                keyword,
+                collection,
+            }
+        }
         Request::Members {
             collection,
             after,
@@ -948,6 +988,82 @@ mod tests {
             panic!()
         };
         Ok(page.rows)
+    }
+    fn membership(
+        c: &mut Catalog,
+        key: &VariantKey,
+        collection: &str,
+    ) -> anyhow::Result<(Option<bool>, Option<bool>)> {
+        let Response::Membership {
+            keyword,
+            collection,
+        } = call(
+            c,
+            Request::Membership {
+                key: key.clone(),
+                keyword: Some(KeywordTarget {
+                    kind: core::KeywordKind::Hierarchical,
+                    path: vec!["People".into(), "Ada".into()],
+                }),
+                collection: Some(collection.into()),
+            },
+        )?
+        else {
+            panic!()
+        };
+        Ok((keyword, collection))
+    }
+    #[test]
+    fn membership_reports_direct_keyword_and_collection_before_and_after_apply()
+    -> anyhow::Result<()> {
+        let (_temp, mut c, key) = fixture()?;
+        let Response::CollectionCreated { id } = call(
+            &mut c,
+            Request::CreateCollection {
+                name: "Portraits".into(),
+            },
+        )?
+        else {
+            panic!()
+        };
+        assert_eq!(membership(&mut c, &key, &id)?, (Some(false), Some(false)));
+        for operation in [
+            core::Operation::AddKeyword {
+                kind: core::KeywordKind::Hierarchical,
+                path: vec!["People".into(), "Ada".into()],
+            },
+            core::Operation::AddCollection {
+                collection: id.clone(),
+            },
+        ] {
+            let expected_revision = revision(&c, &key)?;
+            call(
+                &mut c,
+                Request::Apply {
+                    key: key.clone(),
+                    expected_revision,
+                    operation,
+                },
+            )?;
+        }
+        assert_eq!(membership(&mut c, &key, &id)?, (Some(true), Some(true)));
+        // An ancestor is held indirectly, not directly.
+        let Response::Membership { keyword, collection } = call(
+            &mut c,
+            Request::Membership {
+                key: key.clone(),
+                keyword: Some(KeywordTarget {
+                    kind: core::KeywordKind::Hierarchical,
+                    path: vec!["People".into()],
+                }),
+                collection: None,
+            },
+        )?
+        else {
+            panic!()
+        };
+        assert_eq!((keyword, collection), (Some(false), None));
+        Ok(())
     }
     #[test]
     fn variant_batch_is_durable_single_unit_cancelable_and_never_becomes_master()
