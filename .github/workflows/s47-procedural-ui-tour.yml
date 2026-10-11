@@ -52,8 +52,11 @@ jobs:
           s06="$TEST_RUNNER_LW_S38_FIXTURE_ROOT/S06"
           mkdir -p "$s06" && mkdir -m 700 "$s06/WorkingVersions"
           cp -R "$TEST_RUNNER_LW_S38_FIXTURE_ROOT/photos" "$s06/Photos"
+          # Catalog preferences (last catalog, import checkpoint) go to a throwaway suite, never the app's own domain.
+          suite="net.trefry.lensworks.ci-s06-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'defaults delete "$suite" >/dev/null 2>&1 || true; rm -f "$HOME/Library/Preferences/$suite.plist"' EXIT
           .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/MacOS/LensWorks --lensworks-catalog "$s06/Demo.catalog" --lensworks-create-catalog \
-            --lensworks-import "$s06/Photos" --lensworks-evidence "$s06/import-evidence.json" --lensworks-quit -ApplePersistenceIgnoreState YES
+            --lensworks-import "$s06/Photos" --lensworks-evidence "$s06/import-evidence.json" --lensworks-defaults-suite "$suite" --lensworks-quit -ApplePersistenceIgnoreState YES
           python3 -c 'import json, sys; e = json.load(open(sys.argv[1])); assert e["assetCount"] == 8 and not e["error"], e' "$s06/import-evidence.json"
           mv "$s06/Photos" "$s06/Moved Photos"
           # Swift Testing results do not appear in XCTest's "Executed N tests"

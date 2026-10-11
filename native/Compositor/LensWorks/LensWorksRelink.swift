@@ -20,6 +20,8 @@ nonisolated enum LensWorksOriginalAvailability {
         default: "Original unavailable"
         }
     }
+    /// Shown while a photo's original has not been observed yet; gated actions stay disabled.
+    static let checking = "Checking original… Full-resolution work is enabled once the original’s current location is observed."
     /// The explanation shown on every control that needs the full-resolution original.
     static func reason(_ status: LWCatalogStorageStorageStatus) -> String? {
         guard !isAvailable(status) else { return nil }
@@ -127,6 +129,9 @@ final class LensWorksRelinkReview {
     /// The most recently applied review in this session, offered as one Undo step.
     private(set) var lastApplied: LWApplicationRelinkPlan?
     private(set) var admitting = false
+    /// Candidates chosen per original in the current review, submitted together as one revision
+    /// (the engine re-prepares a whole review per revision, so choices are batched).
+    private(set) var chosenCandidates: [String: LWCatalogNativePath] = [:]
     @ObservationIgnored private var epoch: UInt64 = 0
     static let pageLimit: UInt64 = 20
     static let batchRows: UInt64 = 64
@@ -143,7 +148,7 @@ final class LensWorksRelinkReview {
         epoch &+= 1
         operation = nil; plan = nil; items = []; itemsNext = nil; itemsStart = LWCatalogI64(0)
         rules = []; rulesNext = nil; plans = []; plansNext = nil; sources = [:]; sourcesNext = [:]
-        mounts = nil; original = nil; lastApplied = nil; admitting = false
+        mounts = nil; original = nil; lastApplied = nil; admitting = false; chosenCandidates = [:]
     }
 
     private func owner() throws -> (LensWorksCatalog, LensWorksCatalogScope, UInt64) {
@@ -202,6 +207,13 @@ final class LensWorksRelinkReview {
         let done = try await run(.Revise(plan: plan.id, revision: plan.revision, changes: changes))
         try await adopt(done)
         if let next = self.plan, ["preparing", "checking"].contains(next.state) { try await prepare() }
+    }
+    /// Chooses (or with nil, unchooses) one listed candidate for an original in this review.
+    func choose(assetID: String, candidate: LWCatalogNativePath?) { chosenCandidates[assetID] = candidate }
+    /// Revises the review once with every chosen candidate; on success the choices are consumed.
+    func reviseChosen() async throws {
+        guard !chosenCandidates.isEmpty else { throw LensWorksCatalogError.message("Choose a candidate first.") }
+        try await revise(chosenCandidates.sorted { $0.key < $1.key }.map { .Asset(asset_id: $0.key, candidates: [$0.value]) })
     }
     func confirm() async throws {
         let plan = try requirePlan()
@@ -334,6 +346,7 @@ final class LensWorksRelinkReview {
         else if let value = done.plan { try await publish(value) }
     }
     private func publish(_ value: LWApplicationRelinkPlan) async throws {
+        if plan?.id != value.id { chosenCandidates = [:] }
         plan = value; items = []; itemsNext = nil; itemsStart = LWCatalogI64(0); sources = [:]; sourcesNext = [:]; rules = []; rulesNext = nil
         if value.state != "preparing" {
             try await loadItems()

@@ -258,6 +258,10 @@ struct LensWorksRelinkSheet: View {
                         Button("Confirm Reviewed Associations") { attempt { try await review.confirm(); acknowledged = false } }.disabled(busy || !acknowledged)
                     }
                 }
+                if !review.chosenCandidates.isEmpty {
+                    Button("Revise with \(review.chosenCandidates.count) Chosen Candidate(s)") { attempt { try await review.reviseChosen() } }
+                        .disabled(busy || plan.state == "applied").accessibilityIdentifier("LensWorks.relinkReviseChosen")
+                }
                 let reason = review.applyUnavailableReason
                 HStack {
                     Button("Apply Relink" + (reason.map { " — " + $0 } ?? "")) { attempt { try await review.apply() } }
@@ -333,7 +337,15 @@ struct LensWorksRelinkSheet: View {
             Text(LensWorksRelinkPaths.identity(item.identity_basis)).font(.caption2).foregroundStyle(.secondary)
             if let destination = item.destination { Text("Reviewed destination: " + LensWorksRelinkPaths.label(destination)).font(.caption2) }
             ForEach(Array(item.candidates.enumerated()), id: \.offset) { _, candidate in
-                Text(LensWorksRelinkPaths.label(candidate.path) + " · " + LensWorksRelinkPaths.status(candidate.status) + ": " + candidate.detail).font(.caption2)
+                HStack {
+                    Text(LensWorksRelinkPaths.label(candidate.path) + " · " + LensWorksRelinkPaths.status(candidate.status) + ": " + candidate.detail).font(.caption2)
+                    Spacer()
+                    if candidate.status != .Mismatch {
+                        let chosen = review.chosenCandidates[item.asset_id] == candidate.path
+                        Button(chosen ? "Chosen ✓" : "Use This Candidate") { review.choose(assetID: item.asset_id, candidate: chosen ? nil : candidate.path) }
+                            .font(.caption2).disabled(busy).accessibilityIdentifier("LensWorks.relinkUseCandidate")
+                    }
+                }
             }
             LensWorksRelinkCandidateChange(busy: busy, window: window) { candidates in
                 attempt { try await review.revise([.Asset(asset_id: item.asset_id, candidates: candidates)]) }

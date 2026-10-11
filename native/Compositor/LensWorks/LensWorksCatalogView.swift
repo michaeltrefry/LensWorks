@@ -173,22 +173,28 @@ struct LensWorksCatalogWorkspace: View {
         if let version = catalog.selectedVersions.first { await catalog.openVersion(version, workspace: workspace) }
         else { await catalog.createWorkingVersion(workspace: workspace) }
     }
-    /// The selected original's observed availability, re-observed whenever the selection changes.
+    /// The selected original's observed availability, re-observed whenever the selection changes or
+    /// a cached observation is forgotten (refresh, relink, volume mount/unmount/rename). Until an
+    /// observation succeeds it reads as unknown and gated actions stay disabled; failures retry.
     private func originalAvailability(_ asset: LensWorksCatalogAsset) -> some View {
         let status = catalog.originalStatus(asset)
-        let text = status.map { LensWorksOriginalAvailability.headline($0) } ?? "Checking original…"
+        let failure = catalog.originalObservationErrors[asset.photoID]
+        let text = status.map { LensWorksOriginalAvailability.headline($0) } ?? (failure == nil ? "Checking original…" : "Original check failed")
         return HStack {
-            Label(text, systemImage: status.map { LensWorksOriginalAvailability.isAvailable($0) ? "checkmark.circle" : "externaldrive.badge.xmark" } ?? "clock")
-                .font(.caption).help(status?.detail ?? "Observing the original’s current location")
+            Label(text, systemImage: status.map { LensWorksOriginalAvailability.isAvailable($0) ? "checkmark.circle" : "externaldrive.badge.xmark" } ?? (failure == nil ? "clock" : "exclamationmark.triangle"))
+                .font(.caption).help(status?.detail ?? catalog.originalUnavailableReason(asset) ?? "")
                 .accessibilityIdentifier("LensWorks.originalAvailability").accessibilityValue(text)
             if let status, !LensWorksOriginalAvailability.isAvailable(status) {
                 Button("Locate Original…") { locate(.original) }.font(.caption).accessibilityIdentifier("LensWorks.locateOriginal")
             }
         }.task(id: String(catalog.catalogEpoch) + "/" + asset.photoID + "/" + String(status == nil)) {
-            guard status == nil else { return }
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled else { return }
-            await catalog.observeSelectedOriginal()
+            var delay = 150
+            while !Task.isCancelled, catalog.originalStatus(asset) == nil {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard !Task.isCancelled else { return }
+                await catalog.observeSelectedOriginal()
+                delay = min(delay * 3, 5_000)
+            }
         }
     }
     private func importSummary(_ progress: LWApplicationDtoImportStatus) -> String {
