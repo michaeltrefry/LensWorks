@@ -15,6 +15,12 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
     // Schema-1 records predating logical copies describe the retained master.
     var sourceVariantID: String { originalVariantKey?.variant_id ?? "master" }
 
+    /// The same version (identity, photo, copy and project) at its original's relinked location.
+    func relinked(originalPath: String, native: LWCatalogNativePath?) -> Self {
+        LensWorksWorkingVersion(id: id, photoID: photoID, catalogPath: catalogPath, originalPath: originalPath, projectPath: projectPath,
+            name: name, originalNativePath: native, originalVariantKey: originalVariantKey)
+    }
+
     static func sidecar(for project: URL) -> URL {
         project.appendingPathExtension("lensworks.json")
     }

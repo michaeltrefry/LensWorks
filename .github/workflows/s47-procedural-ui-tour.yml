@@ -34,7 +34,7 @@ jobs:
           test -x .build/rust-catalog/release/lensworks-decode-worker
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
-      - name: Run the 100k-photo, organization, command registry and S38 native tests
+      - name: Run the 100k-photo, organization, offline relink, command registry and S38 native tests
         timeout-minutes: 30
         env:
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
@@ -56,11 +56,13 @@ jobs:
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationControlsApplyToSingleAndSelectedPhotosUndoAndPersistAcrossRestart()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/organizationUndoIsExactSkipsLaterChangesAndRestoresPositions()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/keywordRenameMoveDeleteAndSynonymsFollowNestedKeywordsAndUndo()' \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/offlineSourceBrowsesOrganizesAndRelinksWithoutChangingIdentity()' \
             -only-testing:CompositorTests/CommandRegistryTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
             -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
-            -only-testing:CompositorUITests/CompositorUITests/testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo
+            -only-testing:CompositorUITests/CompositorUITests/testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo \
+            -only-testing:CompositorUITests/CompositorUITests/testS06OfflineSourceOrganizesAndFolderRelinkAppliesAndUndoes
       - name: Deliver the source-declared measured screenshot tolerance
         run: |
           python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance

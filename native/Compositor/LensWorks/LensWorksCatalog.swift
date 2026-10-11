@@ -847,6 +847,10 @@ final class LensWorksCatalog {
     var error: String?
     var status = "Open or create a catalog to begin."
     @ObservationIgnored let service: LensWorksCatalogService
+    /// Locate Originals review and storage-operation custody for this catalog.
+    @ObservationIgnored let relink = LensWorksRelinkReview()
+    /// Observed original availability, by catalog photo (shared by its logical copies).
+    private(set) var originalStatuses: [String: LWCatalogStorageStorageStatus] = [:]
     @ObservationIgnored let index: LensWorksCatalogIndex
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let migrateLegacy: Bool
@@ -892,6 +896,7 @@ final class LensWorksCatalog {
         service = catalogService ?? LensWorksCatalogService(configuration: configuration)
         self.index = index; self.defaults = defaults; self.migrateLegacy = migrateLegacy
         rowLimit = min(100, configuration?.limits?.page_rows ?? 100)
+        relink.catalog = self
     }
     private func beginBusy() -> UUID { let owner = UUID(); busyOwner = owner; return owner }
     private func finishBusy(_ owner: UUID) { if busyOwner == owner { busyOwner = nil } }
@@ -937,6 +942,7 @@ final class LensWorksCatalog {
         }
         selectionOwner = UUID().uuidString; queryOwner = UUID().uuidString; selectionCount = 0; selectionAnchor = nil
         catalogPath = nil; assets = []; versions = []; selectedPhotoID = nil
+        relink.reset(); originalStatuses = [:]
         hasMore = false; pageStart = 0; cursorWindow.reset()
         folders = []; groups = []; placements = [:]; folderTrail = []; folderParent = nil; folderNext = nil; groupNext = nil; catalogToken = nil; selection = []; importProgress = nil
         keywords = []; keywordParent = nil; keywordNext = nil; keywordTrail = []; keywordEpoch &+= 1
@@ -1224,6 +1230,7 @@ final class LensWorksCatalog {
     }
     func refresh() async {
         guard !Task.isCancelled, !closingRequested else { return }
+        originalStatuses = [:] // A drive may have connected or disconnected; re-observe on demand.
         let scope = captureScope(), parent = folderParent
         let navigation = folderEpoch, groupsNavigation = groupEpoch, refreshedQuery = queryEpoch &+ 1
         do {
@@ -1530,10 +1537,13 @@ final class LensWorksCatalog {
             guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, label.utf8.count <= 1024 else { throw LensWorksCatalogError.message("Supply a nonempty catalog copy name of at most 1,024 UTF-8 bytes.") }
         case .recipe(.exposure(let value)):
             guard value.isFinite else { throw LensWorksCatalogError.message("Exposure must be finite.") }
+            try requireFullResolutionOriginal(asset)
         case .recipe(.undo):
             guard current.can_undo else { throw LensWorksCatalogError.message("This catalog recipe has no Undo step.") }
+            try requireFullResolutionOriginal(asset)
         case .recipe(.redo):
             guard current.can_redo else { throw LensWorksCatalogError.message("This catalog recipe has no Redo step.") }
+            try requireFullResolutionOriginal(asset)
         case .rating(let value):
             guard value <= 5 else { throw LensWorksCatalogError.message("Rating must be 0–5.") }
         case .selectVariant(let target):
@@ -2418,6 +2428,7 @@ final class LensWorksCatalog {
         let scope = captureScope(), selectedID = selected.id
         let busy = beginBusy(); defer { finishBusy(busy) }
         do {
+            if let reason = selectedOriginalUnavailableReason { error = reason; return }
             let asset = try await resolveSelectedOriginal()
             try checkScope(scope)
             guard selectedAsset?.id == selectedID else { throw CancellationError() }
@@ -2462,13 +2473,20 @@ final class LensWorksCatalog {
         guard version.catalogPath == scope.path, let selected = selectedAsset,
               selected.photoID == version.photoID, (selected.key?.variant_id ?? "master") == version.sourceVariantID else { return }
         let busy = beginBusy(); defer { finishBusy(busy) }
-        do { _ = try await resolveSelectedOriginal() }
+        let resolved: LensWorksCatalogAsset
+        do { resolved = try await resolveSelectedOriginal() }
         catch {
             if !(error is CancellationError), scopeIsCurrent(scope) { self.error = error.localizedDescription }
             return
         }
+        // The document carries its own full-resolution layers, so it opens with its original offline.
         let opened = await workspace.open(URL(fileURLWithPath: version.projectPath))
         guard scopeIsCurrent(scope), opened else { return }
+        // A relinked original keeps the version's identity; its next save records the current location.
+        if let current = workspace.current.controller.workingVersion, current.id == version.id, current.photoID == resolved.photoID,
+           current.originalPath != resolved.originalPath || current.originalNativePath != resolved.nativeOriginal {
+            workspace.current.controller.workingVersion = current.relinked(originalPath: resolved.originalPath, native: resolved.nativeOriginal)
+        }
         selectedPhotoID = assets.first { $0.photoID == version.photoID && $0.key?.variant_id == version.sourceVariantID }?.id
         showingCatalog = false
         defaults.set(version.projectPath, forKey: "LensWorks.lastWorkingVersion")
@@ -2521,6 +2539,7 @@ final class LensWorksCatalog {
         lastClosedCatalogPath = catalogPath
         try await index.clearSelection(owner: selectionOwner); try await index.clearVisits(owner: queryOwner)
         catalogPath = nil; catalogToken = nil; assets = []; folders = []; groups = []; placements = [:]
+        relink.reset(); originalStatuses = [:]
         keywords = []; keywordParent = nil; keywordNext = nil; keywordTrail = []
         await resetOrganizationHistory()
         selection = []; selectedPhotoID = nil; cursorWindow.reset(); hasMore = false
@@ -2637,5 +2656,37 @@ final class LensWorksCatalog {
             // Let this Swift task release the main actor before AppKit waits for the asynchronous quit reply.
             NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
         }
+    }
+}
+
+// MARK: Offline originals and relinking
+extension LensWorksCatalog {
+    func originalStatus(_ asset: LensWorksCatalogAsset) -> LWCatalogStorageStorageStatus? { originalStatuses[asset.photoID] }
+    /// Why full-resolution work on the selected photo is unavailable, or nil when its
+    /// original was observed readable or has not been observed yet.
+    var selectedOriginalUnavailableReason: String? {
+        guard let asset = selectedAsset, let status = originalStatus(asset) else { return nil }
+        return LensWorksOriginalAvailability.reason(status)
+    }
+    func requireFullResolutionOriginal(_ asset: LensWorksCatalogAsset) throws {
+        if let status = originalStatus(asset), let reason = LensWorksOriginalAvailability.reason(status) { throw LensWorksCatalogError.message(reason) }
+    }
+    /// Observes the selected photo's original location. Failures leave availability unknown;
+    /// every full-resolution action still checks its own source when it runs.
+    func observeSelectedOriginal() async {
+        guard !closingRequested, let asset = selectedAsset, let key = asset.key, !relink.isRunning else { return }
+        let scope = captureScope()
+        do {
+            let value = try await relink.observeOriginal(key)
+            try checkScope(scope)
+            originalStatuses[key.asset_id] = value.status
+        } catch {}
+    }
+    /// After an applied or undone relink: availability is re-observed and browse rows,
+    /// folders and working versions refresh. Photo, copy and version identities are unchanged.
+    func relinkChanged() async {
+        originalStatuses = [:]
+        await refresh()
+        await observeSelectedOriginal()
     }
 }

@@ -1541,3 +1541,237 @@ fn managed_organization_metadata_write_copy_preview_backup_restore_lifecycles() 
     assert_eq!(image["value"]["data"]["key"], key);
     shutdown(&next);
 }
+
+/// Polls one relink storage operation to its terminal status without asserting success.
+fn relink_operation(s: &str, c: &str, request: Value) -> Value {
+    let started = family(s, c, "relink", request);
+    assert_eq!(started["kind"], "operation", "{started}");
+    let id = started["value"]["id"].as_str().unwrap().to_owned();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let v = family(
+            s,
+            c,
+            "relink",
+            json!({"command":"status","args":{"operation":id}}),
+        );
+        let op = &v["value"];
+        let terminal = ["complete", "canceled", "failed"].contains(&op["phase"].as_str().unwrap());
+        if terminal && op["write_hold"] == false {
+            return op.clone();
+        }
+        assert!(Instant::now() < until, "relink timeout {v}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// S06 through the managed ABI the native app uses: with the source tree renamed away
+/// (unmount-like), organization still writes and the original reports missing;
+/// content-verified prefix reviews expose mismatch and ambiguity, a review with any
+/// unresolved row is refused as a whole, the recursive relink applies in one step and
+/// one Undo reverses it. Identities and metadata survive; no source file moves.
+#[test]
+fn managed_offline_tree_organizes_and_relinks_by_content_atomically_without_moving_files() {
+    let _scope = TestScope::new();
+    let temp = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    TEST_ROOTS.with(|v| v.borrow_mut().push(temp.clone()));
+    let root = temp.path().canonicalize().unwrap();
+    let originals = root.join("originals");
+    std::fs::create_dir_all(originals.join("nested/deeper")).unwrap();
+    let files = ["a.png", "nested/b.png", "nested/deeper/c.png"];
+    for (index, name) in files.iter().enumerate() {
+        image::RgbImage::from_pixel(24, 16, image::Rgb([30 + index as u8 * 40, 60, 90]))
+            .save(originals.join(name))
+            .unwrap();
+    }
+    let bytes = |at: &Path| -> Vec<Vec<u8>> {
+        files
+            .iter()
+            .map(|f| std::fs::read(at.join(f)).unwrap())
+            .collect()
+    };
+    let online = bytes(&originals);
+    let s = session(
+        Path::new(env!("CARGO_BIN_EXE_lensworks-decode-worker")),
+        &root,
+    );
+    let create = rpc(
+        &s,
+        json!({"command":"create","args":{"path":native(&root.join("catalog"))}}),
+    );
+    assert_eq!(create["status"], "ok", "{create}");
+    let c = create["value"]["data"]["catalog"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let start = rpc(
+        &s,
+        json!({"command":"import_start","args":{"catalog":c,"source":native(&originals)}}),
+    );
+    assert_eq!(start["status"], "ok", "{start}");
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let v = rpc(&s, json!({"command":"import_status","args":{"catalog":c}}));
+        let phase = &v["value"]["data"]["phase"];
+        if phase == "complete" {
+            break;
+        }
+        assert!(phase != "failed", "{v}");
+        assert!(Instant::now() < until, "import timeout {v}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let images = || -> Vec<Value> {
+        let v = rpc(
+            &s,
+            json!({"command":"images","args":{"catalog":c,"folder":null,"recursive":true,"text":null,"cursor":null,"limit":10}}),
+        );
+        assert_eq!(v["status"], "ok", "{v}");
+        v["value"]["data"]["rows"].as_array().unwrap().clone()
+    };
+    let mut keys: Vec<Value> = images().iter().map(|row| row["key"].clone()).collect();
+    keys.sort_by(|a, b| a["asset_id"].as_str().cmp(&b["asset_id"].as_str()));
+    assert_eq!(keys.len(), 3);
+    let state = |key: &Value| -> String {
+        let op = relink_operation(&s, &c, json!({"command":"original","args":{"key":key}}));
+        assert_eq!(op["phase"], "complete", "{op}");
+        op["result"]["value"]["status"]["state"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let available =
+        |key: &Value| ["online_unverified", "available_unverified"].contains(&state(key).as_str());
+    let review = |destinations: Vec<&Path>| -> (Value, Vec<Value>) {
+        let begun = family(
+            &s,
+            &c,
+            "relink",
+            json!({"command":"begin","args":{"scope":{"scope":"prefix","value":{"from":{"Native":native(&originals)},"destinations":destinations.into_iter().map(native).collect::<Vec<_>>()}}}}),
+        );
+        assert_eq!(begun["kind"], "plan", "{begun}");
+        let plan = &begun["value"];
+        let op = relink_operation(
+            &s,
+            &c,
+            json!({"command":"prepare","args":{"plan":plan["id"],"revision":plan["revision"],"batch_rows":"64"}}),
+        );
+        assert_eq!(op["phase"], "complete", "{op}");
+        let plan = op["plan"].clone();
+        let items = family(
+            &s,
+            &c,
+            "relink",
+            json!({"command":"items","args":{"plan":plan["id"],"revision":plan["revision"],"after":"0","limit":"10"}}),
+        );
+        (plan, items["value"]["rows"].as_array().unwrap().clone())
+    };
+    let apply = |plan: &Value| {
+        relink_operation(
+            &s,
+            &c,
+            json!({"command":"apply","args":{"plan":plan["id"],"revision":plan["revision"]}}),
+        )
+    };
+    for key in &keys {
+        assert!(available(key));
+    }
+
+    // Disconnect: the whole tree leaves its recorded location.
+    let moved = root.join("moved");
+    std::fs::rename(&originals, &moved).unwrap();
+    for key in &keys {
+        assert_eq!(state(key), "missing");
+    }
+    // Organization keeps writing offline.
+    let rated = organize(&s, &c, &keys[0], json!({"operation":"rating","value":4}));
+    assert_eq!(rated["status"], "ok", "{rated}");
+    let keyword = organize(
+        &s,
+        &c,
+        &keys[0],
+        json!({"operation":"add_keyword","kind":"hierarchical","path":["Trips","Offline"]}),
+    );
+    assert_eq!(keyword["status"], "ok", "{keyword}");
+    let organized = organization_state(&s, &c, &keys[0]);
+    assert_eq!(organized["rating"], "4", "{organized}");
+
+    // Same names, different bytes: every row is a mismatch and Apply is refused.
+    let wrong = root.join("wrong");
+    for (name, data) in files.iter().zip(&online) {
+        std::fs::create_dir_all(wrong.join(name).parent().unwrap()).unwrap();
+        std::fs::write(wrong.join(name), [data.as_slice(), b"x"].concat()).unwrap();
+    }
+    let (plan, items) = review(vec![&wrong]);
+    assert!(
+        items.len() == 3 && items.iter().all(|i| i["status"] == "mismatch"),
+        "{items:?}"
+    );
+    assert_eq!(apply(&plan)["phase"], "failed");
+
+    // Identical bytes at two destinations: ambiguous until chosen explicitly.
+    let duplicate = root.join("duplicate");
+    let mixed = root.join("mixed");
+    for name in files {
+        for target in [&duplicate, &mixed] {
+            std::fs::create_dir_all(target.join(name).parent().unwrap()).unwrap();
+            std::fs::copy(moved.join(name), target.join(name)).unwrap();
+        }
+    }
+    let (_, items) = review(vec![&moved, &duplicate]);
+    assert!(
+        items.iter().all(|i| i["status"] == "ambiguous"),
+        "{items:?}"
+    );
+
+    // One wrong file among correct ones: the whole review is refused; nothing changes.
+    std::fs::write(mixed.join(files[2]), b"not the original").unwrap();
+    let (plan, items) = review(vec![&mixed]);
+    assert_eq!(
+        (&plan["matched"], &plan["unresolved"]),
+        (&json!("2"), &json!("1")),
+        "{plan}"
+    );
+    assert_eq!(
+        items.iter().filter(|i| i["status"] == "mismatch").count(),
+        1
+    );
+    assert_eq!(apply(&plan)["phase"], "failed");
+    for key in &keys {
+        assert_eq!(state(key), "missing");
+    }
+
+    // The recursive folder relink: all match and apply once.
+    let (plan, items) = review(vec![&moved]);
+    assert!(items.iter().all(|i| i["status"] == "matched"), "{items:?}");
+    let applied = apply(&plan);
+    assert_eq!(applied["phase"], "complete", "{applied}");
+    let applied = applied["plan"].clone();
+    assert_eq!(applied["state"], "applied");
+    for key in &keys {
+        assert!(available(key));
+    }
+    let mut after: Vec<Value> = images().iter().map(|row| row["key"].clone()).collect();
+    after.sort_by(|a, b| a["asset_id"].as_str().cmp(&b["asset_id"].as_str()));
+    assert_eq!(after, keys);
+    let kept = organization_state(&s, &c, &keys[0]);
+    assert_eq!(kept["rating"], "4", "{kept}");
+    assert_eq!(kept["keywords"], organized["keywords"], "{kept}");
+
+    // One Undo step restores every previous association.
+    let undone = relink_operation(
+        &s,
+        &c,
+        json!({"command":"undo","args":{"plan":applied["id"],"revision":applied["revision"]}}),
+    );
+    assert_eq!(undone["phase"], "complete", "{undone}");
+    for key in &keys {
+        assert_eq!(state(key), "missing");
+    }
+    assert_eq!(organization_state(&s, &c, &keys[0])["rating"], "4");
+
+    // No source moved or changed; nothing appeared at the old location.
+    assert!(!originals.exists());
+    assert_eq!(bytes(&moved), online);
+    assert_eq!(bytes(&duplicate), online);
+    shutdown(&s);
+}

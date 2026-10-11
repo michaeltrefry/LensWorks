@@ -18,6 +18,8 @@ struct LensWorksCatalogWorkspace: View {
     /// The keyword a rename/move/synonym prompt edits, and which prompt is open.
     @State private var editingKeyword: LWApplicationOrganizationKeyword?
     @State private var keywordEdit: KeywordEdit?
+    @State private var relinkFocus: LensWorksRelinkFocus = .general
+    @State private var showingRelink = false
     enum KeywordEdit: String, Identifiable { case rename = "Rename Keyword", move = "Move Keyword", synonym = "Add Synonym"; var id: String { rawValue } }
     static let labels = ["Red", "Yellow", "Green", "Blue", "Purple"]
 
@@ -35,6 +37,7 @@ struct LensWorksCatalogWorkspace: View {
                     Text("\(catalog.assets.count) shown").foregroundStyle(.secondary)
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await catalog.refresh() } }
                 }.padding(8)
+                relinkBanner
                 Divider()
                 if catalog.showingCatalog { grid }
                 else {
@@ -73,7 +76,7 @@ struct LensWorksCatalogWorkspace: View {
             LensWorksLaunchTrace.record("catalog.workspace.task.end", details: ["canceled": String(Task.isCancelled)])
         }
         .onChange(of: catalog.catalogEpoch) { _, _ in
-            showingSettings = false; movingGroup = nil; largePhoto = nil; groupPrompt = false; editingGroup = nil; keywordPrompt = false; keywordEdit = nil; editingKeyword = nil
+            showingSettings = false; movingGroup = nil; largePhoto = nil; groupPrompt = false; editingGroup = nil; keywordPrompt = false; keywordEdit = nil; editingKeyword = nil; showingRelink = false
         }
         .onChange(of: workspace.selectedID) { _, _ in
             if let version = workspace.current.controller.workingVersion, version.catalogPath == catalog.catalogPath {
@@ -121,6 +124,28 @@ struct LensWorksCatalogWorkspace: View {
         }) { LensWorksPreviewSettingsView(catalog: catalog, window: workspace.window) }
         .sheet(isPresented: Binding(get: { movingGroup != nil }, set: { if !$0 { movingGroup = nil } })) { if let group = movingGroup { LensWorksGroupParentPicker(catalog: catalog, group: group) } }
         .sheet(item: $largePhoto) { asset in LensWorksLargePreview(asset: asset, catalog: catalog) }
+        .sheet(isPresented: $showingRelink) { LensWorksRelinkSheet(catalog: catalog, window: workspace.window, focus: relinkFocus) }
+    }
+
+    private func locate(_ focus: LensWorksRelinkFocus) { relinkFocus = focus; showingRelink = true }
+    /// Storage write hold and the one-step Undo of the latest applied relink.
+    @ViewBuilder private var relinkBanner: some View {
+        let review = catalog.relink
+        if review.writeHold || (review.isRunning && review.operation?.action != .Original) {
+            HStack {
+                Text("Storage operation in progress: catalog writes and new original rendering are held. Cached browsing remains available.").font(.caption)
+                Spacer()
+                Button("Review Progress") { locate(.general) }
+                Button("Cancel Storage Operation") { Task { try? await review.cancel() } }
+            }.padding(.horizontal, 8).padding(.bottom, 6).accessibilityIdentifier("LensWorks.storageHold")
+        } else if let applied = review.lastApplied {
+            HStack {
+                Text("Relinked \(applied.matched.value + applied.user_confirmed.value) original(s). Photo identities, copies, metadata and working versions are unchanged; no files moved.").font(.caption)
+                Spacer()
+                Button("Undo Relink") { Task { await action { try await review.undo(applied) } } }.disabled(review.isRunning)
+                    .accessibilityIdentifier("LensWorks.undoRelink")
+            }.padding(.horizontal, 8).padding(.bottom, 6).accessibilityIdentifier("LensWorks.relinkApplied")
+        }
     }
 
     private func loadedEditorIdentity() -> String? {
@@ -128,7 +153,6 @@ struct LensWorksCatalogWorkspace: View {
               let version = workspace.current.controller.workingVersion,
               version.catalogPath == catalog.catalogPath,
               version.photoID == asset.photoID,
-              version.originalPath == asset.originalPath,
               version.sourceVariantID == (asset.key?.variant_id ?? "master"),
               let document = workspace.current.session.document else { return nil }
         let width = Int(document.size.width.rounded())
@@ -148,6 +172,24 @@ struct LensWorksCatalogWorkspace: View {
         guard catalog.scopeIsCurrent(scope), catalog.selectedAsset?.id == asset.id else { return }
         if let version = catalog.selectedVersions.first { await catalog.openVersion(version, workspace: workspace) }
         else { await catalog.createWorkingVersion(workspace: workspace) }
+    }
+    /// The selected original's observed availability, re-observed whenever the selection changes.
+    private func originalAvailability(_ asset: LensWorksCatalogAsset) -> some View {
+        let status = catalog.originalStatus(asset)
+        let text = status.map { LensWorksOriginalAvailability.headline($0) } ?? "Checking original…"
+        return HStack {
+            Label(text, systemImage: status.map { LensWorksOriginalAvailability.isAvailable($0) ? "checkmark.circle" : "externaldrive.badge.xmark" } ?? "clock")
+                .font(.caption).help(status?.detail ?? "Observing the original’s current location")
+                .accessibilityIdentifier("LensWorks.originalAvailability").accessibilityValue(text)
+            if let status, !LensWorksOriginalAvailability.isAvailable(status) {
+                Button("Locate Original…") { locate(.original) }.font(.caption).accessibilityIdentifier("LensWorks.locateOriginal")
+            }
+        }.task(id: String(catalog.catalogEpoch) + "/" + asset.photoID + "/" + String(status == nil)) {
+            guard status == nil else { return }
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await catalog.observeSelectedOriginal()
+        }
     }
     private func importSummary(_ progress: LWApplicationDtoImportStatus) -> String {
         let results = "Added \(progress.imported.value) · unchanged \(progress.unchanged.value) · failed \(progress.failed.value) · skipped \(progress.skipped.value)"
@@ -173,6 +215,8 @@ struct LensWorksCatalogWorkspace: View {
                     Button("Add Photos…") { Task { await catalog.importFolder(window: workspace.window) } }.disabled(catalog.isImporting)
                     Button("Previews…", systemImage: "gearshape") { settingsScope = catalog.captureScope(); showingSettings = true }
                 }
+                Button("Locate Originals…", systemImage: "externaldrive.badge.questionmark") { locate(.general) }
+                    .accessibilityIdentifier("LensWorks.locateOriginals")
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -197,6 +241,7 @@ struct LensWorksCatalogWorkspace: View {
                             Button { Task { await catalog.enterFolder(folder) } } label: {
                                 Label(folder.name, systemImage: "folder").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(.plain).padding(.vertical, 3)
+                                .contextMenu { Button("Locate Moved Folder…") { locate(.folder(folder)) } }
                         }
                         if catalog.folderNext != nil { Button("More Folders") { Task { await catalog.nextFolders() } } }
                         Toggle("Include Subfolders", isOn: Binding(get: { catalog.recursive }, set: { value in
@@ -271,8 +316,14 @@ struct LensWorksCatalogWorkspace: View {
                             Divider()
                             Text(asset.filename).font(.headline).lineLimit(2)
                             LensWorksCatalogRecipeControls(catalog: catalog)
+                            originalAvailability(asset)
                             Button("Large Preview") { largePhoto = asset }
-                            Button("Create Working Version") { Task { await catalog.createWorkingVersion(workspace: workspace) } }.disabled(catalog.isBusy || !workspace.canSwitch)
+                            let offline = catalog.selectedOriginalUnavailableReason
+                            Button("Create Working Version") { Task { await catalog.createWorkingVersion(workspace: workspace) } }
+                                .disabled(catalog.isBusy || !workspace.canSwitch || offline != nil)
+                                .help(offline ?? "Create an editable layered version of this photo")
+                                .accessibilityIdentifier("LensWorks.createWorkingVersion")
+                            if let offline { Text("Create Working Version needs the full-resolution original. " + offline).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("LensWorks.createWorkingVersionReason") }
                             ForEach(catalog.selectedVersions) { version in
                                 Button { Task { await catalog.openVersion(version, workspace: workspace) } } label: { Label(version.name, systemImage: "square.stack.3d.up").lineLimit(1) }
                                     .buttonStyle(.plain).disabled(catalog.isBusy || !workspace.canSwitch)
@@ -443,6 +494,9 @@ private struct LensWorksGridCell: View {
             if let key = asset.key { Text(key.variant_id == "master" ? "Master" : "Copy " + String(key.variant_id.prefix(8))).font(.caption2).foregroundStyle(.secondary) }
             if asset.origin != "native" || asset.translationState != "native" { Text(asset.origin + " · " + asset.translationState).font(.caption2).foregroundStyle(.secondary) }
             if !asset.organizationSummary.isEmpty { Text(asset.organizationSummary).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+            if let status = catalog.originalStatus(asset), !LensWorksOriginalAvailability.isAvailable(status) {
+                Label(LensWorksOriginalAvailability.headline(status), systemImage: "externaldrive.badge.xmark").font(.caption2).foregroundStyle(.orange).help(status.detail)
+            }
         }.padding(6).frame(maxWidth: .infinity)
             .background(background, in: RoundedRectangle(cornerRadius: 8))
             .onTapGesture(count: 2, perform: openEditor)
@@ -575,8 +629,10 @@ private struct LensWorksCatalogRecipeControls: View {
                         .accessibilityIdentifier(LensWorksCommandID.exposure.rawValue)
                 }
                 HStack {
-                    Button("Undo Catalog Recipe") { act(.recipe(.undo), expected: variant) }.disabled(!variant.can_undo)
-                    Button("Redo Catalog Recipe") { act(.recipe(.redo), expected: variant) }.disabled(!variant.can_redo)
+                    let undoReason = catalog.catalogCommandAvailability(.recipe(.undo), expected: variant)
+                    let redoReason = catalog.catalogCommandAvailability(.recipe(.redo), expected: variant)
+                    Button("Undo Catalog Recipe") { act(.recipe(.undo), expected: variant) }.disabled(undoReason != nil).help(undoReason ?? "Undo Catalog Recipe")
+                    Button("Redo Catalog Recipe") { act(.recipe(.redo), expected: variant) }.disabled(redoReason != nil).help(redoReason ?? "Redo Catalog Recipe")
                 }
                 Text("Catalog Rating · " + (catalog.selectedAsset?.rating.map { String($0) } ?? "Unrated")).font(.caption)
                 Menu("Catalog Rating") {
