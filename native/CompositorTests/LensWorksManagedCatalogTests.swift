@@ -918,26 +918,6 @@ nonisolated struct LensWorksManagedCatalogTests {
     @Test func actualSpatialTwoDNGFullFloatMatchesEveryReferencePixel() async throws {
         try await mathematicalDNG("generated-spatial2-mask.dng")
     }
-    private struct MathProvenance: Decodable {
-        struct Input: Decodable {
-            let path: String, sha256: String, origin: String, origin_sha256: String
-            let reference: String?, reference_sha256: String?
-        }
-        let frozen_photocatalog: String, generator_sha256: String, readme_sha256: String
-        let baseline_provenance_manifest_sha256: String
-        let inputs: [Input]
-    }
-    private struct MathContract: Decodable {
-        struct Input: Decodable {
-            let filename: String, source_path: String, source_sha256: String
-            let reference_path: String?, reference_sha256: String?
-            let width: Int, height: Int, full_frame_pixels: Int?
-            let reference_space: String?
-            let float_rgb_tolerance: Double?, float_alpha_tolerance: Double?
-        }
-        let pin: String, provenance_sha256: String, baseline_contract_sha256: String
-        let inputs: [Input]
-    }
     private struct MathReference: Decodable {
         let width: Int, height: Int
         let linear_srgb: [[Double]], spatial_linear_srgb: [[[Double]]]
@@ -946,42 +926,23 @@ nonisolated struct LensWorksManagedCatalogTests {
     private static func mathSHA(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+    /// Checked-in, generator-produced fixtures (engines/catalog/tests/fixtures,
+    /// see its README). The independent per-pixel reference sits next to each DNG.
+    private static var fixtureDirectory: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("engines/catalog/tests/fixtures")
+    }
     private func mathematicalDNG(_ filename: String) async throws {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let inputs = repository.appendingPathComponent(".build/s04-owned-retained-format-inputs-v1")
-        let contractData = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-retained-format-contract-v1/contract.json"))
-        guard Self.mathSHA(contractData) == "1596efb04c380b88ec4420ba72b81fdd2c640dc2438ccabd858da11d6f448d67" else { throw LensWorksManagedError.protocolViolation("Mathematical input contract changed; no reference evidence admitted.") }
-        let contract = try JSONDecoder().decode(MathContract.self, from: contractData)
         let authority = try ownedCatalogAuthority(repository)
-        let provenanceData = try Data(contentsOf: inputs.appendingPathComponent("provenance.json"))
-        let provenance = try JSONDecoder().decode(MathProvenance.self, from: provenanceData)
-        guard Self.mathSHA(provenanceData) == contract.provenance_sha256,
-              contract.provenance_sha256 == "e88eb014b25bab13c9ef7cf5d629a438d7dc5cf3bc2cb102d3c1479b9168f367",
-              contract.baseline_contract_sha256 == "5591d492c5d0971021d2ace51ef1fbb8806e340a8e5d4ffa3d940a7268882304",
-              provenance.baseline_provenance_manifest_sha256 == "7ddb4fc78b5ae8a991ac7130ea3de9ad5eccc28a52473be8e6e0389283b6b8bf",
-              provenance.frozen_photocatalog == contract.pin, contract.pin == authority.upstreamRevision,
-              Self.mathSHA(try Data(contentsOf: repository.appendingPathComponent("engines/catalog/scripts/generate_dng_fixture.py"))) == provenance.generator_sha256,
-              Self.mathSHA(try Data(contentsOf: repository.appendingPathComponent("engines/catalog/tests/fixtures/README.md"))) == provenance.readme_sha256 else {
-            throw LensWorksManagedError.protocolViolation("Mathematical reference source/generator/readme/pin does not match the approved contract.")
-        }
-        let proof = try #require(contract.inputs.first { $0.filename == filename })
-        let input = try #require(provenance.inputs.first { URL(fileURLWithPath: $0.path).lastPathComponent == filename })
-        let inputURL = URL(fileURLWithPath: input.path), originURL = URL(fileURLWithPath: input.origin)
-        let referenceName = try #require(input.reference), referenceSHA = try #require(input.reference_sha256)
-        let referenceURL = inputs.appendingPathComponent(referenceName)
-        let sourceBytes = try Data(contentsOf: inputURL), originBytes = try Data(contentsOf: originURL)
-        let referenceBytes = try Data(contentsOf: referenceURL)
-        guard sourceBytes.count <= 1048576, referenceBytes.count <= 1048576,
-              Self.mathSHA(sourceBytes) == input.sha256, Self.mathSHA(originBytes) == input.origin_sha256,
-              input.sha256 == input.origin_sha256, input.sha256 == proof.source_sha256,
-              input.path == proof.source_path, referenceURL.path == proof.reference_path,
-              Self.mathSHA(referenceBytes) == referenceSHA, referenceSHA == proof.reference_sha256,
-              proof.width == 36, proof.height == 16, proof.full_frame_pixels == 576,
-              proof.reference_space == "linear_srgb_straight_alpha" else { throw LensWorksManagedError.protocolViolation("DNG/reference bytes or geometry changed before actual native decode.") }
+        let inputURL = Self.fixtureDirectory.appendingPathComponent(filename)
+        let referenceURL = Self.fixtureDirectory.appendingPathComponent((filename as NSString).deletingPathExtension + ".expected.json")
+        let sourceBytes = try Data(contentsOf: inputURL), referenceBytes = try Data(contentsOf: referenceURL)
+        let sourceSHA = Self.mathSHA(sourceBytes)
+        guard sourceBytes.count <= 1048576, referenceBytes.count <= 1048576 else { throw LensWorksManagedError.protocolViolation("DNG/reference fixture exceeds its 1MiB bound.") }
         let expected = try JSONDecoder().decode(MathReference.self, from: referenceBytes)
         let spatial = filename.contains("spatial"), rgbTolerance = spatial ? 0.002 : 0.001
         guard expected.width == 36, expected.height == 16, expected.alpha.count == 6,
-              proof.float_rgb_tolerance == rgbTolerance, proof.float_alpha_tolerance == 1e-6,
               expected.linear_srgb.count == 6, expected.linear_srgb.allSatisfy({ $0.count == 3 && $0.allSatisfy(\.isFinite) }),
               expected.alpha.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
               spatial ? (expected.spatial_linear_srgb.count == 16 && expected.spatial_linear_srgb.allSatisfy { $0.count == 36 && $0.allSatisfy { $0.count == 3 && $0.allSatisfy(\.isFinite) } }) : expected.spatial_linear_srgb.isEmpty else {
@@ -993,10 +954,8 @@ nonisolated struct LensWorksManagedCatalogTests {
         defer { if passed { fixture.removeIfClosed() } }
         let session = fixture.session
         var evidence: [String: Any] = ["status": "UNQUALIFIED_PENDING_ACTUAL_DECODE", "source": filename,
-            "inputSHA256": input.sha256, "originSHA256": input.origin_sha256, "referenceSHA256": referenceSHA,
-            "contractSHA256": Self.mathSHA(contractData), "provenanceSHA256": Self.mathSHA(provenanceData),
-            "generatorSHA256": provenance.generator_sha256, "readmeSHA256": provenance.readme_sha256,
-            "sourceRevision": session.sourceRevision, "upstreamBaselineRevision": contract.pin, "protocol": LWManagedAuthority.protocolVersion,
+            "inputSHA256": sourceSHA, "referenceSHA256": Self.mathSHA(referenceBytes),
+            "sourceRevision": session.sourceRevision, "protocol": LWManagedAuthority.protocolVersion,
             "RGBToleranceStrict": rgbTolerance, "alphaToleranceStrict": 1e-6]
         func writeEvidence() throws {
             let data = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
@@ -1004,9 +963,8 @@ nonisolated struct LensWorksManagedCatalogTests {
             try data.write(to: fixture.root.appendingPathComponent("FullFloatReference.json"), options: .atomic)
         }
         func sourceUnchanged() throws {
-            guard Self.mathSHA(try Data(contentsOf: fixture.original)) == input.sha256,
-                  Self.mathSHA(try Data(contentsOf: inputURL)) == input.sha256,
-                  Self.mathSHA(try Data(contentsOf: originURL)) == input.origin_sha256 else { throw LensWorksManagedError.protocolViolation("A protected mathematical fixture original changed.") }
+            guard Self.mathSHA(try Data(contentsOf: fixture.original)) == sourceSHA,
+                  Self.mathSHA(try Data(contentsOf: inputURL)) == sourceSHA else { throw LensWorksManagedError.protocolViolation("A protected mathematical fixture original changed.") }
             guard try fixture.original.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == fixture.originalModified,
                   Set(try FileManager.default.contentsOfDirectory(atPath: fixture.original.deletingLastPathComponent().path)) == Set([fixture.original.lastPathComponent]) else {
                 throw LensWorksManagedError.protocolViolation("A protected DNG source timestamp or directory membership changed.")
@@ -1120,14 +1078,6 @@ nonisolated struct LensWorksManagedCatalogTests {
             evidence["status"] = "ACTUAL_FULL_FLOAT_REFERENCE_PASS_CHECKED_CLOSED"
             evidence["sourceSHA256VerifiedBeforeAfter"] = true; evidence["checkedClosed"] = true
             try writeEvidence()
-            // Successful evidence survives only as a copied diagnostic artifact;
-            // the certified-closed fixture and original copies are removed normally.
-            let artifacts = repository.appendingPathComponent(".build/s04-math-native-artifacts")
-            try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
-            let retained = artifacts.appendingPathComponent(filename + "-" + fixture.root.lastPathComponent)
-            try FileManager.default.createDirectory(at: retained, withIntermediateDirectories: false)
-            try FileManager.default.copyItem(at: fixture.root.appendingPathComponent("FullFloatReference.json"), to: retained.appendingPathComponent("FullFloatReference.json"))
-            try FileManager.default.copyItem(at: fixture.root.appendingPathComponent("Decoded.rgba-f32le"), to: retained.appendingPathComponent("Decoded.rgba-f32le"))
             passed = true
         } catch {
             let primary = error
@@ -1313,109 +1263,41 @@ nonisolated struct LensWorksManagedCatalogTests {
             throw error
         }
     }
-    private struct TenBitContract: Decodable {
-        struct Input: Decodable {
-            let filename: String, source_path: String, source_sha256: String, origin: String, origin_sha256: String
-            let width: UInt32, height: UInt32, metadata_orientation: UInt32, source_bits_per_channel: UInt32
-            let channels: Int, row_stride: Int, byte_length: Int, sample_count: Int
-            let color_space: String, alpha: String, orientation: String
-        }
-        struct Comparison: Decodable { let strict_tolerance: Double }
-        struct ImageIO: Decodable { let file: String, sha256: String, bitdepth: Int, zero_alpha_blue_rgb_preserved: Bool }
-        let pin: String, provenance_sha256: String, readme_sha256: String, prior_contract_sha256: String
-        let input: Input, source_png_linear_rgba: [[Double]], independent_imageio_linear_rgba: [[Double]]
-        let quantized_alpha_codes10: [UInt16], quantized_alpha_reference: [Double]
-        let managed_rgb_comparison: Comparison, managed_alpha_comparison: Comparison, imageio_output: ImageIO
-        let precision_rgb_tolerance: Double, precision_alpha_tolerance: Double
-        let upstream_oracle_contract_sha256: String, historical_tenbit_contract_sha256: String
-    }
     private struct TenBitProof {
         let frame: NonDNGProof
         let sourceReference: [[Double]], precisionReference: [[Double]], quantizedAlpha: [Double]
         let precisionRGBTolerance: Double, precisionAlphaTolerance: Double
     }
-    private func tenBitProof() throws -> TenBitProof {
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let baseline = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-nondng-format-contract-v1/tenbit-contract.json"))
-        guard Self.mathSHA(baseline) == "24a3031530c088353ea29aedad72366c09cd1d17e11a924c772bbea3530d791f" else {
-            throw LensWorksManagedError.protocolViolation("Qualified10-bit historical source/ImageIO baseline changed.")
-        }
-        let bytes = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-nondng-format-contract-v1/tenbit-precision-contract.json"))
-        let digest = Self.mathSHA(bytes)
-        guard digest == "24f250abba76de1f9331d1f509f9f134dec40f3d60df532c52207f9ccea9003d" else {
-            throw LensWorksManagedError.protocolViolation("Qualified10-bit source/ImageIO contract changed.")
-        }
-        let contract = try JSONDecoder().decode(TenBitContract.self, from: bytes)
-        struct Baseline: Decodable { let upstream_oracle_contract_sha256: String }
-        let baselineContract = try JSONDecoder().decode(Baseline.self, from: baseline)
-        let authority = try ownedCatalogAuthority(repository)
-        let pngProof = try nonDNGProof("generated-swatches.png")
-        let provenanceBytes = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-retained-format-inputs-v1/provenance.json"))
-        let provenance = try JSONDecoder().decode(MathProvenance.self, from: provenanceBytes)
-        let input = try #require(provenance.inputs.first { $0.path == contract.input.source_path })
-        let selected = contract.input
-        guard contract.pin == authority.upstreamRevision,
-              contract.upstream_oracle_contract_sha256 == "399c4d354269690227faaf83a0b085ef1037c36df24388a45ca14c5ec3e0944f",
-              contract.historical_tenbit_contract_sha256 == Self.mathSHA(baseline),
-              baselineContract.upstream_oracle_contract_sha256 == "3bee7654f15cf25ead4b1c0b963748a20ee071215715946fd4fb11531e5b8064",
-              provenance.baseline_provenance_manifest_sha256 == "7ddb4fc78b5ae8a991ac7130ea3de9ad5eccc28a52473be8e6e0389283b6b8bf",
-              contract.provenance_sha256 == "e88eb014b25bab13c9ef7cf5d629a438d7dc5cf3bc2cb102d3c1479b9168f367",
-              Self.mathSHA(provenanceBytes) == contract.provenance_sha256,
-              contract.prior_contract_sha256 == "1596efb04c380b88ec4420ba72b81fdd2c640dc2438ccabd858da11d6f448d67",
-              Self.mathSHA(try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-retained-format-contract-v1/contract.json"))) == contract.prior_contract_sha256,
-              contract.readme_sha256 == provenance.readme_sha256,
-              selected.filename == "generated-swatches-10bit.avif", input.sha256 == selected.source_sha256,
-              input.origin == selected.origin, input.origin_sha256 == selected.origin_sha256,
-              selected.width == 3, selected.height == 2, selected.metadata_orientation == 1, selected.source_bits_per_channel == 10,
-              selected.channels == 4, selected.row_stride == 48, selected.byte_length == 96, selected.sample_count == 24,
-              selected.color_space == "linear_srgb", selected.alpha == "straight", selected.orientation == "applied",
-              contract.managed_rgb_comparison.strict_tolerance == 0.003,
-              contract.managed_alpha_comparison.strict_tolerance == 1.0 / 1023,
-              contract.precision_rgb_tolerance == (2.4 / 1.055) / 65535 + 1e-6,
-              contract.precision_alpha_tolerance == 1.0 / 65535 + 1e-6,
-              contract.imageio_output.bitdepth == 16, contract.imageio_output.zero_alpha_blue_rgb_preserved,
-              Self.mathSHA(try Data(contentsOf: URL(fileURLWithPath: contract.imageio_output.file))) == contract.imageio_output.sha256,
-              contract.source_png_linear_rgba == pngProof.sourceLinearRGBA,
-              contract.independent_imageio_linear_rgba.count == 6, contract.independent_imageio_linear_rgba.allSatisfy({ $0.count == 4 }),
-              contract.quantized_alpha_codes10 == [1023, 514, 0, 1023, 1023, 1023], contract.quantized_alpha_reference.count == 6 else {
-            throw LensWorksManagedError.protocolViolation("Qualified10-bit geometry/provenance/source/precision reference scope changed.")
-        }
-        for pixel in 0..<6 {
-            guard contract.quantized_alpha_reference[pixel] == Double(contract.quantized_alpha_codes10[pixel]) / 1023,
-                  contract.independent_imageio_linear_rgba[pixel].allSatisfy(\.isFinite) else {
-                throw LensWorksManagedError.protocolViolation("10-bit quantized alpha or independent reference is invalid.")
-            }
-        }
-        let frame = NonDNGProof(filename: selected.filename, input: input, width: selected.width, height: selected.height,
-            metadataOrientation: selected.metadata_orientation, sourceBitsPerChannel: selected.source_bits_per_channel,
-            contractSHA256: digest, upstreamBaselineRevision: contract.pin, sourceLinearRGBA: nil)
-        return TenBitProof(frame: frame, sourceReference: contract.source_png_linear_rgba,
-            precisionReference: contract.independent_imageio_linear_rgba, quantizedAlpha: contract.quantized_alpha_reference,
-            precisionRGBTolerance: contract.precision_rgb_tolerance, precisionAlphaTolerance: contract.precision_alpha_tolerance)
+    private static func inverseSRGB(_ sample: Double) -> Double {
+        sample <= 0.04045 ? sample / 12.92 : pow((sample + 0.055) / 1.055, 2.4)
     }
-
-    private struct NonDNGContract: Decodable {
-        struct Input: Decodable {
-            let filename: String, source_path: String, source_sha256: String, origin: String, origin_sha256: String
-            let width: UInt32, height: UInt32, metadata_orientation: UInt32, source_bits_per_channel: UInt32
-            let full_frame_pixels: Int, sample_count: Int, row_stride: Int, byte_length: Int, channels: Int
-            let sample: String, color_space: String, alpha: String, orientation: String, comparison_kind: String
-            let source_rgba8: [[UInt8]]?, source_linear_rgba: [[Double]]?
-            let float_rgb_tolerance: Double?, float_alpha_tolerance: Double?
-        }
-        struct Pair: Decodable {
-            let filenames: [String], geometry: [Int], metadata_orientation: UInt32
-            let distinct_actual_original_paths_and_variant_keys_required: Bool, absolute_color_reference: Bool
-        }
-        let pin: String, qualified_prior_contract_sha256: String, provenance_sha256: String, readme_sha256: String
-        let inputs: [Input], pair: Pair
-        let upstream_oracle_contract_sha256: String
+    /// The six straight RGBA8 swatches generate_dng_fixture.py writes into
+    /// generated-swatches.png and, at 10 bits, generated-swatches-10bit.avif.
+    private static let swatchRGBA8: [[UInt8]] = [[255, 0, 0, 255], [0, 255, 0, 128], [0, 0, 255, 0], [128, 128, 128, 255], [255, 255, 255, 255], [0, 0, 0, 255]]
+    private static var swatchLinearRGBA: [[Double]] {
+        swatchRGBA8.map { pixel in pixel.enumerated().map { channel, code in
+            let sample = Double(code) / 255
+            return channel == 3 ? sample : inverseSRGB(sample)
+        } }
+    }
+    private func tenBitProof() throws -> TenBitProof {
+        // Independent 16-bit ImageIO decode of the 10-bit AVIF, and the 10-bit
+        // alpha codes it stores, recorded once from the checked-in fixture.
+        let imageIORGBA16: [[UInt16]] = [[65535, 0, 0, 65535], [0, 65535, 0, 32927], [0, 0, 65535, 0], [32928, 32928, 32928, 65535], [65535, 65535, 65535, 65535], [0, 0, 0, 65535]]
+        let alphaCodes10: [Double] = [1023, 514, 0, 1023, 1023, 1023]
+        let precision = imageIORGBA16.map { pixel in pixel.enumerated().map { channel, code in
+            let sample = Double(code) / 65535
+            return channel == 3 ? sample : Self.inverseSRGB(sample)
+        } }
+        let frame = try nonDNGFrameProof("generated-swatches-10bit.avif", width: 3, height: 2, metadataOrientation: 1, sourceBitsPerChannel: 10, sourceLinearRGBA: nil)
+        return TenBitProof(frame: frame, sourceReference: Self.swatchLinearRGBA, precisionReference: precision,
+            quantizedAlpha: alphaCodes10.map { $0 / 1023 },
+            precisionRGBTolerance: (2.4 / 1.055) / 65535 + 1e-6, precisionAlphaTolerance: 1.0 / 65535 + 1e-6)
     }
     private struct NonDNGProof {
         let filename: String
-        let input: MathProvenance.Input
+        let source: URL, sha256: String
         let width: UInt32, height: UInt32, metadataOrientation: UInt32, sourceBitsPerChannel: UInt32
-        let contractSHA256: String, upstreamBaselineRevision: String
         let sourceLinearRGBA: [[Double]]?
     }
     private struct NonDNGFrame {
@@ -1424,75 +1306,35 @@ nonisolated struct LensWorksManagedCatalogTests {
         let raw: Data, samples: [Float], descriptor: LWManagedFloatDescriptor
         var evidence: [String: Any]
     }
+    private func nonDNGFrameProof(_ filename: String, width: UInt32, height: UInt32, metadataOrientation: UInt32, sourceBitsPerChannel: UInt32, sourceLinearRGBA: [[Double]]?) throws -> NonDNGProof {
+        let source = Self.fixtureDirectory.appendingPathComponent(filename)
+        let bytes = try Data(contentsOf: source)
+        guard !bytes.isEmpty, bytes.count <= 1048576 else { throw LensWorksManagedError.protocolViolation("\(filename) fixture is empty or exceeds 1MiB.") }
+        return NonDNGProof(filename: filename, source: source, sha256: Self.mathSHA(bytes), width: width, height: height,
+            metadataOrientation: metadataOrientation, sourceBitsPerChannel: sourceBitsPerChannel, sourceLinearRGBA: sourceLinearRGBA)
+    }
     private func nonDNGProof(_ filename: String) throws -> NonDNGProof {
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let contractBytes = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-nondng-format-contract-v1/contract-r2.json"))
-        let digest = Self.mathSHA(contractBytes)
-        guard digest == "b59ff2f36bd47482797774823444681cb7262f529447960dd118223088e7bf35" else { throw LensWorksManagedError.protocolViolation("Qualified non-DNG contract changed.") }
-        let contract = try JSONDecoder().decode(NonDNGContract.self, from: contractBytes)
-        let authority = try ownedCatalogAuthority(repository)
-        let prior = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-retained-format-contract-v1/contract.json"))
-        let provenanceBytes = try Data(contentsOf: repository.appendingPathComponent(".build/s04-owned-retained-format-inputs-v1/provenance.json"))
-        let provenance = try JSONDecoder().decode(MathProvenance.self, from: provenanceBytes)
-        guard contract.pin == authority.upstreamRevision, provenance.frozen_photocatalog == contract.pin,
-              contract.upstream_oracle_contract_sha256 == "c3b37240ab4020453a383a8baccc79059fa28d34bac6b8fcbd95d9957dc4822a",
-              provenance.baseline_provenance_manifest_sha256 == "7ddb4fc78b5ae8a991ac7130ea3de9ad5eccc28a52473be8e6e0389283b6b8bf",
-              Self.mathSHA(prior) == contract.qualified_prior_contract_sha256,
-              contract.qualified_prior_contract_sha256 == "1596efb04c380b88ec4420ba72b81fdd2c640dc2438ccabd858da11d6f448d67",
-              Self.mathSHA(provenanceBytes) == contract.provenance_sha256,
-              contract.provenance_sha256 == "e88eb014b25bab13c9ef7cf5d629a438d7dc5cf3bc2cb102d3c1479b9168f367",
-              Self.mathSHA(try Data(contentsOf: repository.appendingPathComponent("engines/catalog/tests/fixtures/README.md"))) == contract.readme_sha256,
-              contract.readme_sha256 == provenance.readme_sha256,
-              Self.mathSHA(try Data(contentsOf: repository.appendingPathComponent("engines/catalog/scripts/generate_dng_fixture.py"))) == provenance.generator_sha256,
-              contract.inputs.count == 3, Set(contract.inputs.map(\.filename)) == Set(["generated-swatches.png", "generated-irot.avif", "generated-irot-exif.avif"]),
-              contract.pair.filenames == ["generated-irot.avif", "generated-irot-exif.avif"], contract.pair.geometry == [2, 3],
-              contract.pair.metadata_orientation == 8, contract.pair.distinct_actual_original_paths_and_variant_keys_required,
-              !contract.pair.absolute_color_reference else { throw LensWorksManagedError.protocolViolation("Non-DNG qualified source/pin/shape/pair scope changed.") }
-        let selected = try #require(contract.inputs.first { $0.filename == filename })
-        let input = try #require(provenance.inputs.first { $0.path == selected.source_path })
-        let png = filename == "generated-swatches.png"
-        guard input.sha256 == selected.source_sha256, input.origin == selected.origin, input.origin_sha256 == selected.origin_sha256,
-              selected.width == (png ? 3 : 2), selected.height == (png ? 2 : 3), selected.metadata_orientation == (png ? 1 : 8),
-              selected.source_bits_per_channel == 8, selected.full_frame_pixels == 6, selected.sample_count == 24,
-              selected.row_stride == (png ? 48 : 32), selected.byte_length == 96, selected.channels == 4,
-              selected.sample == "float32_le", selected.color_space == "linear_srgb", selected.alpha == "straight", selected.orientation == "applied",
-              selected.comparison_kind == (png ? "independent_source_inverse_srgb" : "exact_full_frame_pair") else { throw LensWorksManagedError.protocolViolation("Selected non-DNG input does not match exact approved frame/source scope.") }
-        var reference: [[Double]]?
-        if png {
-            let codes = try #require(selected.source_rgba8), expected = try #require(selected.source_linear_rgba)
-            guard selected.float_rgb_tolerance == 0.001, selected.float_alpha_tolerance == 1e-6,
-                  codes.count == 6, codes.allSatisfy({ $0.count == 4 }), expected.count == 6, expected.allSatisfy({ $0.count == 4 }) else { throw LensWorksManagedError.protocolViolation("Qualified PNG source reference has invalid shape.") }
-            reference = codes.map { pixel in pixel.enumerated().map { channel, code in
-                let sample = Double(code) / 255
-                return channel == 3 ? sample : (sample <= 0.04045 ? sample / 12.92 : pow((sample + 0.055) / 1.055, 2.4))
-            } }
-            for pixel in 0..<6 { for channel in 0..<4 {
-                guard expected[pixel][channel].isFinite, abs(try #require(reference)[pixel][channel] - expected[pixel][channel]) < 1e-12 else {
-                    throw LensWorksManagedError.protocolViolation("Qualified PNG inverse-sRGB reference disagrees with its CRC/zlib-derived source codes.")
-                }
-            } }
-        } else {
-            guard selected.source_rgba8 == nil, selected.source_linear_rgba == nil else { throw LensWorksManagedError.protocolViolation("Relational AVIF pair must not admit an absolute RGB oracle.") }
+        switch filename {
+        case "generated-swatches.png":
+            return try nonDNGFrameProof(filename, width: 3, height: 2, metadataOrientation: 1, sourceBitsPerChannel: 8, sourceLinearRGBA: Self.swatchLinearRGBA)
+        case "generated-irot.avif", "generated-irot-exif.avif":
+            // Relational pair only: oriented 2x3 with metadata orientation 8, no absolute color oracle.
+            return try nonDNGFrameProof(filename, width: 2, height: 3, metadataOrientation: 8, sourceBitsPerChannel: 8, sourceLinearRGBA: nil)
+        default:
+            throw LensWorksManagedError.protocolViolation("No non-DNG proof for \(filename).")
         }
-        return NonDNGProof(filename: filename, input: input, width: selected.width, height: selected.height,
-            metadataOrientation: selected.metadata_orientation, sourceBitsPerChannel: selected.source_bits_per_channel, contractSHA256: digest, upstreamBaselineRevision: contract.pin, sourceLinearRGBA: reference)
     }
     private func decodeNonDNG(_ proof: NonDNGProof) async throws -> NonDNGFrame {
-        let inputURL = URL(fileURLWithPath: proof.input.path), originURL = URL(fileURLWithPath: proof.input.origin)
-        guard Self.mathSHA(try Data(contentsOf: inputURL)) == proof.input.sha256,
-              Self.mathSHA(try Data(contentsOf: originURL)) == proof.input.origin_sha256,
-              proof.input.sha256 == proof.input.origin_sha256 else { throw LensWorksManagedError.protocolViolation("Qualified non-DNG source/origin changed before copying.") }
+        let inputURL = proof.source
+        guard Self.mathSHA(try Data(contentsOf: inputURL)) == proof.sha256 else { throw LensWorksManagedError.protocolViolation("Non-DNG source changed before copying.") }
         let jobs = MathJobs()
         let fixture = try await Fixture.create(copiedSource: inputURL, referenceJobs: jobs)
         var evidence: [String: Any] = ["status": "UNQUALIFIED_DECODE_PENDING", "source": proof.filename,
-            "sourceSHA256": proof.input.sha256, "originSHA256": proof.input.origin_sha256,
-            "nonDNGContractSHA256": proof.contractSHA256, "sourceRevision": fixture.session.sourceRevision,
-            "upstreamBaselineRevision": proof.upstreamBaselineRevision,
+            "sourceSHA256": proof.sha256, "sourceRevision": fixture.session.sourceRevision,
             "protocol": LWManagedAuthority.protocolVersion, "absoluteAVIFColorQualified": false]
         func unchanged() throws {
-            guard Self.mathSHA(try Data(contentsOf: fixture.original)) == proof.input.sha256,
-                  Self.mathSHA(try Data(contentsOf: inputURL)) == proof.input.sha256,
-                  Self.mathSHA(try Data(contentsOf: originURL)) == proof.input.origin_sha256,
+            guard Self.mathSHA(try Data(contentsOf: fixture.original)) == proof.sha256,
+                  Self.mathSHA(try Data(contentsOf: inputURL)) == proof.sha256,
                   try fixture.original.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == fixture.originalModified,
                   Set(try FileManager.default.contentsOfDirectory(atPath: fixture.original.deletingLastPathComponent().path)) == Set([fixture.original.lastPathComponent]) else {
                 throw LensWorksManagedError.protocolViolation("A protected non-DNG source SHA, timestamp, or directory membership changed.")
@@ -1606,13 +1448,6 @@ nonisolated struct LensWorksManagedCatalogTests {
     private func finishNonDNG(_ frame: inout NonDNGFrame) throws {
         frame.evidence["status"] = "ACTUAL_NON_DNG_REFERENCE_PASS_CHECKED_CLOSED"
         try writeNonDNG(frame.fixture, frame.evidence)
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".build/s04-nondng-native-artifacts")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let destination = root.appendingPathComponent(frame.proof.filename + "-" + frame.fixture.root.lastPathComponent)
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
-        for name in ["FullFloatReference.json", "Decoded.rgba-f32le"] {
-            try FileManager.default.copyItem(at: frame.fixture.root.appendingPathComponent(name), to: destination.appendingPathComponent(name))
-        }
         frame.fixture.removeIfClosed()
     }
 

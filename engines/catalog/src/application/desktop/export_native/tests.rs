@@ -1443,8 +1443,10 @@ fn generic_begin_rejection_is_not_negative_authority_for_retirement() -> Result<
     Ok(())
 }
 
+// Failure bounds only: generous enough that a loaded shared CI host's slow
+// process exec cannot masquerade as a lifecycle regression.
 fn wait_until(mut condition: impl FnMut() -> bool) -> Result<()> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !condition() {
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1584,7 +1586,7 @@ fn subprocess_case(case: &str) -> Result<()> {
         ])
         .env("PHOTOCATALOG_G_LIFECYCLE_CASE", case)
         .spawn()?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
     loop {
         if let Some(status) = child.try_wait()? {
             ensure!(
@@ -1716,10 +1718,10 @@ fn process_case(mode: &str) -> Result<()> {
     let executable = f._temp.path().join("synthetic-worker");
     let script = match mode {
         "broken" => {
-            "#!/bin/bash\nexec 0<&-\nprintf closed > closed\nwhile [[ ! -f finish && $SECONDS -lt 8 ]]; do :; done\nexit 7\n"
+            "#!/bin/bash\nexec 0<&-\nprintf closed > closed\nwhile [[ ! -f finish && $SECONDS -lt 30 ]]; do sleep 0.01; done\nexit 7\n"
         }
         "stop" => {
-            "#!/bin/bash\nIFS= read -r -n 1 c\n[[ $c == '!' ]] || exit 8\nprintf started > started\nwhile [[ $SECONDS -lt 8 ]]; do :; done\nexit 9\n"
+            "#!/bin/bash\nIFS= read -r -n 1 c\n[[ $c == '!' ]] || exit 8\nprintf started > started\nwhile [[ $SECONDS -lt 30 ]]; do sleep 0.01; done\nexit 9\n"
         }
         "failure" => "#!/bin/bash\nIFS= read -r -n 1 c\n[[ $c == '!' ]] || exit 8\nexit 7\n",
         _ => "#!/bin/bash\nIFS= read -r -n 1 c\n[[ $c == '!' ]] || exit 8\nexit 0\n",

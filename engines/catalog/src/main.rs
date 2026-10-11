@@ -472,7 +472,29 @@ enum MetadataCommand {
     MetadataExportRecover { directory: PathBuf },
 }
 
+/// Dedicated helper modes. Each must exit when its owner disappears and must
+/// honor SIGTERM, whatever disposition it inherited.
+const HELPER_MODES: &[&str] = &[
+    "--lightroom-migration-worker",
+    "--lightroom-source-reader-sql",
+    "--lightroom-source-reader-raw",
+    "--lightroom-source-reader-capture-sql",
+    "--lightroom-capture-worker",
+    "--lightroom-workbench-worker",
+    "--catalog-filesystem-worker",
+    "--catalog-backup-worker",
+    "--catalog-desktop-worker",
+    "--photo-export-worker",
+    "--preview-worker",
+];
+
 fn main() -> Result<()> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| HELPER_MODES.iter().any(|mode| arg == *mode))
+    {
+        photocatalog::worker_lifeline::install();
+    }
     match std::env::args_os().nth(1).as_deref() {
         Some(arg) if arg == "--lightroom-migration-worker" => {
             return photocatalog::lightroom_migration_worker::worker_main();

@@ -297,9 +297,10 @@ framed stdout/stderr into app logs. The float mode uses a versioned bounded
 file frame with private temporary files and no media-directory staging.
 
 Run CPU tests with `cargo test --release --locked --manifest-path
-adapters/catalog/Cargo.toml --target-dir .build/rust-catalog -- --test-threads=1`.
-Registry/compatibility tests require this serial process-wide fixture gate;
-the dedicated blocked-callback fixture itself exercises concurrent admission,
+adapters/catalog/Cargo.toml --target-dir .build/rust-catalog`.
+Registry/compatibility tests serialize on an in-code process-wide fixture gate
+(the managed registry and counters are global by design), so the suite runs
+with the default parallel harness; the dedicated blocked-callback fixture itself exercises concurrent admission,
 cancellation and teardown. Planned inventory profiles and wire round trips
 are reported separately from actual retained-service lifecycle acceptance.
 

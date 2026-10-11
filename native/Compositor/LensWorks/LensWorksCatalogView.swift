@@ -38,6 +38,8 @@ struct LensWorksCatalogWorkspace: View {
                             .psdConversionSheet(workspace.current.session)
                             .rawDevelopSheet(workspace.current.session)
                             .background { ProjectWindowBridge(controller: workspace.current.controller).frame(width: 0, height: 0) }
+                            // A container element, so the editor's own control identifiers are not overwritten.
+                            .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("LensWorks.editorContent")
                         if let identity = loadedEditorIdentity() {
                             Text(identity)

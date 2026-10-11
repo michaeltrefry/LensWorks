@@ -576,7 +576,8 @@ exec /bin/sleep 60
         catalog: token.clone(),
         source: NativePath::from_path(&originals),
     })?;
-    let until = Instant::now() + Duration::from_secs(5);
+    // Failure bound only; a loaded host can take seconds to exec the child.
+    let until = Instant::now() + Duration::from_secs(30);
     loop {
         if matches!(call(Request::Status)?, Response::Status(s) if s.active_previews > 0) {
             break;

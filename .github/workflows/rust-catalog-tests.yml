@@ -28,6 +28,6 @@ jobs:
       - name: Engine tests
         timeout-minutes: 40
         run: cargo test --manifest-path engines/catalog/Cargo.toml --locked
-      - name: Adapter tests (shared global state, so serial)
+      - name: Adapter tests
         timeout-minutes: 30
-        run: cargo test --manifest-path adapters/catalog/Cargo.toml --locked -- --test-threads=1
+        run: cargo test --manifest-path adapters/catalog/Cargo.toml --locked

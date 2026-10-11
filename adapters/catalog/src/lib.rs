@@ -304,6 +304,16 @@ pub unsafe extern "C" fn lw_catalog_string_free(response: *mut c_char) {
     }));
 }
 
+/// The managed ABI's registry, owner and payload counters are process-wide by
+/// design (one C boundary per process), and the stateless ABI refuses work
+/// while any managed owner exists. Unit tests that observe or saturate that
+/// state serialize on this gate so the suite runs safely in parallel.
+#[cfg(test)]
+pub(crate) fn test_serial() -> std::sync::MutexGuard<'static, ()> {
+    static GATE: Mutex<()> = Mutex::new(());
+    GATE.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +331,7 @@ mod tests {
     }
     #[test]
     fn real_catalog_import_restart_pagination_and_original_preservation() {
+        let _serial = crate::test_serial();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("catalog 日本語");
         let originals = temp.path().join("originals");
@@ -366,6 +377,7 @@ mod tests {
     }
     #[test]
     fn typed_errors_do_not_initialize_missing_or_unsafe_locations() {
+        let _serial = crate::test_serial();
         let temp = tempfile::tempdir().unwrap();
         let missing = temp.path().join("missing");
         assert_eq!(
@@ -390,6 +402,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn redirected_preview_directory_never_publishes_or_removes_original_files() {
+        let _serial = crate::test_serial();
         use std::os::unix::fs::symlink;
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("catalog");
@@ -441,6 +454,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn redirected_and_hardlinked_database_sidefiles_and_locks_are_rejected_before_open() {
+        let _serial = crate::test_serial();
         use std::os::unix::fs::symlink;
         for name in [
             "catalog.sqlite3",
@@ -480,6 +494,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn create_rejects_redirected_roots_and_parent_traversal_without_initializing_sources() {
+        let _serial = crate::test_serial();
         use std::os::unix::fs::symlink;
         let temp = tempfile::tempdir().unwrap();
         let originals = temp.path().join("originals");
@@ -507,6 +522,7 @@ mod tests {
     }
     #[test]
     fn malformed_null_version_and_oversized_requests_are_typed() {
+        let _serial = crate::test_serial();
         unsafe {
             let output = lw_catalog_request(std::ptr::null());
             let value: Value = serde_json::from_slice(CStr::from_ptr(output).to_bytes()).unwrap();

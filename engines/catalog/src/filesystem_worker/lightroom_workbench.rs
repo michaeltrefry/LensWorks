@@ -316,11 +316,11 @@ impl Seal {
         #[cfg(test)]
         {
             let retained_directory = self.directory.to_path()?;
-            let mut failure = SEAL_BEGIN_FAIL_AFTER_APPROVAL
+            let mut armed = SEAL_BEGIN_FAIL_AFTER_APPROVAL
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if failure.as_deref() == Some(retained_directory.as_path()) {
-                *failure = None;
+            if let Some(index) = armed.iter().position(|path| *path == retained_directory) {
+                armed.swap_remove(index);
                 anyhow::bail!("injected seal begin failure after approval create");
             }
         }
@@ -350,9 +350,11 @@ impl Seal {
     }
 }
 
+// Each test arms its own unique temp directory, so parallel tests never
+// overwrite one another's one-shot injection.
 #[cfg(test)]
-static SEAL_BEGIN_FAIL_AFTER_APPROVAL: std::sync::Mutex<Option<std::path::PathBuf>> =
-    std::sync::Mutex::new(None);
+static SEAL_BEGIN_FAIL_AFTER_APPROVAL: std::sync::Mutex<Vec<std::path::PathBuf>> =
+    std::sync::Mutex::new(Vec::new());
 
 #[derive(Clone, PartialEq, Eq)]
 struct ReleaseReceipt {
@@ -1728,10 +1730,10 @@ mod tests {
             review_bytes: U64(review.len() as u64),
             review_blake3: crate::lightroom::digest(review),
         };
-        *SEAL_BEGIN_FAIL_AFTER_APPROVAL
+        SEAL_BEGIN_FAIL_AFTER_APPROVAL
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) =
-            Some(fs::canonicalize(temp.path())?.join("retained-partial-seal"));
+            .unwrap_or_else(|error| error.into_inner())
+            .push(fs::canonicalize(temp.path())?.join("retained-partial-seal"));
         let mut owner = Owner::default();
         assert!(call(&mut owner, begin.clone()).is_err());
         assert!(output.join("approval.json").is_file());
@@ -1796,10 +1798,10 @@ mod tests {
             review_bytes: U64(review.len() as u64),
             review_blake3: crate::lightroom::digest(review),
         };
-        *SEAL_BEGIN_FAIL_AFTER_APPROVAL
+        SEAL_BEGIN_FAIL_AFTER_APPROVAL
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) =
-            Some(fs::canonicalize(temp.path())?.join("replace-target"));
+            .unwrap_or_else(|error| error.into_inner())
+            .push(fs::canonicalize(temp.path())?.join("replace-target"));
         let mut owner = Owner::default();
         assert!(call(&mut owner, begin.clone()).is_err());
         #[cfg(windows)]

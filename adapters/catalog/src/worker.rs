@@ -11,6 +11,7 @@ fn main() -> anyhow::Result<()> {
         .nth(1)
         .is_some_and(|v| v == "--lensworks-full-decode")
     {
+        photocatalog::worker_lifeline::install();
         return lensworks_catalog::full_decode::worker_main();
     }
     retained::run()

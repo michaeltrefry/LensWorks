@@ -38,6 +38,7 @@ pub mod organization_search;
 pub mod photo_render;
 pub mod preview;
 pub mod storage_volume;
+pub mod worker_lifeline;
 pub mod xmp;
 pub mod xmp_packets;
 mod xmp_rdf;

@@ -6,11 +6,23 @@ import CryptoKit
 final class CompositorUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    /// The app skips catalog restore under XCTest. XCUIApplication does not forward that marker, so pass it
+    /// through: these tests must never open (or report errors from) the machine's default catalog.
+    @MainActor
+    private func appWithoutCatalog() throws -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"])
+        return app
+    }
+
     @MainActor
     func testCreateCanvasAndNavigation() throws {
-        let app = XCUIApplication()
+        let app = try appWithoutCatalog()
         app.launch()
-        app.buttons["newCanvasWelcome"].click()
+        // LensWorks opens on the catalog; the editor tab's empty state is the new-canvas form.
+        let editorTab = app.buttons["LensWorks.editorTab"]
+        XCTAssertTrue(editorTab.waitForExistence(timeout: 30))
+        editorTab.click()
         let width = app.textFields["widthInput"]
         width.click()
         width.typeKey("a", modifierFlags: .command)
@@ -33,21 +45,22 @@ final class CompositorUITests: XCTestCase {
         screenshot.name = "Editor foundation"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+        // New Canvas opens a fresh project tab on the new-canvas form; the first canvas keeps its own tab.
         app.typeKey("n", modifierFlags: .command)
-        app.typeKey(.escape, modifierFlags: [])
-        XCTAssertEqual(app.staticTexts["canvasDimensions"].value as? String, "1,200 × 800 px")
+        XCTAssertTrue(app.textFields["widthInput"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["canvasDimensions"].exists)
     }
 
     @MainActor
     func testLaunchPerformance() throws {
         // Explicit macOS baseline: includes XCTest launch/idle/accessibility overhead.
-        let app = XCUIApplication()
+        let app = try appWithoutCatalog()
         var samples: [Double] = []
         for _ in 0..<5 {
             app.terminate()
             let start = ProcessInfo.processInfo.systemUptime
             app.launch()
-            XCTAssertTrue(app.buttons["newCanvasWelcome"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["LensWorks.catalogTab"].waitForExistence(timeout: 15))
             samples.append(ProcessInfo.processInfo.systemUptime - start)
         }
         print("LAUNCH_TO_READY_SECONDS: \(samples)")
