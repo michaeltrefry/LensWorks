@@ -1,10 +1,13 @@
 name: S47 procedural photographs and native UI tour
-on: [push, pull_request]
+on:
+  pull_request: {}
+  push:
+    branches: [main]
 permissions: {contents: read}
 jobs:
   deterministic-fixtures-and-tour:
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
@@ -28,6 +31,25 @@ jobs:
           test -x .build/rust-catalog/release/lensworks-decode-worker
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
+      - name: Run the 100k-photo, command registry and S38 native tests
+        timeout-minutes: 30
+        env:
+          TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
+          TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
+          TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE: ${{ github.workspace }}/.build/rust-catalog/release/organization_probe
+        run: |
+          # The 100k test seeds its catalog with the engine's organization_probe,
+          # which build-native.sh does not build; use the same target and SDK.
+          PHOTOCATALOG_DNG_SDK="$PWD/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1" CARGO_TARGET_DIR="$PWD/.build/rust-catalog" CARGO_BUILD_JOBS=4 MACOSX_DEPLOYMENT_TARGET=26.2 \
+            cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin organization_probe
+          test -x "$TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE"
+          xcodebuild test-without-building -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO \
+            '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/largeSyntheticCatalogNavigationSelectionAndEditorTransitionStayWindowed()' \
+            -only-testing:CompositorTests/CommandRegistryTests \
+            -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
+            -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
+            -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
+            -resultBundlePath NativeTests.xcresult
       - name: Deliver the source-declared measured screenshot tolerance
         run: |
           python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance
@@ -45,3 +67,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with: {name: s47-procedural-ui-tour, path: S47UITour.xcresult, if-no-files-found: ignore, retention-days: 7}
+      - name: Upload native test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: native-tests, path: NativeTests.xcresult, if-no-files-found: ignore, retention-days: 7}
