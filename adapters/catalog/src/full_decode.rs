@@ -467,7 +467,19 @@ impl std::fmt::Display for RetainedDecodeFailure {
 impl std::error::Error for RetainedDecodeFailure {}
 struct ChildOwner(Arc<RetainedDecoder>);
 impl ChildOwner {
-    fn stop_and_reap(&mut self)->Result<()> {self.0.try_drain()}
+    /// Runs on the job's own thread, never under a managed command lock, so it may
+    /// give a just-killed child a short bounded window to be reaped. A child that
+    /// still has not exited stays retained for the checked Close/JobRelease retry.
+    fn stop_and_reap(&mut self)->Result<()> {
+        let deadline=Instant::now()+Duration::from_secs(2);
+        loop {
+            match self.0.try_drain() {
+                Ok(())=>return Ok(()),
+                Err(failure) if Instant::now()>=deadline=>return Err(failure),
+                Err(_)=>std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+    }
 }
 impl Drop for ChildOwner {
     fn drop(&mut self) {
@@ -1025,7 +1037,7 @@ mod source_raw_authority_tests {
     fn source_raw_admission_is_required_typed_and_descriptor_bound(){
         let original=photocatalog::storage_volume::NativePath::from_path(Path::new("/source.nrw"));
         let mut authority=json!({"original":original,"original_revision":{"bytes":"4","digest":"0".repeat(64),
-            "modified_ns":"0","identity":["1","2"]},"white_balance":"AsShot",
+            "modified_ns":"0","identity":["1","2"]},"white_balance":{"mode":"as_shot"},
             "request_id":"00000000-0000-4000-8000-000000000001","raw_hint":true});
         let value:SourceDevelopment=serde_json::from_value(authority.clone()).unwrap();assert!(value.raw_hint);
         assert_eq!(serde_json::to_value(&value).unwrap(),authority);

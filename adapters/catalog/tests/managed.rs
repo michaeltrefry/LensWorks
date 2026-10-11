@@ -585,7 +585,8 @@ fn managed_source_plan_float_and_original_preservation() {
         let worker = temp.path().join("fault-decode-worker");
         let template = r#"#!/usr/bin/python3
 import sys,json,struct,math,time,os
-i=json.load(sys.stdin);p=i['plan'];fault=FAULT
+r=sys.stdin.buffer.read();assert r[:8]==b'LWREQ003' and r[16]==0
+i=json.loads(r[17:17+struct.unpack('<Q',r[8:16])[0]]);p=i['plan'];fault=FAULT
 d={'source_revision':REV,'protocol':2,'kind':'float','mime':'application/x-lensworks-rgba-f32le','width':2,'height':2,'row_stride':'32','byte_length':'64','channels':4,'sample':'float32_le','color_space':'linear_srgb','alpha':'straight','orientation':'applied','source_identity':p['identity'],'original':p['original'],'original_revision':p['original_revision'],'plan_authority':p['authority']}
 d.update(json.loads(DETAIL))
 v=[0.0,2.0,-0.2,1.0]*4

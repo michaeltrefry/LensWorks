@@ -287,12 +287,26 @@ pub fn decode_original_source_rows(request:OriginalRequest<'_>,limits:DecodeLimi
     let xy=color::white_point(request.white_balance)?;
     // The decoder receives the very same held object that was fingerprinted.
     // No second path open can substitute a transient same-name original.
-    let summary=crate::media::decode_with_white_point_held_rows(held.try_clone()?,request.path,limits,xy,sink,cancel,raw_hint).map_err(RenderError::Decode)?;
+    let summary=crate::media::decode_with_white_point_held_rows(held.try_clone()?,request.path,limits,xy,sink,cancel,raw_hint)
+        .map_err(|error|decode_failure(&mut held,&before,&request,limits,cancel,error))?;
     cancel.check()?;held.seek(SeekFrom::Start(0))?;
     if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
     let current=open_original(request.path,limits.max_encoded_bytes)?;
     if original_stamp(&held)?!=before||original_stamp(&current)?!=before{return Err(RenderError::SourceChanged);}
     Ok(summary)
+}
+/// A decoder that stops because the original moved under it reports the same
+/// SourceChanged refusal as the post-decode fingerprint check, not a decode fault.
+fn decode_failure(held:&mut File,before:&OriginalStamp,request:&OriginalRequest<'_>,limits:DecodeLimits,
+    cancel:&dyn CancelCheck,error:crate::media::DecodeError)->RenderError {
+    let changed=(||->Result<bool,RenderError>{
+        held.seek(SeekFrom::Start(0))?;
+        if original_stamp(held)?!=*before{return Ok(true);}
+        if fingerprint_reader(held,before.bytes,cancel)?!=request.expected_fingerprint{return Ok(true);}
+        let current=open_original(request.path,limits.max_encoded_bytes)?;
+        Ok(original_stamp(&current)?!=*before)
+    })();
+    match changed {Ok(true)=>RenderError::SourceChanged,_=>RenderError::Decode(error)}
 }
 /// Small reference/full-result source path shares the held RAW authority. Production
 /// large documents use decode_original_source_rows and the bounded spool lifetime.
@@ -303,7 +317,8 @@ pub fn decode_original_source(request:OriginalRequest<'_>,limits:DecodeLimits,ca
     let before=original_stamp(&held)?;
     if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
     held.seek(SeekFrom::Start(0))?;let xy=color::white_point(request.white_balance)?;
-    let image=crate::media::decode_with_white_point_held_source(held.try_clone()?,request.path,limits,xy,cancel,raw_hint).map_err(RenderError::Decode)?;
+    let image=crate::media::decode_with_white_point_held_source(held.try_clone()?,request.path,limits,xy,cancel,raw_hint)
+        .map_err(|error|decode_failure(&mut held,&before,&request,limits,cancel,error))?;
     cancel.check()?;held.seek(SeekFrom::Start(0))?;
     if fingerprint_reader(&mut held,before.bytes,cancel)?!=request.expected_fingerprint{return Err(RenderError::SourceChanged);}
     let current=open_original(request.path,limits.max_encoded_bytes)?;

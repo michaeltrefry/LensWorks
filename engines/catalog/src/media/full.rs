@@ -1763,7 +1763,7 @@ mod source_metadata_tests {
         resource.extend_from_slice(&(original.len()as u32).to_be_bytes());resource.extend_from_slice(&original);if original.len()%2!=0{resource.push(0);}
         let mut psd=vec![0;26];psd[..4].copy_from_slice(b"8BPS");psd.extend_from_slice(&[0;4]);psd.extend_from_slice(&(resource.len()as u32).to_be_bytes());psd.extend_from_slice(&resource);
         let mut jpeg=vec![0xff,0xd8,0xff,0xe1];jpeg.extend_from_slice(&u16::try_from(original.len()+8).unwrap().to_be_bytes());jpeg.extend_from_slice(b"Exif\0\0");jpeg.extend_from_slice(&original);jpeg.extend_from_slice(&[0xff,0xd9]);
-        let mut raf=vec![0;92];raf[..14].copy_from_slice(b"FUJIFILMCCD-RAW");raf[84..88].copy_from_slice(&92_u32.to_be_bytes());raf[88..92].copy_from_slice(&(jpeg.len()as u32).to_be_bytes());raf.extend_from_slice(&jpeg);
+        let mut raf=vec![0;92];raf[..15].copy_from_slice(b"FUJIFILMCCD-RAW");raf[84..88].copy_from_slice(&92_u32.to_be_bytes());raf[88..92].copy_from_slice(&(jpeg.len()as u32).to_be_bytes());raf.extend_from_slice(&jpeg);
         for encoded in[psd,raf]{let before=encoded.clone();let actual=source_container_text(&encoded,&()).unwrap();
             assert_eq!(actual.make.as_deref(),Some("Make"));assert_eq!(actual.orientation,Some(6));assert_eq!(encoded,before);}
     }

@@ -551,8 +551,13 @@ nonisolated final class LWFloatDirectoryChain: @unchecked Sendable {
     var fd: Int32 { descriptors.last! }
     init(_ url: URL) throws {
         guard url.isFileURL, url.path.utf8.count < Int(PATH_MAX), url.path.hasPrefix("/"),
-            url.standardizedFileURL == url, url.resolvingSymlinksInPath() == url else { throw ProjectError.invalid }
-        let names = url.path.split(separator: "/").map(String.init)
+            url.standardizedFileURL == url, url.resolvingSymlinksInPath() == url,
+            let physical = realpath(url.path, nil) else { throw ProjectError.invalid }
+        let physicalPath = String(cString: physical); free(physical)
+        // Foundation reports /var, /tmp and /etc without their /private firmlink
+        // prefix. Only that system prefix may differ; any other link is refused.
+        guard physicalPath == url.path || physicalPath == "/private" + url.path else { throw ProjectError.invalid }
+        let names = physicalPath.split(separator: "/").map(String.init)
         var descriptors: [Int32] = [], identities: [stat] = []
         do {
             let root = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
