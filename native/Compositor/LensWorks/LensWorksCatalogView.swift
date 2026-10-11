@@ -137,14 +137,14 @@ struct LensWorksCatalogWorkspace: View {
                 Spacer()
                 Button("Review Progress") { locate(.general) }
                 Button("Cancel Storage Operation") { Task { try? await review.cancel() } }
-            }.padding(.horizontal, 8).padding(.bottom, 6).accessibilityIdentifier("LensWorks.storageHold")
+            }.padding(.horizontal, 8).padding(.bottom, 6).accessibilityElement(children: .contain).accessibilityIdentifier("LensWorks.storageHold")
         } else if let applied = review.lastApplied {
             HStack {
                 Text("Relinked \(applied.matched.value + applied.user_confirmed.value) original(s). Photo identities, copies, metadata and working versions are unchanged; no files moved.").font(.caption)
                 Spacer()
                 Button("Undo Relink") { Task { await action { try await review.undo(applied) } } }.disabled(review.isRunning)
                     .accessibilityIdentifier("LensWorks.undoRelink")
-            }.padding(.horizontal, 8).padding(.bottom, 6).accessibilityIdentifier("LensWorks.relinkApplied")
+            }.padding(.horizontal, 8).padding(.bottom, 6).accessibilityElement(children: .contain).accessibilityIdentifier("LensWorks.relinkApplied")
         }
     }
 

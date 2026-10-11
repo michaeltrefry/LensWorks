@@ -232,6 +232,7 @@ final class LensWorksRelinkReview {
         if !plan.summary_complete { return "This older review has no complete counts. Create a fresh review with these mappings before applying." }
         if plan.state == "applied" { return "This review is already applied. Undo it to restore the previous locations." }
         if plan.state != "ready" { return "Prepare this review before applying it." }
+        if plan.total.value == 0 { return "No catalog originals are under this folder or in this review. Check the old folder path." }
         if plan.total.value == plan.excluded.value { return "Every original in this review is excluded; there is nothing to apply." }
         if plan.unverified.value > 0 { return "Confirm or change the \(plan.unverified.value) association(s) without a retained original digest before applying." }
         if plan.unresolved.value > 0 || plan.unresolved_sources.value > 0 {

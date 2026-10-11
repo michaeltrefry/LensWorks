@@ -633,38 +633,37 @@ extension CompositorUITests {
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
     }
-    /// S06: a disconnected source folder keeps organization working, disables Create Working
-    /// Version with its reason, and a reviewed folder relink restores the original in one
-    /// Apply that one Undo reverses.
+    /// S06: a catalog whose source folder was disconnected after import keeps organization
+    /// working, disables Create Working Version with its reason, and a reviewed folder relink
+    /// restores the original in one Apply that one Undo reverses. The fixture owner imports
+    /// `S06/Photos` with the engine CLI, then moves it to `S06/Moved Photos` (the sandboxed
+    /// runner cannot move files itself).
     @MainActor
     func testS06OfflineSourceOrganizesAndFolderRelinkAppliesAndUndoes() throws {
         let environment = ProcessInfo.processInfo.environment
         let fixture = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S38_FIXTURE_ROOT"))
         let worker = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_WORKER")
         let decode = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_DECODE_WORKER")
-        let files = FileManager.default
-        let requested = fixture.appendingPathComponent("S06-Relink-" + UUID().uuidString)
-        try files.createDirectory(at: requested, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // The catalog records canonical paths (for example /private/var), so type those.
-        let physical = try XCTUnwrap(realpath(requested.path, nil)); defer { free(physical) }
+        let physical = try XCTUnwrap(realpath(fixture.appendingPathComponent("S06").path, nil)); defer { free(physical) }
         let work = URL(fileURLWithPath: String(cString: physical))
         let photos = work.appendingPathComponent("Photos"), moved = work.appendingPathComponent("Moved Photos")
-        let output = work.appendingPathComponent("WorkingVersions")
-        try files.createDirectory(at: output, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        try files.copyItem(at: fixture.appendingPathComponent("photos"), to: photos)
+        let catalogURL = work.appendingPathComponent("Demo.catalog"), output = work.appendingPathComponent("WorkingVersions")
+        let files = FileManager.default
+        guard !files.fileExists(atPath: photos.path), files.fileExists(atPath: moved.appendingPathComponent("single-harbor.png").path),
+              files.fileExists(atPath: catalogURL.path), files.fileExists(atPath: output.path) else {
+            throw NSError(domain: "LensWorks.S06", code: 1, userInfo: [NSLocalizedDescriptionKey: "The fixture owner must import S06/Photos into S06/Demo.catalog, move it to S06/Moved Photos, and create S06/WorkingVersions."])
+        }
         let app = XCUIApplication()
         addTeardownBlock { @MainActor in
-            if app.state == .runningForeground || app.state == .runningBackground {
-                app.typeKey("q", modifierFlags: .command)
-                XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
-            }
-            try? FileManager.default.removeItem(at: work)
+            guard app.state == .runningForeground || app.state == .runningBackground else { return }
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
         }
         app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
         app.launchEnvironment["LW_CATALOG_TEST_WORKER"] = worker
         app.launchEnvironment["LW_CATALOG_TEST_DECODE_WORKER"] = decode
-        app.launchArguments = ["--lensworks-catalog", work.appendingPathComponent("Demo.catalog").path, "--lensworks-create-catalog",
-                               "--lensworks-import", photos.path, "--lensworks-output", output.path,
+        app.launchArguments = ["--lensworks-catalog", catalogURL.path, "--lensworks-output", output.path,
                                "-ApplePersistenceIgnoreState", "YES", "-LensWorksPinnedWindowFrame", s47Placement.appKitFrame]
         app.launch(); app.activate()
         let grid = app.scrollViews["LensWorks.catalogGrid"]
@@ -678,32 +677,40 @@ extension CompositorUITests {
             let matched = NSPredicate { _, _ in (target.value as? String) == value }
             XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: matched, object: nil)], timeout: 30), .completed, "\(identifier): expected \"\(value)\", saw \(String(describing: target.value))")
         }
-        expect("LensWorks.originalAvailability", value: "Original available")
-
-        // Disconnect: the source folder leaves its recorded location.
-        try files.moveItem(at: photos, to: moved)
-        app.buttons["Refresh"].click()
-        XCTAssertTrue(photo.waitForExistence(timeout: 30))
-        photo.click()
         expect("LensWorks.originalAvailability", value: "Original missing")
         let create = element("LensWorks.createWorkingVersion")
         XCTAssertTrue(create.waitForExistence(timeout: 10))
         XCTAssertFalse(create.isEnabled)
         XCTAssertTrue(element("LensWorks.createWorkingVersionReason").exists)
-        // Organization keeps working from retained catalog data.
-        let rate = element("LensWorks.rateMenu"); rate.click()
-        let stars = app.menuItems["★★"]; XCTAssertTrue(stars.waitForExistence(timeout: 10)); stars.click()
-        let cell = grid.staticTexts["LensWorks.catalogAsset.single-harbor.png"]
-        let rated = NSPredicate { _, _ in (cell.value as? String) == "★★" }
+        // Organization keeps working from catalog data while the original is missing.
+        // The panel re-renders as availability is observed; reopen the menu if a re-render closed it.
+        let rate = element("LensWorks.rateMenu"), stars = app.menuItems["★★"]
+        for _ in 0..<3 where !stars.exists {
+            rate.click()
+            if !stars.waitForExistence(timeout: 5) { app.typeKey(.escape, modifierFlags: []) }
+        }
+        XCTAssertTrue(stars.exists); stars.click()
+        let rated = NSPredicate { _, _ in (photo.value as? String) == "★★" }
         XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: rated, object: nil)], timeout: 20), .completed)
 
-        // Locate the moved folder, review, and apply once.
-        element("LensWorks.locateOriginals").click()
+        // Locate the moved folder, review it, and apply once.
+        // The navigation column's container identifier covers its direct controls; find this one by title.
+        let locate = app.buttons["Locate Originals…"]
+        XCTAssertTrue(locate.waitForExistence(timeout: 10))
         let from = element("LensWorks.relinkFromPath")
-        XCTAssertTrue(from.waitForExistence(timeout: 10))
-        from.click(); from.typeText(photos.path)
+        for _ in 0..<3 where !from.exists { locate.click(); _ = from.waitForExistence(timeout: 5) }
+        XCTAssertTrue(from.exists, "The Locate Originals sheet did not open")
+        func type(_ field: XCUIElement, _ text: String) {
+            let typed = NSPredicate { _, _ in (field.value as? String) == text }
+            for _ in 0..<3 where (field.value as? String) != text {
+                field.click(); field.typeKey("a", modifierFlags: .command); field.typeText(text)
+                _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: typed, object: nil)], timeout: 3)
+            }
+            XCTAssertEqual(field.value as? String, text)
+        }
+        type(from, photos.path)
         let destination = element("LensWorks.relinkDestinationPath")
-        destination.click(); destination.typeText(moved.path)
+        type(destination, moved.path)
         element("LensWorks.relinkDestinationAdd").click()
         element("LensWorks.relinkReviewFolder").click()
         let apply = element("LensWorks.relinkApply")
@@ -715,14 +722,16 @@ extension CompositorUITests {
         XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: applied, object: nil)], timeout: 60), .completed)
         element("LensWorks.relinkDone").click()
         expect("LensWorks.originalAvailability", value: "Original available")
-        XCTAssertTrue(create.isEnabled)
-        XCTAssertEqual(cell.value as? String, "★★")
+        let ready = NSPredicate { _, _ in create.isEnabled }
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 20), .completed)
+        XCTAssertEqual(photo.value as? String, "★★")
 
-        // One Undo restores the previous association.
+        // One Undo restores the previous association; no file moved back.
         let undo = element("LensWorks.undoRelink")
         XCTAssertTrue(undo.waitForExistence(timeout: 10)); undo.click()
         expect("LensWorks.originalAvailability", value: "Original missing")
-        XCTAssertFalse(files.fileExists(atPath: photos.path), "No file moved back to the old location")
+        XCTAssertFalse(files.fileExists(atPath: photos.path))
+        XCTAssertTrue(files.fileExists(atPath: moved.appendingPathComponent("single-harbor.png").path))
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
     }

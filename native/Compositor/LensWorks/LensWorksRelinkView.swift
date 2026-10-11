@@ -123,6 +123,8 @@ struct LensWorksRelinkSheet: View {
             }
         }
         .frame(minWidth: 640, idealWidth: 720, minHeight: 560, idealHeight: 720)
+        // A container, so the sheet's own control identifiers are not overwritten.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("LensWorks.relinkSheet")
         .task {
             if case .folder(let folder) = focus { from = .Native(folder.locator) }
