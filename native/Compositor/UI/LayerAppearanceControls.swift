@@ -6,7 +6,7 @@ struct LayerAppearanceControls: View {
     @State private var percentage = "100"
     @State private var stepper = ArrowStepper()
     @State private var cancellingPercentage = false
-    @State private var interactionToken: UUID?
+    @State private var interaction = LayerOpacityInteraction()
     @FocusState private var focused: Bool
     var body: some View {
         VStack(spacing: 8) {
@@ -46,28 +46,10 @@ struct LayerAppearanceControls: View {
             .onDisappear { finishInteraction() }
             .onExitCommand { cancelInteraction(); sync() }
     }
-    private func beginInteraction() {
-        guard interactionToken == nil, session.activeLayerID == layerID else { return }
-        session.beginOpacityEdit(); interactionToken = session.commandInteraction?.token
-    }
-    private func finishInteraction() {
-        guard let token = interactionToken else { return }
-        defer { interactionToken = nil }
-        guard session.commandInteraction?.token == token else { return }
-        session.finishOpacityEdit()
-    }
-    private func cancelInteraction() {
-        guard let token = interactionToken else { return }
-        defer { interactionToken = nil }
-        guard session.commandInteraction?.token == token else { return }
-        session.cancelOpacityEdit()
-    }
-    private func setOpacity(_ value: Double) {
-        if interactionToken == nil { beginInteraction() }
-        guard let token = interactionToken, session.commandInteraction?.token == token,
-              session.activeLayerID == layerID else { return }
-        session.setLayerOpacity(value)
-    }
+    private func beginInteraction() { interaction.begin(session: session, layerID: layerID) }
+    private func finishInteraction() { interaction.finish(session: session) }
+    private func cancelInteraction() { interaction.cancel(session: session) }
+    private func setOpacity(_ value: Double) { interaction.set(value, session: session, layerID: layerID) }
     /// Up and Down nudge the opacity by one percent, or ten with Shift.
     private func step(_ percent: Double) {
         guard session.activeLayerID == layerID else { return }
@@ -84,5 +66,37 @@ struct LayerAppearanceControls: View {
         guard session.activeLayerID == layerID else { return }
         if let value = Double(percentage), value.isFinite { setOpacity(value / 100) }
         sync()
+    }
+}
+
+/// Owns the opacity control's registry interaction. A drag, scrub or focused
+/// field opens one interaction that coalesces its changes into a single undo
+/// step; a change with no interaction open (a keyboard or accessibility
+/// increment) is committed on its own as one complete command.
+struct LayerOpacityInteraction {
+    private(set) var token: UUID?
+    mutating func begin(session: EditorSession, layerID: UUID?) {
+        guard token == nil, session.activeLayerID == layerID else { return }
+        session.beginOpacityEdit(); token = session.commandInteraction?.token
+    }
+    mutating func finish(session: EditorSession) {
+        guard let token else { return }
+        defer { self.token = nil }
+        guard session.commandInteraction?.token == token else { return }
+        session.finishOpacityEdit()
+    }
+    mutating func cancel(session: EditorSession) {
+        guard let token else { return }
+        defer { self.token = nil }
+        guard session.commandInteraction?.token == token else { return }
+        session.cancelOpacityEdit()
+    }
+    mutating func set(_ value: Double, session: EditorSession, layerID: UUID?) {
+        guard session.activeLayerID == layerID else { return }
+        let standalone = token == nil
+        if standalone { begin(session: session, layerID: layerID) }
+        guard let token, session.commandInteraction?.token == token else { return }
+        session.setLayerOpacity(value)
+        if standalone { finish(session: session) }
     }
 }

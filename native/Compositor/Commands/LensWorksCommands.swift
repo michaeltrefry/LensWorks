@@ -114,6 +114,23 @@ extension EditorSession {
         }
         return nil
     }
+    /// The command a Layer menu item targets: the selected layer, or nil when none is selected.
+    func layerMenuCommand(_ id: LensWorksCommandID) -> LensWorksLayerCommand? {
+        guard let layer = activeLayerID else { return nil }
+        switch id {
+        case .beginRename: return .beginRename(layer)
+        case .visibility: return .visibility([layer], nil)
+        default: return nil
+        }
+    }
+    /// The Layer menu's disabled reason. With no selected layer there is no command to
+    /// target, so the menu says so rather than reporting a stale or missing layer.
+    func layerMenuAvailability(_ command: LensWorksLayerCommand?) -> String? {
+        if let command { return commandAvailability(command) }
+        guard document != nil else { return "Open a document first." }
+        guard !isProjectBusy, !isImporting else { return "Finish the current project operation first." }
+        return "Select a layer first."
+    }
     func admitCommand(_ command: LensWorksLayerCommand) throws -> LensWorksLayerAdmission {
         if let reason = commandAvailability(command) { throw LensWorksCommandRefusal(reason: reason) }
         guard let document else { throw LensWorksCommandRefusal(reason: "Open a document first.") }
@@ -230,12 +247,13 @@ extension LensWorksCatalog {
 
 struct LensWorksLayerCommandButton: View {
     let session: EditorSession
-    let command: LensWorksLayerCommand
+    let id: LensWorksCommandID
     var label: String? = nil
     var body: some View {
-        let descriptor = LensWorksCommandRegistry.descriptor(command.id)
-        let reason = session.commandAvailability(command)
-        Button { session.runCommand(command) } label: {
+        let descriptor = LensWorksCommandRegistry.descriptor(id)
+        let command = session.layerMenuCommand(id)
+        let reason = session.layerMenuAvailability(command)
+        Button { if let command { session.runCommand(command) } } label: {
             Text(LensWorksCommandRegistry.menuLabel(label ?? descriptor.label, reason: reason))
         }.disabled(reason != nil).help(reason ?? descriptor.label)
             .accessibilityIdentifier(descriptor.id.rawValue)

@@ -28,6 +28,37 @@ struct CommandRegistryTests {
             session.undo(); #expect(session.activeLayer?.isVisible == true)
         }
     }
+    @Test func layerMenuVisibilityItemAndItsKeyBindingResolveToTheSameCommand() async throws {
+        // The effective binding registered for .visibility resolves back to that command alone.
+        let binding = try #require(ShortcutDefinition.all.first { $0.commandID == .visibility })
+        let chord = ShortcutSettings.shared.chord(binding)
+        #expect(ShortcutDefinition.all.filter { $0.isMenu && ShortcutSettings.shared.chord($0) == chord }.map(\.commandID) == [.visibility])
+        // The rendered Layer menu item for that command carries exactly that binding, and no
+        // other item in the main menu claims it, so the key and the menu reach the same command.
+        var layerMenu: NSMenu?
+        for _ in 0..<50 where layerMenu == nil {
+            layerMenu = NSApp.mainMenu?.items.first { $0.title == LensWorksCommandRegistry.descriptor(.visibility).menu }?.submenu
+            if layerMenu == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        let menu = try #require(layerMenu)
+        let titles = ["Hide Layer", "Show Layer"]
+        let item = try #require(menu.items.first { item in titles.contains { item.title == $0 || item.title.hasPrefix($0 + " — ") } })
+        let mask: NSEvent.ModifierFlags = [(chord.modifiers & 1 != 0 ? .command : []), (chord.modifiers & 2 != 0 ? .option : []),
+                                           (chord.modifiers & 4 != 0 ? .control : []), (chord.modifiers & 8 != 0 ? .shift : [])]
+        func claims(_ candidate: NSMenuItem) -> Bool {
+            candidate.keyEquivalent.lowercased() == chord.key && candidate.keyEquivalentModifierMask.intersection([.command, .option, .control, .shift]) == mask
+        }
+        #expect(claims(item))
+        func all(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(all) ?? []) } }
+        #expect(all(try #require(NSApp.mainMenu)).filter(claims).count == 1)
+    }
+    @Test func renameMenuWithoutASelectedLayerSaysToSelectOne() throws {
+        let session = try session()
+        session.selectedLayerIDs = []; session.activeLayerID = nil
+        #expect(session.layerMenuCommand(.beginRename) == nil)
+        #expect(session.layerMenuAvailability(session.layerMenuCommand(.beginRename)) == "Select a layer first.")
+        #expect(session.layerMenuAvailability(session.layerMenuCommand(.visibility)) == "Select a layer first.")
+    }
     @Test func opacityBurstCreatesOneNamedUndoAndRedo() throws {
         let session = try session(), id = try #require(session.activeLayerID)
         let token = try session.beginCommandInteraction(.opacity([id], 1))
@@ -37,6 +68,17 @@ struct CommandRegistryTests {
         #expect(session.history.undoCount == 1 && session.history.undoName == "Layer Opacity")
         session.undo(); #expect(session.activeLayer?.opacity == 1)
         session.redo(); #expect(session.activeLayer?.opacity == 0.25)
+    }
+    @Test func standaloneOpacityChangeCommitsOneCommandAndLeavesNoInteractionOpen() throws {
+        let session = try session(), id = try #require(session.activeLayerID)
+        var control = LayerOpacityInteraction()
+        // A keyboard or accessibility increment arrives without onEditingChanged.
+        control.set(0.4, session: session, layerID: id)
+        #expect(control.token == nil && session.commandInteraction == nil)
+        #expect(session.commandAvailability(.visibility([id], nil)) == nil)
+        #expect(session.activeLayer?.opacity == 0.4)
+        #expect(session.history.undoCount == 1 && session.history.undoName == "Layer Opacity")
+        session.undo(); #expect(session.activeLayer?.opacity == 1 && session.history.undoCount == 0)
     }
     @Test func cancelRestoresStartingValueWithoutHistoryAndPreservesRedo() throws {
         let session = try session(), id = try #require(session.activeLayerID)

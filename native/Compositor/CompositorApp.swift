@@ -320,8 +320,8 @@ struct CompositorApp: App {
                         .disabled(!session.canEditLayers || session.activeLayer?.parentID == nil)
                     Button("New Blank Layer") { session.addBlankLayer() }
                         .configuredKeyboardShortcut("n", modifiers: [.command, .shift]).disabled(!session.canEditLayers)
-                    LensWorksLayerCommandButton(session: session, command: .beginRename(session.activeLayerID ?? UUID()))
-                    LensWorksLayerCommandButton(session: session, command: .visibility(session.activeLayerID.map { [$0] } ?? [], nil),
+                    LensWorksLayerCommandButton(session: session, id: .beginRename)
+                    LensWorksLayerCommandButton(session: session, id: .visibility,
                         label: session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer")
                         .registeredCommandShortcut(.visibility)
                     Divider()
