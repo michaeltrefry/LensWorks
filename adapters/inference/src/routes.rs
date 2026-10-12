@@ -459,7 +459,22 @@ where
 
     fn run(state: &mut State, request: Request, job: &Shared) {
         let residency = request.load.residency;
-        let outcome = route(state, &request, job);
+        // Measured unified-memory need: MLX's high-water mark across this job (load included
+        // when the model was not resident), reported with the result so the model store can
+        // admit models by measurement rather than estimate.
+        mlx_rs::memory::reset_peak_memory();
+        let outcome = route(state, &request, job).map(|(outputs, mut result)| {
+            if let Some(object) = result.as_object_mut() {
+                object.insert(
+                    "memory".into(),
+                    json!({
+                        "peak_bytes": mlx_rs::memory::get_peak_memory(),
+                        "active_bytes": mlx_rs::memory::get_active_memory(),
+                    }),
+                );
+            }
+            (outputs, result)
+        });
         // A load/execution failure may leave a provider inconsistent, so it is dropped; a
         // rejected request or a cooperative cancel leaves a healthy model that `keep_loaded` keeps.
         if residency == Residency::UnloadAfter || matches!(outcome, Err(JobError::Failed(_))) {

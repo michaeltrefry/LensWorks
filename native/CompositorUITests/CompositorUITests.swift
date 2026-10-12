@@ -605,6 +605,71 @@ extension CompositorUITests {
             app.typeKey(key.lowercased(), modifierFlags: modifiers)
         }
     }
+    /// S24: Edit › AI Models… lists every model this Mac can admit with its state, and the explicit
+    /// download sheet shows size, location, licence terms and requires acceptance. The SceneWorks
+    /// library and the managed store are private empty folders, so nothing is admitted and nothing
+    /// is downloaded (the test never presses Download).
+    @MainActor
+    func testS24AIModelsWindowShowsStatesAndExplicitDownloadSheet() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let library = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_INFERENCE_LIBRARY")
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("lw-s24-\(UUID().uuidString)")
+        let hub = scratch.appendingPathComponent("hub"), store = scratch.appendingPathComponent("store")
+        try FileManager.default.createDirectory(at: hub, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let suite = "net.trefry.lensworks.ui-s24-\(UUID().uuidString)"
+        let app = XCUIApplication()
+        addTeardownBlock { @MainActor in
+            if app.state == .runningForeground || app.state == .runningBackground {
+                app.typeKey("q", modifierFlags: .command)
+                XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+            }
+            try? FileManager.default.removeItem(at: scratch)
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+        }
+        app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
+        app.launchEnvironment["LW_INFERENCE_LIBRARY"] = library
+        app.launchEnvironment["HF_HUB_CACHE"] = hub.path
+        app.launchEnvironment["LW_MODEL_STORE_ROOT"] = store.path
+        app.launchArguments = ["--lensworks-defaults-suite", suite, "-ApplePersistenceIgnoreState", "YES", "-LensWorksPinnedWindowFrame", s47Placement.appKitFrame]
+        app.launch(); app.activate()
+        let edit = app.menuBars.menuBarItems["Edit"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 30)); edit.click()
+        let item = app.menuBars.menuItems["AI Models…"]
+        XCTAssertTrue(item.waitForExistence(timeout: 10)); s38Click(item)
+
+        let state = app.descendants(matching: .any).matching(identifier: "LensWorks.models.state.sam2_hiera_large").firstMatch
+        XCTAssertTrue(state.waitForExistence(timeout: 60), "the SAM 2 row is listed")
+        let notInstalled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Not installed' OR value == 'Not installed'"), object: state)
+        XCTAssertEqual(XCTWaiter.wait(for: [notInstalled], timeout: 60), .completed, "an empty library reports Not installed: \(state.label)")
+        for id in ["sana_sprint_1600m_q4", "clip_vit_l14", "sam3"] {
+            XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "LensWorks.models.state.\(id)").firstMatch.exists
+                          || app.descendants(matching: .any).matching(identifier: "LensWorks.models.hidden").firstMatch.exists, id)
+        }
+        let window = XCTAttachment(screenshot: app.screenshot()); window.name = "S24 AI Models"; window.lifetime = .keepAlways; add(window)
+
+        let download = app.buttons["LensWorks.models.download.sam2_hiera_large"]
+        XCTAssertTrue(download.waitForExistence(timeout: 10)); download.click()
+        let size = app.descendants(matching: .any).matching(identifier: "LensWorks.download.size").firstMatch
+        XCTAssertTrue(size.waitForExistence(timeout: 20), "the sheet shows the download size")
+        let location = app.descendants(matching: .any).matching(identifier: "LensWorks.download.location").firstMatch
+        XCTAssertTrue(location.exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "LensWorks.download.license.sam2_1_hiera_large").firstMatch.exists,
+                      "the runtime's licence row is shown")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "LensWorks.download.license.sceneworks.sam2").firstMatch.exists,
+                      "SceneWorks' declared licence is listed next to the runtime's")
+        let start = app.buttons["LensWorks.download.start"]
+        XCTAssertTrue(start.exists)
+        XCTAssertFalse(start.isEnabled, "downloading needs explicit licence acceptance")
+        let accept = app.descendants(matching: .any).matching(identifier: "LensWorks.download.accept").firstMatch
+        XCTAssertTrue(accept.exists); accept.click()
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: start)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 10), .completed)
+        let sheet = XCTAttachment(screenshot: app.screenshot()); sheet.name = "S24 download sheet"; sheet.lifetime = .keepAlways; add(sheet)
+        app.buttons["Close"].click()
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: store.path)).allSatisfy { $0.hasSuffix(".json") }, "nothing was downloaded")
+    }
+
     /// S05: the native catalog Rate/Flag menus change the selected photo and the
     /// organization Undo/Redo buttons reverse and replay those changes.
     @MainActor

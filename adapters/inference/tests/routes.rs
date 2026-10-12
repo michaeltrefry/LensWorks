@@ -543,6 +543,9 @@ fn transform_converts_rgba_over_white_and_maps_the_rgb_output() {
     let h = Harness::new();
     let events = finish(&h, transform_request());
     let result = completed(&events);
+    // Every completed result carries the job's measured unified-memory high-water mark.
+    assert!(result["memory"]["peak_bytes"].is_u64(), "{result}");
+    assert!(result["memory"]["active_bytes"].is_u64(), "{result}");
     let got = h.script.last();
     assert_eq!(got["image"]["pixels"], json!(OVER_WHITE));
     assert_eq!(

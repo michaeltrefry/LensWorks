@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "inferenceRevision": "25bd55cdb6a56c78b07584a12150c9f5d46be439",
+  "downloadBaseURL": "https://huggingface.co",
+  "measurement": "MLX peak/active memory reported by the adapter's COMPLETED result (fresh load, unload_after) from adapters/inference/tests/real_weights.rs measure_reference_memory, Apple M5 Max, 2026-10-12, inference 25bd55cd.",
+  "models": [
+    {
+      "id": "sana_sprint_1600m_q4",
+      "name": "SANA-Sprint 1.6B (q4)",
+      "summary": "Few-step text-to-image and reference-guided generation.",
+      "routes": [{"task": "generate", "provider": "sana_sprint_1600m"}],
+      "weights": {"kind": "dir", "path": "q4"},
+      "licenseComponents": [
+        {"key": "sana_sprint_1_6b_1024px_diffusers", "declared": "apache-2.0"},
+        {"key": "gemma_2_2b_it", "declared": "gemma"}
+      ],
+      "sceneWorksLicense": {"id": "sana", "name": "NVIDIA Open Model License", "homepage": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px", "nonCommercial": true},
+      "memory": {"peakBytes": 19832105360, "residentBytes": 5568309580, "pixels": 1048576},
+      "components": [
+        {
+          "repository": "SceneWorks/Sana_Sprint_1.6B_1024px_mlx",
+          "revision": "0b0d18484cac2fb515e76d25a09a5911ae4ab58e",
+          "files": [
+            {"path": "q4/text_encoder/gemma-2-2b-it.safetensors", "size": 2318861357, "sha256": "c2520273a448deeb282c935e4ece0a63bce262a1777aa93f0b5d4c1d6cc3ad93"},
+            {"path": "q4/text_encoder/tokenizer.json", "size": 17525357, "sha256": "3f289bc05132635a8bc7aca7aa21255efd5e18f3710f43e3cdb96bcd41be4922"},
+            {"path": "q4/transformer/diffusion_pytorch_model.safetensors", "size": 1992434945, "sha256": "1ce2961d04a9cec01e9bd52ffbbd777eacaa9a020f7ebc2aed2b46a486104f03"},
+            {"path": "q4/vae/diffusion_pytorch_model.safetensors", "size": 1249044836, "sha256": "dfd991d1b54ffabf22745c5885589d8f2a7bc59930d95d92bd741c4fc64454bb"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "clip_vit_l14",
+      "name": "CLIP ViT-L/14",
+      "summary": "Image and text embeddings for semantic search.",
+      "routes": [{"task": "embed_image", "provider": "clip_vit_l14"}, {"task": "embed_text", "provider": "clip_vit_l14_text"}],
+      "weights": {"kind": "dir", "path": ""},
+      "licenseComponents": [],
+      "licenseNote": "The openai/clip-vit-large-patch14 model card declares no licence, the pinned runtime's licence table has no row for it (inference mlx-gen-catalog licenses.rs), and SceneWorks' licence manifest has no entry for it. Review the model card before downloading.",
+      "memory": {"peakBytes": 1577263112, "residentBytes": 1215877124, "pixels": 1048576},
+      "components": [
+        {
+          "repository": "openai/clip-vit-large-patch14",
+          "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41",
+          "files": [
+            {"path": "model.safetensors", "size": 1710540580, "sha256": "a2bf730a0c7debf160f7a6b50b3aaf3703e7e88ac73de7a314903141db026dcb"},
+            {"path": "tokenizer.json", "size": 2224003, "sha256": "a83e0809aa4c3af7208b2df632a7a69668c6d48775b3c3fe4e1b1199d1f8b8f4"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sam2_hiera_large",
+      "name": "SAM 2.1 Hiera Large",
+      "summary": "Box-prompted subject masks.",
+      "routes": [{"task": "segment_sam2_box", "provider": "sam2"}],
+      "weights": {"kind": "file", "path": "sam2.1_hiera_large.safetensors"},
+      "licenseComponents": [{"key": "sam2_1_hiera_large", "declared": "apache-2.0"}],
+      "sceneWorksLicense": {"id": "sam2", "name": "Apache-2.0", "homepage": "https://huggingface.co/facebook/sam2.1-hiera-large", "nonCommercial": false},
+      "memory": {"peakBytes": 3352500872, "residentBytes": 909891092, "pixels": 1048576},
+      "components": [
+        {
+          "repository": "SceneWorks/sam2-mlx",
+          "revision": "fbc86db0dceb8c744e5fc95feadc37572107be69",
+          "files": [
+            {"path": "sam2.1_hiera_large.safetensors", "size": 935568342, "sha256": "bbbd94abd316a0867d906c6cdf2d51c780c3fd3e804ab47bdcdc9b29763628e1"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sam3",
+      "name": "SAM 3",
+      "summary": "Open-vocabulary concept and box subject masks.",
+      "routes": [{"task": "segment_sam3_concept", "provider": "sam3"}, {"task": "segment_sam3_box", "provider": "sam3"}],
+      "weights": {"kind": "file", "path": "model.safetensors", "tokenizer": "tokenizer.json"},
+      "licenseComponents": [{"key": "sam3", "declared": "SAM License"}],
+      "sceneWorksLicense": {"id": "sam3", "name": "SAM License (Meta, custom)", "homepage": "https://huggingface.co/facebook/sam3", "nonCommercial": false},
+      "memory": {"peakBytes": 7375436400, "residentBytes": 3384056052, "pixels": 1048576},
+      "components": [
+        {
+          "repository": "SceneWorks/sam3-mlx",
+          "revision": "3ed10b164a755c00b1a4d671dde95719c127e1a7",
+          "files": [
+            {"path": "model.safetensors", "size": 3439938512, "sha256": "6d06f0a5f84e435071fe6603e61d0b4cc7b40e0d39d487cfd4d67d8cc11cc14a"},
+            {"path": "tokenizer.json", "size": 3642073, "sha256": "6d9109cc838977f3ca94a379eec36aecc7c807e1785cd729660ca2fc0171fb35"}
+          ]
+        }
+      ]
+    }
+  ]
+}

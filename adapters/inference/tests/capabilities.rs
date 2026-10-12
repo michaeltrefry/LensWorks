@@ -355,3 +355,43 @@ fn caption_and_embedder_capabilities_reflect_the_descriptors() {
         );
     }
 }
+
+/// The capability document carries the pinned runtime's checkpoint licence table, which the
+/// native model store uses to validate and show every model component's terms.
+#[test]
+fn capabilities_carry_the_runtime_licence_table() {
+    let doc = document();
+    let table = &doc["model_licenses"];
+    assert_eq!(table["kind"], "model-weight-licenses");
+    let components = table["components"].as_array().unwrap();
+    let row = |key: &str| {
+        components
+            .iter()
+            .find(|c| c["component"] == key)
+            .unwrap_or_else(|| panic!("no licence row for {key}"))
+            .clone()
+    };
+    assert_eq!(row("sam3")["declared"], "SAM License");
+    assert_eq!(row("sam3")["gated"], true);
+    assert_eq!(row("sam2_1_hiera_large")["family"], "apache-2-0");
+    let families = table["families"].as_array().unwrap();
+    for key in [
+        "sam3",
+        "sam2_1_hiera_large",
+        "sana_sprint_1_6b_1024px_diffusers",
+        "gemma_2_2b_it",
+    ] {
+        let family = row(key)["family"].clone();
+        let family = families
+            .iter()
+            .find(|f| f["id"] == family)
+            .expect("family resolves");
+        assert!(family["name"].as_str().is_some_and(|n| !n.is_empty()));
+        assert!(
+            family["text_url"]
+                .as_str()
+                .is_some_and(|n| n.starts_with("https://"))
+        );
+    }
+    assert!(table.get("providers").is_none());
+}

@@ -358,3 +358,69 @@ fn real_image_job_cancel_failure_and_downstream_routes() {
         "nothing stays resident under unload_after"
     );
 }
+
+/// Measures each LensWorks model's unified-memory need at its reference geometry (a fresh load
+/// per job, `unload_after`) and prints one `LW_MEMORY {json}` line per model. These are the
+/// measurements recorded in `native/Compositor/LensWorks/LensWorksModels.json`; every completed
+/// result carries the same `memory` block, which the native model store also records per machine.
+#[test]
+#[ignore = "needs local SceneWorks model files; run with --ignored --test-threads=1"]
+fn measure_reference_memory() {
+    fn report(model: &str, pixels: u32, events: &[Event]) {
+        let end = terminal(events);
+        assert_eq!(end.kind, 5, "{model}: {}", end.json);
+        assert_eq!(end.json["model_reused"], false);
+        let memory = &end.json["memory"];
+        assert!(
+            memory["peak_bytes"].as_u64().unwrap() > 0,
+            "{model}: {memory}"
+        );
+        println!(
+            "LW_MEMORY {}",
+            json!({"model": model, "pixels": pixels, "memory": memory})
+        );
+    }
+    let Some(sana) = resolve(
+        "LW_INFERENCE_SANA_SPRINT_DIR",
+        hub_snapshot("models--SceneWorks--Sana_Sprint_1.6B_1024px_mlx").map(|p| p.join("q4")),
+        "Sana Sprint 1.6B (q4)",
+    ) else {
+        return;
+    };
+    let events = Job::start(json!({"version": 1, "task": "generate", "provider": "sana_sprint_1600m", "weights": {"dir": sana},
+                                   "params": {"prompt": "a red apple on a wooden table", "width": 1024, "height": 1024, "steps": 2, "seed": 7}}), &[]).finish();
+    report("sana_sprint_1600m_q4", 1024 * 1024, &events);
+    let image = events.iter().find(|e| e.kind == 3).expect("image").clone();
+    if let Some(clip) = resolve(
+        "LW_INFERENCE_CLIP_DIR",
+        hub_snapshot("models--openai--clip-vit-large-patch14"),
+        "CLIP ViT-L/14",
+    ) {
+        let events = Job::start(json!({"version": 1, "task": "embed_image", "provider": "clip_vit_l14", "weights": {"dir": clip},
+                                       "params": {"inputs": [0]}}), &[rgb_input(&image)]).finish();
+        report("clip_vit_l14", 1024 * 1024, &events);
+        let events = Job::start(json!({"version": 1, "task": "embed_text", "provider": "clip_vit_l14_text", "weights": {"dir": clip},
+                                       "params": {"texts": ["a red apple"]}}), &[]).finish();
+        report("clip_vit_l14_text", 0, &events);
+    }
+    if let Some(sam2) = resolve(
+        "LW_INFERENCE_SAM2_FILE",
+        hub_snapshot("models--SceneWorks--sam2-mlx")
+            .map(|p| p.join("sam2.1_hiera_large.safetensors")),
+        "SAM 2.1 hiera large",
+    ) {
+        let events = Job::start(json!({"version": 1, "task": "segment_sam2_box", "provider": "sam2", "weights": {"file": sam2},
+                                       "params": {"input": 0, "box_xyxy": [192.0, 192.0, 832.0, 832.0], "model_size": "large"}}), &[rgb_input(&image)]).finish();
+        report("sam2_hiera_large", 1024 * 1024, &events);
+    }
+    if let Some(sam3) = resolve(
+        "LW_INFERENCE_SAM3_DIR",
+        hub_snapshot("models--SceneWorks--sam3-mlx"),
+        "SAM3",
+    ) {
+        let events = Job::start(json!({"version": 1, "task": "segment_sam3_concept", "provider": "sam3",
+                                       "weights": {"file": sam3.join("model.safetensors")}, "tokenizer": sam3.join("tokenizer.json"),
+                                       "params": {"input": 0, "concept": "apple"}}), &[rgb_input(&image)]).finish();
+        report("sam3", 1024 * 1024, &events);
+    }
+}
