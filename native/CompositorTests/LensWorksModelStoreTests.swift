@@ -30,6 +30,7 @@ private nonisolated struct FixtureModel {
     /// (name, nonCommercial) as SceneWorks' licence manifest declares it.
     var sceneWorksLicense: (String, Bool)? = nil
     var licenseNote: String? = nil
+    var licenseAcknowledgement: String? = nil
     /// Further components (repository, files), each its own Hugging Face repository.
     var extra: [(String, [FixtureFile])] = []
 }
@@ -80,6 +81,7 @@ private nonisolated final class Fixture: @unchecked Sendable {
                     entry["sceneWorksLicense"] = ["id": model.id, "name": name, "homepage": "https://example.invalid/\(model.id)", "nonCommercial": nonCommercial]
                 }
                 if let note = model.licenseNote { entry["licenseNote"] = note }
+                if let acknowledgement = model.licenseAcknowledgement { entry["licenseAcknowledgement"] = acknowledgement }
                 return entry
             },
         ]
@@ -374,10 +376,20 @@ private nonisolated final class ScriptedRuntime: LWInferenceJobStarting, @unchec
         let store = LWModelStore(manifest: manifest, configuration: fixture.configuration(), facts: nil)
         let sana = try await store.licenseTerms("sana_sprint_1600m_q4")
         #expect(sana.sources.map(\.origin) == [.runtime, .runtime, .sceneWorks], "runtime rows and SceneWorks' declaration are all listed")
-        #expect(sana.nonCommercial && sana.conflict != nil, "SANA-Sprint's non-commercial SceneWorks terms govern over the runtime's apache-2.0 row")
+        #expect(!sana.nonCommercial && sana.conflict == nil, "SceneWorks' Apache-2.0 + Gemma declaration agrees with the runtime's rows")
+        #expect(sana.requiresAcknowledgementForUse && sana.acknowledgement?.contains("Gemma Terms of Use") == true
+                && sana.acknowledgement?.contains("Prohibited Use Policy") == true && !sana.acknowledgementPrompt.contains("non-commercial"),
+                "SANA-Sprint's acknowledgement is for the Gemma Terms of Use of its text encoder")
+        let sanaDeclared = try #require(sana.sources.last)
+        #expect(!sanaDeclared.nonCommercial && sanaDeclared.name.contains("Apache-2.0") && sanaDeclared.name.contains("Gemma Terms of Use"))
+        #expect(Set(sanaDeclared.documents.map(\.url.absoluteString)) == ["https://github.com/NVlabs/Sana/blob/main/LICENSE", "https://ai.google.dev/gemma/terms",
+                                                                         "https://ai.google.dev/gemma/prohibited_use_policy"])
         let clip = try await store.licenseTerms("clip_vit_l14")
         #expect(!clip.runtimeDeclared && clip.sources.isEmpty && clip.note != nil && !clip.nonCommercial)
         #expect(try await !store.licenseTerms("sam2_hiera_large").nonCommercial)
+        for model in manifest.models where model.id != "sana_sprint_1600m_q4" {
+            #expect(try await !store.licenseTerms(model.id).requiresAcknowledgementForUse, "\(model.id) needs no use acknowledgement")
+        }
         #expect(manifest.schemaVersion == 1 && LWModelManifest.isRevision(manifest.inferenceRevision))
         #expect(Set(manifest.models.map(\.id)) == ["sana_sprint_1600m_q4", "clip_vit_l14", "sam2_hiera_large", "sam3"])
         for model in manifest.models {
@@ -895,6 +907,31 @@ private nonisolated final class ScriptedRuntime: LWInferenceJobStarting, @unchec
         await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await sceneWorksChanged.lease(model.id) }
         try await sceneWorksChanged.acceptLicense(model.id)
         try await sceneWorksChanged.lease(model.id).release()
+    }
+
+    @Test func useRestrictedTermsNeedVersionedAcknowledgementWithoutNonCommercialTerms() async throws {
+        let fixture = try Fixture()
+        var model = smallModel()
+        model.licenses = [("fixture_weights", "apache-2.0"), ("fixture_encoder", "gemma")]
+        model.sceneWorksLicense = ("Apache-2.0 · Fixture Terms of Use", false)
+        model.licenseAcknowledgement = "I accept the Fixture Terms of Use, including its prohibited use policy."
+        try fixture.installInHub(model)
+        let manifest = try fixture.manifest([model])
+        let store = LWModelStore(manifest: manifest, configuration: fixture.configuration(), facts: fixture.facts([model]))
+        let status = try #require(await store.refresh().first)
+        #expect(!status.license.nonCommercial && status.license.conflict == nil && status.license.governing == "As declared below.")
+        #expect(status.license.acknowledgementPrompt == model.licenseAcknowledgement)
+        #expect(status.state.isReady && status.needsLicenseAcknowledgement)
+        await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await store.lease(model.id) }
+        try await store.acceptLicense(model.id)
+        try await store.lease(model.id).release()
+
+        // A changed acknowledgement is a new licence version that needs accepting again.
+        var revised = model
+        revised.licenseAcknowledgement = "I accept the Fixture Terms of Use v2."
+        let changed = LWModelStore(manifest: try fixture.manifest([revised]), configuration: fixture.configuration(), facts: fixture.facts([model]))
+        #expect(try await changed.status(model.id).needsLicenseAcknowledgement)
+        await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await changed.lease(model.id) }
     }
 
     @Test func undeclaredAndPermissiveLicencesAreShownAndNeedNoUseAcknowledgement() async throws {

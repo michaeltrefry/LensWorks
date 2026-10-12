@@ -263,6 +263,7 @@ struct LWLicenseSummary: View {
                         HStack {
                             if let url = source.textURL { Link("Licence text", destination: url) }
                             if let url = source.sourceURL { Link("Source", destination: url) }
+                            ForEach(source.documents, id: \.self) { document in Link(document.label, destination: document.url) }
                         }.font(.caption2)
                     }
                 }
@@ -301,7 +302,7 @@ struct LWModelDownloadSheet: View {
                     .accessibilityIdentifier("LensWorks.download.location")
                 Text("Licence").font(.headline)
                 LWLicenseSummary(terms: plan.license)
-                Toggle(plan.license.nonCommercial ? "I acknowledge these terms allow non-commercial use only" : "I have reviewed these licence terms",
+                Toggle(plan.license.acknowledgementPrompt,
                        isOn: Binding(get: { accepted }, set: { value in
                            Task {
                                await center.setLicenseAccepted(modelID, version: plan.license.version, value)

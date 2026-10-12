@@ -14,7 +14,12 @@
         {"key": "sana_sprint_1_6b_1024px_diffusers", "declared": "apache-2.0"},
         {"key": "gemma_2_2b_it", "declared": "gemma"}
       ],
-      "sceneWorksLicense": {"id": "sana", "name": "NVIDIA Open Model License", "homepage": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px", "nonCommercial": true},
+      "sceneWorksLicense": {"id": "sana", "name": "Apache-2.0 (SANA) · Gemma Terms of Use (text encoder)", "homepage": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px", "nonCommercial": false, "documents": [
+        {"label": "Apache License 2.0 (SANA transformer/VAE)", "url": "https://github.com/NVlabs/Sana/blob/main/LICENSE"},
+        {"label": "Gemma Terms of Use (text encoder)", "url": "https://ai.google.dev/gemma/terms"},
+        {"label": "Gemma Prohibited Use Policy", "url": "https://ai.google.dev/gemma/prohibited_use_policy"}
+      ]},
+      "licenseAcknowledgement": "I accept the Gemma Terms of Use, including the Gemma Prohibited Use Policy, which govern the bundled gemma-2-2b-it text encoder.",
       "memory": {"peakBytes": 19832105360, "residentBytes": 5568309580, "pixels": 1048576},
       "components": [
         {

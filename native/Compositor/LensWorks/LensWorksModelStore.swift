@@ -53,10 +53,16 @@ nonisolated struct LWModelManifest: Decodable, Sendable {
     /// The licence SceneWorks' own licence manifest (apps/desktop/licenses/manifest.json)
     /// declares for the model, a second declared source next to the runtime's table.
     struct SceneWorksLicense: Decodable, Sendable, Hashable {
+        struct Document: Decodable, Sendable, Hashable {
+            let label: String
+            let url: URL
+        }
         let id: String
         let name: String
         let homepage: String?
         let nonCommercial: Bool
+        /// The licence documents the entry lists, one per declared set of terms.
+        let documents: [Document]?
     }
     struct Model: Decodable, Sendable, Hashable, Identifiable {
         let id: String
@@ -67,6 +73,9 @@ nonisolated struct LWModelManifest: Decodable, Sendable {
         let licenseComponents: [LicenseComponent]
         let licenseNote: String?
         let sceneWorksLicense: SceneWorksLicense?
+        /// What the person must explicitly accept before using the model, for use-restricted
+        /// terms that are not non-commercial (for example an acceptable-use policy).
+        let licenseAcknowledgement: String?
         let memory: Memory
         let components: [Component]
         var totalBytes: UInt64 { components.reduce(0) { $0 + $1.totalBytes } }
@@ -556,8 +565,8 @@ nonisolated struct LWModelStatus: Sendable, Hashable, Identifiable {
     /// Whether the person accepted the current version of the licence terms.
     let licenseAccepted: Bool
     var id: String { model.id }
-    /// Non-commercial terms must be acknowledged before the model is used.
-    var needsLicenseAcknowledgement: Bool { license.nonCommercial && !licenseAccepted }
+    /// Non-commercial or use-restricted terms must be acknowledged before the model is used.
+    var needsLicenseAcknowledgement: Bool { license.requiresAcknowledgementForUse && !licenseAccepted }
 }
 
 /// One declared licence source for a model: a runtime licence-table row or SceneWorks' licence manifest.
@@ -575,6 +584,8 @@ nonisolated struct LWModelLicenseSource: Sendable, Hashable {
     let gated: Bool
     let attribution: String?
     let nonCommercial: Bool
+    /// Further licence documents (label, link) the source lists.
+    var documents: [LWModelManifest.SceneWorksLicense.Document] = []
 
     var summary: String {
         var text = name
@@ -590,12 +601,21 @@ nonisolated struct LWModelLicenseTerms: Sendable, Hashable {
     let sources: [LWModelLicenseSource]
     /// The model's own note (for example why no licence is declared).
     let note: String?
+    /// What the person must explicitly accept before use, beyond any non-commercial restriction.
+    let acknowledgement: String?
     /// Identifies these exact terms; acceptance is recorded against it.
     let version: String
 
     var runtimeDeclared: Bool { sources.contains { $0.origin == .runtime } }
     /// The most restrictive declared terms govern: any non-commercial source makes the model non-commercial.
     var nonCommercial: Bool { sources.contains(where: \.nonCommercial) }
+    /// Whether these terms must be accepted before the model is used, not only before it is downloaded.
+    var requiresAcknowledgementForUse: Bool { nonCommercial || acknowledgement != nil }
+    /// The statement the person accepts.
+    var acknowledgementPrompt: String {
+        let parts = [nonCommercial ? "I acknowledge these terms allow non-commercial use only." : nil, acknowledgement].compactMap { $0 }
+        return parts.isEmpty ? "I have reviewed these licence terms" : parts.joined(separator: " ")
+    }
     /// Declared sources disagree about commercial use.
     var conflict: String? {
         guard nonCommercial, sources.contains(where: { !$0.nonCommercial }) else { return nil }
@@ -608,11 +628,15 @@ nonisolated struct LWModelLicenseTerms: Sendable, Hashable {
         return runtimeDeclared ? "As declared below." : "Licence not declared by the AI runtime."
     }
 
-    init(sources: [LWModelLicenseSource], note: String?) {
+    init(sources: [LWModelLicenseSource], note: String?, acknowledgement: String? = nil) {
         self.sources = sources
         self.note = note
-        let canonical = sources.map { "\($0.origin.rawValue)|\($0.key)|\($0.name)|\($0.declared ?? "")|\($0.nonCommercial)|\($0.gated)" }
-            .joined(separator: "\n") + "\n" + (note ?? "")
+        self.acknowledgement = acknowledgement
+        let canonical = sources.map { source in
+            "\(source.origin.rawValue)|\(source.key)|\(source.name)|\(source.declared ?? "")|\(source.nonCommercial)|\(source.gated)"
+                + source.documents.map { "|\($0.label)=\($0.url.absoluteString)" }.joined()
+        }
+            .joined(separator: "\n") + "\n" + (note ?? "") + "\n" + (acknowledgement ?? "")
         version = SHA256.hash(data: Data(canonical.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -678,7 +702,7 @@ nonisolated enum LWModelStoreError: Error, Equatable, CustomStringConvertible {
         case .downloadInProgress(let id): return "\(id) is already downloading."
         case .licenseNotAccepted(let id): return "Review and accept the licence terms for \(id) before downloading."
         case .licenseNotAcknowledged(let id):
-            return "\(id) is licensed for non-commercial use only. Acknowledge its licence terms in AI Models before using it."
+            return "\(id) has licence terms that must be acknowledged before use. Review and accept them in AI Models."
         case .licenseChanged(let id): return "The licence terms for \(id) changed; review the current terms and accept them again."
         case .memoryBusy(let id, let required, let inUse, let available, let holders):
             let memory = { (bytes: UInt64) in ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory) }
@@ -1053,9 +1077,10 @@ actor LWModelStore {
         if let declared = model.sceneWorksLicense {
             sources.append(LWModelLicenseSource(origin: .sceneWorks, key: declared.id, name: declared.name, declared: nil, textURL: nil,
                                                 sourceURL: declared.homepage.flatMap(URL.init(string:)), gated: false, attribution: nil,
-                                                nonCommercial: declared.nonCommercial || LWModelLicenseTerms.isNonCommercial(declared.name)))
+                                                nonCommercial: declared.nonCommercial || LWModelLicenseTerms.isNonCommercial(declared.name),
+                                                documents: declared.documents ?? []))
         }
-        return LWModelLicenseTerms(sources: sources, note: model.licenseNote)
+        return LWModelLicenseTerms(sources: sources, note: model.licenseNote, acknowledgement: model.licenseAcknowledgement)
     }
 
     func licenseTerms(_ id: String) throws -> LWModelLicenseTerms { licenseTerms(try model(id)) }
@@ -1284,7 +1309,7 @@ actor LWModelStore {
             if attempt > 0 || !status.state.isReady { status = await refresh(model) }
             guard status.isAdmissible else { throw LWModelStoreError.notAdmissible(id, status.state) }
             guard status.state.isReady, !status.roots.isEmpty else { throw LWModelStoreError.notReady(id, status.state) }
-            if status.license.nonCommercial && !isLicenseAccepted(model) { throw LWModelStoreError.licenseNotAcknowledged(id) }
+            if status.license.requiresAcknowledgementForUse && !isLicenseAccepted(model) { throw LWModelStoreError.licenseNotAcknowledged(id) }
             try checkMemoryNow(model)
             let weightsURL = model.weights.path.isEmpty ? status.roots[0].root : status.roots[0].root.appendingPathComponent(model.weights.path)
             let lease = LWModelLease(modelID: id, roots: status.roots, weights: model.weights.kind == .dir ? .dir(weightsURL) : .file(weightsURL),

@@ -253,7 +253,19 @@ nonisolated struct LensWorksInferenceRuntimeTests {
                 #expect(facts.licenses[license.key]?.declared == license.declared, "\(model.id): \(license.key)")
             }
             #expect(model.memory.peakBytes != nil, "\(model.id) has a measured memory need")
+            // SceneWorks' declaration agrees with the runtime's rows about commercial use, so no conflict is shown.
+            if let declared = model.sceneWorksLicense {
+                let runtimeNonCommercial = model.licenseComponents.contains { component in
+                    let row = facts.licenses[component.key]
+                    return LWModelLicenseTerms.isNonCommercial(row?.familyName, row?.declared, row?.spdxID)
+                }
+                #expect(declared.nonCommercial == runtimeNonCommercial, "\(model.id): SceneWorks and runtime agree on commercial use")
+            }
         }
+        // SANA-Sprint bundles gemma-2-2b-it: the runtime declares the Gemma Terms of Use, which the manifest makes the person accept.
+        #expect(facts.licenses["gemma_2_2b_it"]?.familyName == "Gemma Terms of Use")
+        let sana = try #require(manifest.models.first { $0.id == "sana_sprint_1600m_q4" })
+        #expect(sana.licenseAcknowledgement?.contains("Gemma Terms of Use") == true && sana.sceneWorksLicense?.nonCommercial == false)
     }
 
     @Test func malformedRequestsAreRejectedSynchronously() async throws {
