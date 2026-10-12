@@ -42,6 +42,7 @@ jobs:
           TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
           TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE: ${{ github.workspace }}/.build/rust-catalog/release/organization_probe
           TEST_RUNNER_LW_S38_FIXTURE_ROOT: ${{ runner.temp }}/s38-fixtures
+          TEST_RUNNER_LW_INFERENCE_LIBRARY: ${{ github.workspace }}/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/liblensworks_inference.dylib
         run: |
           # The 100k test seeds its catalog with the engine's organization_probe,
           # which build-native.sh does not build; use the same target and SDK.
@@ -77,7 +78,8 @@ jobs:
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
             -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
             -only-testing:CompositorUITests/CompositorUITests/testS05CatalogOrganizationMenusChangeSelectedPhotoAndUndoRedo \
-            -only-testing:CompositorUITests/CompositorUITests/testS06OfflineSourceOrganizesAndFolderRelinkAppliesAndUndoes
+            -only-testing:CompositorUITests/CompositorUITests/testS06OfflineSourceOrganizesAndFolderRelinkAppliesAndUndoes \
+            -only-testing:CompositorUITests/CompositorUITests/testS24AIModelsWindowShowsStatesAndExplicitDownloadSheet
       - name: Deliver the source-declared measured screenshot tolerance
         run: |
           python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance

@@ -763,7 +763,13 @@ actor LWModelStore {
         }
 
         static func application(added: [URL] = []) -> Configuration {
-            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LensWorks")
+            var support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LensWorks")
+            #if DEBUG
+            // UI tests point the managed store and ledger at a private folder.
+            if let root = ProcessInfo.processInfo.environment["LW_MODEL_STORE_ROOT"], !root.isEmpty {
+                support = URL(fileURLWithPath: root, isDirectory: true)
+            }
+            #endif
             return Configuration(sceneWorksLibraries: defaultLibraries(added: added), managedRoot: support.appendingPathComponent("Models"),
                                  ledgerURL: support.appendingPathComponent("ModelStore.json"), availableMemory: LWMemoryBudget.current())
         }
