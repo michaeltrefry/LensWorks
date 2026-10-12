@@ -219,6 +219,9 @@ S36 owns the sole whole-product acceptance. Goals are not measured support claim
   `eac60a770030aef0630ca418d85ffd169be9748a` in root Cargo.toml's patched
   candle-kernels dependency. Reconcile the full runtime pin and compatible artifact
   manifests before selecting LensWorks' dependency revisions.
+- Chosen pin (sc-24678): inference `25bd55cdb6a56c78b07584a12150c9f5d46be439`, the revision
+  SceneWorks main pins for its macOS worker's `runtime-macos` at qualification, consumed by
+  `adapters/inference` (see its README and `DEPENDENCIES.json`).
 
 Confidence: high in the source ownership split and identified RAW/persistence gaps;
 moderate in this proposed render/document design pending a focused native integration

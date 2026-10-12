@@ -29,7 +29,8 @@ jobs:
           mkdir -m 700 "$RUNNER_TEMP/s38-fixtures/WorkingVersions-3" "$RUNNER_TEMP/s38-fixtures/WorkingVersions-4"
       - name: Build source-bound owned helpers and UI-test scheme
         run: |
-          ./scripts/build-native.sh
+          # The embedded inference runtime builds incrementally in the persistent runner cache.
+          LW_INFERENCE_TARGET_DIR="$HOME/.cache/lensworks-ci/inference-target" ./scripts/build-native.sh
           test -x .build/rust-catalog/release/photocatalog
           test -x .build/rust-catalog/release/lensworks-decode-worker
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker

@@ -17,6 +17,10 @@ export CARGO_BUILD_JOBS=4
 export MACOSX_DEPLOYMENT_TARGET=26.2
 cargo build --manifest-path adapters/catalog/Cargo.toml --locked --release
 cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin photocatalog
+# The inference adapter is a runtime-loaded dylib (the app never links MLX). Its own target
+# directory may live outside the workspace (LW_INFERENCE_TARGET_DIR) so CI reuses the build.
+inference_target="${LW_INFERENCE_TARGET_DIR:-$PWD/.build/rust-inference}"
+CARGO_TARGET_DIR="$inference_target" cargo build --manifest-path adapters/inference/Cargo.toml --locked --release
 python3 scripts/audit-native-floor.py
 xcodebuild -project native/Compositor.xcodeproj -scheme Compositor \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app \
@@ -28,6 +32,16 @@ helpers="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpe
 mkdir -p "$helpers"
 cp "$CARGO_TARGET_DIR/release/photocatalog" "$helpers/PhotoCatalogWorker"
 cp "$CARGO_TARGET_DIR/release/lensworks-decode-worker" "$helpers/LensWorksDecodeWorker"
+# The inference runtime sits beside the helpers, outside the bundle's nested-code
+# locations; MLX loads mlx.metallib from the directory of the library that contains it.
+cp "$inference_target/release/liblensworks_inference.dylib" "$helpers/liblensworks_inference.dylib"
+metallib=$(ls -t "$inference_target"/release/build/pmetal-mlx-sys-*/out/build/lib/mlx.metallib | head -1)
+test -f "$metallib"
+cp "$metallib" "$helpers/mlx.metallib"
+install_name_tool -id @rpath/liblensworks_inference.dylib "$helpers/liblensworks_inference.dylib"
+codesign --force --sign - --timestamp=none "$helpers/liblensworks_inference.dylib"
+# A data file in a nested-code directory carries its own signature for the app seal.
+codesign --force --sign - --timestamp=none "$helpers/mlx.metallib"
 codesign --force --sign - --timestamp=none "$helpers/PhotoCatalogWorker"
 codesign --force --sign - --timestamp=none "$helpers/LensWorksDecodeWorker"
 codesign --force --sign - --timestamp=none "$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app"
