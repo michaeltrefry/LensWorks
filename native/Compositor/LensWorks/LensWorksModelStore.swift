@@ -124,6 +124,16 @@ nonisolated struct LWModelManifest: Decodable, Sendable {
             for path in [model.weights.path, model.weights.tokenizer].compactMap({ $0 }) where !path.isEmpty {
                 guard Self.isSafeRelative(path) else { throw LWModelStoreError.manifest("\(model.id) has an unsafe weights path.") }
             }
+            if let acknowledgement = model.licenseAcknowledgement,
+               acknowledgement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw LWModelStoreError.manifest("\(model.id) has an empty licence acknowledgement.")
+            }
+            for document in model.sceneWorksLicense?.documents ?? [] {
+                guard !document.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      document.url.scheme?.lowercased() == "https" else {
+                    throw LWModelStoreError.manifest("\(model.id) has an invalid licence document \(document.label) (\(document.url.absoluteString)).")
+                }
+            }
         }
     }
 
@@ -632,11 +642,13 @@ nonisolated struct LWModelLicenseTerms: Sendable, Hashable {
         self.sources = sources
         self.note = note
         self.acknowledgement = acknowledgement
+        // Sources without documents and terms without an acknowledgement keep the version they had before
+        // those fields existed, so acceptances already recorded for them stay valid.
         let canonical = sources.map { source in
             "\(source.origin.rawValue)|\(source.key)|\(source.name)|\(source.declared ?? "")|\(source.nonCommercial)|\(source.gated)"
                 + source.documents.map { "|\($0.label)=\($0.url.absoluteString)" }.joined()
         }
-            .joined(separator: "\n") + "\n" + (note ?? "") + "\n" + (acknowledgement ?? "")
+            .joined(separator: "\n") + "\n" + (note ?? "") + (acknowledgement.map { "\n" + $0 } ?? "")
         version = SHA256.hash(data: Data(canonical.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 

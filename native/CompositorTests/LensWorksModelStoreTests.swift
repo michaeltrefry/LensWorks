@@ -29,6 +29,8 @@ private nonisolated struct FixtureModel {
     var pixels: Int? = 1 << 20
     /// (name, nonCommercial) as SceneWorks' licence manifest declares it.
     var sceneWorksLicense: (String, Bool)? = nil
+    /// (label, url) licence documents the SceneWorks declaration lists.
+    var licenseDocuments: [(String, String)] = []
     var licenseNote: String? = nil
     var licenseAcknowledgement: String? = nil
     /// Further components (repository, files), each its own Hugging Face repository.
@@ -78,7 +80,9 @@ private nonisolated final class Fixture: @unchecked Sendable {
                     "components": [component(model.repository, model.files)] + model.extra.map { component($0.0, $0.1) },
                 ]
                 if let (name, nonCommercial) = model.sceneWorksLicense {
-                    entry["sceneWorksLicense"] = ["id": model.id, "name": name, "homepage": "https://example.invalid/\(model.id)", "nonCommercial": nonCommercial]
+                    var declared: [String: Any] = ["id": model.id, "name": name, "homepage": "https://example.invalid/\(model.id)", "nonCommercial": nonCommercial]
+                    if !model.licenseDocuments.isEmpty { declared["documents"] = model.licenseDocuments.map { ["label": $0.0, "url": $0.1] } }
+                    entry["sceneWorksLicense"] = declared
                 }
                 if let note = model.licenseNote { entry["licenseNote"] = note }
                 if let acknowledgement = model.licenseAcknowledgement { entry["licenseAcknowledgement"] = acknowledgement }
@@ -382,8 +386,10 @@ private nonisolated final class ScriptedRuntime: LWInferenceJobStarting, @unchec
                 "SANA-Sprint's acknowledgement is for the Gemma Terms of Use of its text encoder")
         let sanaDeclared = try #require(sana.sources.last)
         #expect(!sanaDeclared.nonCommercial && sanaDeclared.name.contains("Apache-2.0") && sanaDeclared.name.contains("Gemma Terms of Use"))
-        #expect(Set(sanaDeclared.documents.map(\.url.absoluteString)) == ["https://github.com/NVlabs/Sana/blob/main/LICENSE", "https://ai.google.dev/gemma/terms",
-                                                                         "https://ai.google.dev/gemma/prohibited_use_policy"])
+        #expect(sanaDeclared.sourceURL?.absoluteString == "https://huggingface.co/Efficient-Large-Model/Sana_Sprint_1.6B_1024px")
+        #expect(Set(sanaDeclared.documents.map(\.url.absoluteString)) == ["https://huggingface.co/Efficient-Large-Model/Sana_Sprint_1.6B_1024px/blob/main/LICENSE",
+                                                                         "https://ai.google.dev/gemma/terms", "https://ai.google.dev/gemma/prohibited_use_policy"])
+        #expect(sana.note?.contains("2026-07-31") == true, "the note says when NVIDIA relicensed the weights the pinned mirror revision predates")
         let clip = try await store.licenseTerms("clip_vit_l14")
         #expect(!clip.runtimeDeclared && clip.sources.isEmpty && clip.note != nil && !clip.nonCommercial)
         #expect(try await !store.licenseTerms("sam2_hiera_large").nonCommercial)
@@ -394,7 +400,7 @@ private nonisolated final class ScriptedRuntime: LWInferenceJobStarting, @unchec
         #expect(Set(manifest.models.map(\.id)) == ["sana_sprint_1600m_q4", "clip_vit_l14", "sam2_hiera_large", "sam3"])
         for model in manifest.models {
             #expect((model.memory.peakBytes ?? 0) > 0, "\(model.id) carries a measured peak")
-            #expect(model.licenseComponents.isEmpty == (model.licenseNote != nil), "\(model.id) states licence terms or why there are none")
+            #expect(!model.licenseComponents.isEmpty || model.licenseNote != nil, "\(model.id) states licence terms or why there are none")
         }
         #expect(throws: LWModelStoreError.self) {
             try LWModelManifest.decode(Data(#"{"schemaVersion":1,"inferenceRevision":"x","downloadBaseURL":"https://a","measurement":"","models":[{"id":"m","name":"m","summary":"","routes":[{"task":"t","provider":"p"}],"weights":{"kind":"dir","path":""},"licenseComponents":[],"memory":{},"components":[{"repository":"a/b","revision":"\#(revisionA)","files":[{"path":"../x","size":1,"sha256":"\#(String(repeating: "0", count: 64))"}]}]}]}"#.utf8))
@@ -932,6 +938,60 @@ private nonisolated final class ScriptedRuntime: LWInferenceJobStarting, @unchec
         let changed = LWModelStore(manifest: try fixture.manifest([revised]), configuration: fixture.configuration(), facts: fixture.facts([model]))
         #expect(try await changed.status(model.id).needsLicenseAcknowledgement)
         await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await changed.lease(model.id) }
+    }
+
+    @Test func changedLicenceDocumentIsANewVersionThatNeedsAcceptingAgain() async throws {
+        let fixture = try Fixture()
+        var model = smallModel()
+        model.sceneWorksLicense = ("Apache-2.0 · Fixture Terms of Use", false)
+        model.licenseAcknowledgement = "I accept the Fixture Terms of Use."
+        model.licenseDocuments = [("Apache License 2.0", "https://example.invalid/apache"), ("Fixture Terms of Use", "https://example.invalid/terms")]
+        try fixture.installInHub(model)
+        let store = LWModelStore(manifest: try fixture.manifest([model]), configuration: fixture.configuration(), facts: fixture.facts([model]))
+        let accepted = try await store.licenseTerms(model.id)
+        #expect(accepted.sources.last?.documents.map(\.url.absoluteString) == ["https://example.invalid/apache", "https://example.invalid/terms"])
+        try await store.acceptLicense(model.id)
+        try await store.lease(model.id).release()
+
+        var revised = model
+        revised.licenseDocuments[1].1 = "https://example.invalid/terms-v2"
+        let changed = LWModelStore(manifest: try fixture.manifest([revised]), configuration: fixture.configuration(), facts: fixture.facts([model]))
+        #expect(try await changed.licenseTerms(model.id).version != accepted.version, "a changed document link is a new licence version")
+        await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await changed.lease(model.id) }
+    }
+
+    @Test func termsWithoutAcknowledgementOrDocumentsKeepTheirEarlierVersion() async throws {
+        let fixture = try Fixture()
+        var model = smallModel()
+        model.sceneWorksLicense = ("Apache-2.0", false)
+        model.licenseNote = "Fixture note."
+        let store = LWModelStore(manifest: try fixture.manifest([model]), configuration: fixture.configuration(), facts: fixture.facts([model]))
+        let terms = try await store.licenseTerms(model.id)
+        #expect(terms.sources.count == 2 && terms.acknowledgement == nil && terms.sources.allSatisfy(\.documents.isEmpty))
+        // The canonical string as it was before acknowledgements and documents existed.
+        let earlier = terms.sources.map { "\($0.origin.rawValue)|\($0.key)|\($0.name)|\($0.declared ?? "")|\($0.nonCommercial)|\($0.gated)" }
+            .joined(separator: "\n") + "\n" + (terms.note ?? "")
+        #expect(terms.version == SHA256.hash(data: Data(earlier.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined(),
+                "acceptances recorded before the new fields existed stay valid")
+    }
+
+    @Test func manifestRejectsEmptyAcknowledgementAndUnsafeLicenceDocuments() throws {
+        let fixture = try Fixture()
+        var model = smallModel()
+        model.sceneWorksLicense = ("Apache-2.0 · Fixture Terms of Use", false)
+        model.licenseAcknowledgement = "I accept the Fixture Terms of Use."
+        model.licenseDocuments = [("Fixture Terms of Use", "https://example.invalid/terms")]
+        _ = try fixture.manifest([model])
+
+        var blank = model
+        blank.licenseAcknowledgement = " \n"
+        #expect(throws: LWModelStoreError.manifest("fixture has an empty licence acknowledgement.")) { try fixture.manifest([blank]) }
+        var unlabelled = model
+        unlabelled.licenseDocuments = [(" ", "https://example.invalid/terms")]
+        #expect(throws: LWModelStoreError.manifest("fixture has an invalid licence document   (https://example.invalid/terms).")) { try fixture.manifest([unlabelled]) }
+        var local = model
+        local.licenseDocuments = [("Fixture Terms of Use", "file:///etc/passwd")]
+        #expect(throws: LWModelStoreError.manifest("fixture has an invalid licence document Fixture Terms of Use (file:///etc/passwd).")) { try fixture.manifest([local]) }
     }
 
     @Test func undeclaredAndPermissiveLicencesAreShownAndNeedNoUseAcknowledgement() async throws {
