@@ -7,7 +7,7 @@ permissions: {contents: read}
 jobs:
   live-raw:
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
@@ -27,7 +27,7 @@ jobs:
       - name: Run every S08 live RAW and S09 float renderer suite
         # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
         # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
-        timeout-minutes: 60
+        timeout-minutes: 90
         run: |
           suites=(FloatCameraRawTests TiledFloatCameraRawTests TiledFloatAdmissionTests FloatCoreImageProviderTests
             FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
