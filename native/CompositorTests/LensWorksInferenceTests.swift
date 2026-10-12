@@ -6,10 +6,29 @@ import Testing
 private nonisolated let inferenceLibrary = ProcessInfo.processInfo.environment["LW_INFERENCE_LIBRARY"]
 private nonisolated let hasLibrary = inferenceLibrary.map { FileManager.default.fileExists(atPath: $0) } ?? false
 
-/// Explicit path only: CI resolves it from the SceneWorks model cache before launching the host.
-private nonisolated func sanaSprintQ4() -> URL? {
-    guard let dir = ProcessInfo.processInfo.environment["LW_INFERENCE_SANA_SPRINT_DIR"], !dir.isEmpty else { return nil }
-    return URL(fileURLWithPath: dir)
+/// `LW_INFERENCE_SANA_SPRINT_DIR`, else the SceneWorks Hugging Face cache snapshot. The cache
+/// may live on another volume (here ~/.cache/huggingface is a link to /Volumes/Models), where
+/// macOS privacy consent can block the test host's first read; resolution therefore runs off
+/// the test thread with a deadline and reports that case instead of hanging the runner.
+private nonisolated func resolveSanaSprintQ4(timeout: TimeInterval = 20) -> Result<URL, LWInferenceError> {
+    if let dir = ProcessInfo.processInfo.environment["LW_INFERENCE_SANA_SPRINT_DIR"], !dir.isEmpty {
+        return .success(URL(fileURLWithPath: dir))
+    }
+    final class Box: @unchecked Sendable { var url: URL? }
+    let box = Box()
+    let done = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .userInitiated).async {
+        let snapshots = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".cache/huggingface/hub/models--SceneWorks--Sana_Sprint_1.6B_1024px_mlx/snapshots")
+        let candidates = (try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil)) ?? []
+        box.url = candidates.map { $0.appendingPathComponent("q4") }.first { FileManager.default.fileExists(atPath: $0.path) }
+        done.signal()
+    }
+    guard done.wait(timeout: .now() + timeout) == .success else {
+        return .failure(.libraryUnavailable("Reading the model cache timed out; grant the test host access to the model volume or set LW_INFERENCE_SANA_SPRINT_DIR."))
+    }
+    guard let url = box.url else { return .failure(.libraryUnavailable("Sana Sprint q4 weights are not in the SceneWorks model cache.")) }
+    return .success(url)
 }
 
 private nonisolated let runRealWeights = hasLibrary && ProcessInfo.processInfo.environment["LW_INFERENCE_REAL_WEIGHTS"] == "1"
@@ -90,6 +109,13 @@ nonisolated struct LensWorksInferenceRuntimeTests {
         let caps = try runtime().capabilities()
         #expect(caps.abiVersion == LWInferenceRuntime.expectedABI && caps.platform == "macos" && caps.backend == "mlx")
         #expect(caps.inferenceRevision.count == 40)
+        // The bundled metallib next to the loaded library is pinned strictly (no fallback).
+        let colocated = URL(fileURLWithPath: try #require(inferenceLibrary)).deletingLastPathComponent().appendingPathComponent("mlx.metallib")
+        if FileManager.default.fileExists(atPath: colocated.path) {
+            #expect(caps.execution.metallib == colocated.path)
+        } else {
+            #expect(caps.execution.metallib == "mlx_search_order")
+        }
         let generators = try #require(caps.routes["generate"])
         #expect(generators.count > 30)
         #expect(generators.contains { $0.id == "sana_sprint_1600m" && $0.isSupported })
@@ -161,11 +187,11 @@ nonisolated struct LensWorksInferenceRuntimeTests {
 }
 
 /// One real image job through Swift: typed progress, output, cancellation and failure.
-@Suite(.serialized, .enabled(if: runRealWeights && sanaSprintQ4() != nil, "Set LW_INFERENCE_REAL_WEIGHTS=1 and LW_INFERENCE_SANA_SPRINT_DIR to local Sana Sprint q4 weights"))
+@Suite(.serialized, .enabled(if: runRealWeights, "Set LW_INFERENCE_REAL_WEIGHTS=1 on a machine with the SceneWorks Sana Sprint q4 weights"))
 nonisolated struct LensWorksInferenceRealWeightTests {
     @Test func realImageJobProgressOutputCancelAndFailure() async throws {
         let runtime = try LWInferenceRuntime.installed()
-        let weights = try #require(sanaSprintQ4())
+        let weights = try resolveSanaSprintQ4().get()
         func request(_ prompt: String, steps: Int) -> LWInferenceRequest {
             .generate(provider: "sana_sprint_1600m", weights: .dir(weights), load: .init(residency: .keepLoaded),
                       LWGenerateParams(prompt: prompt, width: 512, height: 512, seed: 7, steps: steps))
@@ -182,6 +208,8 @@ nonisolated struct LensWorksInferenceRealWeightTests {
         #expect(cg.colorSpace?.name == CGColorSpace.sRGB && cg.width == 512)
         guard case .completed(let result)? = events.last else { Issue.record("expected completion: \(events.last as Any)"); return }
         #expect(result.provider == "sana_sprint_1600m" && result.images == 1 && result.inferenceRevision.count == 40)
+        #expect(result.metallib == runtime.libraryURL.deletingLastPathComponent().appendingPathComponent("mlx.metallib").path,
+                "the real job ran on the bundled metallib")
 
         let cancelling = try runtime.start(request("a lighthouse at dusk", steps: 4))
         var seen: [LWInferenceEvent] = []

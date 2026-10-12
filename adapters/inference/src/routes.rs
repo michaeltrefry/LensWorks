@@ -290,6 +290,7 @@ fn provenance(request: &Request, reused: bool, conversions: Vec<String>) -> Valu
         "quantize": request.load.quantize.map(|q| format!("{q:?}").to_lowercase()),
         "model_reused": reused,
         "input_conversions": conversions,
+        "metallib": crate::metallib::resolve_once().describe(),
     })
 }
 

@@ -19,6 +19,14 @@ library from `Contents/Helpers` (or `LW_INFERENCE_LIBRARY`), checks
 `scripts/build-native.sh` embeds the dylib and `mlx.metallib` side by side. The
 library is never unloaded (Rust/MLX thread-local destructors make `dlclose` unsafe).
 
+The pinned MLX fork would otherwise prefer the absolute build-directory metallib compiled
+into the library (and `~/.cache/pmetal`) over the bundled copy. When `mlx.metallib` sits
+next to the loaded library, the adapter pins it before any Metal work through upstream
+MLX's strict `set_metallib_path` (a small C++ shim, `shim/metallib.cpp`): MLX loads exactly
+that file or fails device creation, never falling back. Capabilities (`execution.metallib`)
+and every result's provenance report the pinned path, or `mlx_search_order` for unbundled
+development builds. `tests/metallib.rs` proves both halves in child processes.
+
 ## Execution model
 
 * One dedicated executor thread runs every load and job, FIFO. MLX Metal work is

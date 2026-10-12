@@ -352,6 +352,8 @@ nonisolated struct LWInferenceResult: Decodable, Sendable, Equatable {
     let embeddings: [[Float]]?
     let embeddingDim: Int?
     let space: String?
+    /// The metallib MLX was pinned to, or `mlx_search_order` for unbundled development builds.
+    let metallib: String?
 }
 
 nonisolated enum LWInferenceEvent: Sendable, Equatable {
@@ -392,7 +394,12 @@ nonisolated struct LWInferenceNotRouted: Decodable, Sendable, Equatable {
 }
 
 nonisolated struct LWInferenceCapabilities: Decodable, Sendable, Equatable {
+    struct Execution: Decodable, Sendable, Equatable {
+        let concurrency: String
+        let metallib: String
+    }
     let abiVersion: UInt32
+    let execution: Execution
     let inferenceRevision: String
     let platform: String
     let backend: String

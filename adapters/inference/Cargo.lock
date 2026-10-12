@@ -561,8 +561,11 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 name = "lensworks-inference"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "image",
+ "libc",
  "pmetal-mlx-rs",
+ "pmetal-mlx-sys",
  "runtime-macos",
  "serde",
  "serde_json",

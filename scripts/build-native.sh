@@ -32,10 +32,11 @@ helpers="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpe
 mkdir -p "$helpers"
 cp "$CARGO_TARGET_DIR/release/photocatalog" "$helpers/PhotoCatalogWorker"
 cp "$CARGO_TARGET_DIR/release/lensworks-decode-worker" "$helpers/LensWorksDecodeWorker"
-# The inference runtime sits beside the helpers, outside the bundle's nested-code
-# locations; MLX loads mlx.metallib from the directory of the library that contains it.
+# The inference runtime sits beside the helpers. The adapter pins the mlx.metallib next to
+# itself (strictly, before any Metal work), so the build machine's path is never used.
 cp "$inference_target/release/liblensworks_inference.dylib" "$helpers/liblensworks_inference.dylib"
-metallib=$(ls -t "$inference_target"/release/build/pmetal-mlx-sys-*/out/build/lib/mlx.metallib | head -1)
+# Exactly the metallib this library was compiled against (its embedded MLX build path).
+metallib=$(strings -a "$inference_target/release/liblensworks_inference.dylib" | awk '/^\/.*\/mlx\.metallib$/ && !found { print; found = 1 }')
 test -f "$metallib"
 cp "$metallib" "$helpers/mlx.metallib"
 install_name_tool -id @rpath/liblensworks_inference.dylib "$helpers/liblensworks_inference.dylib"

@@ -3,6 +3,7 @@
 
 pub mod capabilities;
 pub mod job;
+pub mod metallib;
 pub mod pixels;
 pub mod request;
 pub mod routes;
@@ -55,6 +56,7 @@ pub struct LwInferenceJob {
 fn executor() -> &'static Executor {
     static EXECUTOR: OnceLock<Executor> = OnceLock::new();
     EXECUTOR.get_or_init(|| {
+        metallib::resolve_once();
         Executor::spawn(InferenceRunner::new(|| {
             CatalogProviders::new().map(|p| Box::new(p) as Box<dyn ProviderSource>)
         }))
@@ -75,8 +77,15 @@ pub fn capabilities_document() -> Value {
         .get_or_init(|| match runtime_macos::catalog() {
             Ok(catalog) => {
                 let snapshot = catalog.snapshot();
-                json!({"version": 1, "ok": true, "result": capabilities::capabilities(
-                    catalog.media(), catalog.platform(), catalog.backend(), &snapshot.trainer_ids, &snapshot.text_llm_ids)})
+                let mut result = capabilities::capabilities(
+                    catalog.media(),
+                    catalog.platform(),
+                    catalog.backend(),
+                    &snapshot.trainer_ids,
+                    &snapshot.text_llm_ids,
+                );
+                result["execution"]["metallib"] = json!(metallib::resolve_once().describe());
+                json!({"version": 1, "ok": true, "result": result})
             }
             Err(e) => json!({"version": 1, "ok": false, "error": {"kind": "runtime_unavailable", "message": e.to_string()}}),
         })
