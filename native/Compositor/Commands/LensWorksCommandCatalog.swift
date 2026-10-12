@@ -88,6 +88,10 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case filterAnyKeyword = "catalog.filter.anyKeyword", clearFilters = "catalog.filter.clear"
     /// Choosing photos in the catalog grid: the selection every organize command acts on.
     case selectPhotos = "catalog.photo.select"
+    // Semantic (description) search.
+    case semanticSearch = "catalog.semantic.search", clearSemanticSearch = "catalog.semantic.clear"
+    case pauseSemanticIndexing = "catalog.semantic.pauseIndexing", resumeSemanticIndexing = "catalog.semantic.resumeIndexing"
+    case rebuildSemanticIndex = "catalog.semantic.rebuildIndex"
     // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
     case automationEnabled = "automation.enabled", automationShowSecret = "automation.secret.show"
     case automationCopySecret = "automation.secret.copy", automationRegenerateSecret = "automation.secret.regenerate"
@@ -100,6 +104,8 @@ nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
 }
 nonisolated enum LensWorksCommandParameterType: String, Codable, Sendable {
     case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating
+    /// A description to search the catalog for: nonempty, at most 1,024 UTF-8 bytes.
+    case catalogDescription
     /// One value from the closed set in `choices`.
     case choice
     /// An identity the invoking surface owns (a recent file, project tab, folder, keyword or photo).
@@ -310,7 +316,7 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .copyMerged, label: "Copy Merged", menu: "Edit", bindings: menuKey("Copy Merged", "c", 9), parameters: []),
         .init(id: .paste, label: "Paste", menu: "Edit", bindings: menuKey("Paste", "v", 1), parameters: [Argument.layer], undoable: true, historyOwner: .document),
         .init(id: .keyboardShortcuts, label: "Keyboard Shortcuts…", menu: "Edit"),
-        .init(id: .aiModels, label: "AI Models…", menu: "Edit"),
+        .init(id: .aiModels, label: "AI Models…", menu: "Edit", menus: ["Edit", "Catalog Semantic Search"]),
         .init(id: .fillForeground, label: "Fill with Foreground Color", menu: "Edit", bindings: menuKey("Fill with Foreground", "\u{7f}", 2), parameters: [Argument.layer, Argument.target, Argument.color("color", "Sets the foreground color first, as picking it in the palette would.")], undoable: true, historyOwner: .document),
         .init(id: .fillBackground, label: "Fill with Background Color", menu: "Edit", bindings: menuKey("Fill with Background", "\u{7f}", 1), parameters: [Argument.layer, Argument.target, Argument.color("color", "Sets the background color first, as picking it in the palette would.")], undoable: true, historyOwner: .document),
         .init(id: .clearSelectionPixels, label: "Clear Selection Pixels", menu: "Edit", parameters: [Argument.layer, Argument.target], undoable: true, historyOwner: .document),
@@ -488,7 +494,12 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .filterLabel, label: "Filter by Label", menu: "Catalog Filter/Label", titles: ["Any"] + catalogLabels, parameters: choice("label", ["any"] + catalogLabels)),
         .init(id: .filterAnyKeyword, label: "Any Keyword", menu: "Catalog Filter"),
         .init(id: .clearFilters, label: "Clear Filters", menu: "Catalog Filter"),
-        .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")])
+        .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")]),
+        .init(id: .semanticSearch, label: "Find Photos Matching Description", menu: "Catalog Semantic Search", parameters: [.init(name: "description", type: .catalogDescription, description: "What the photos show, as typed in the description search field: nonempty, at most 1,024 UTF-8 bytes.", required: true)]),
+        .init(id: .clearSemanticSearch, label: "Clear Description Search", menu: "Catalog Semantic Search"),
+        .init(id: .pauseSemanticIndexing, label: "Pause Indexing", menu: "Catalog Semantic Search"),
+        .init(id: .resumeSemanticIndexing, label: "Resume Indexing", menu: "Catalog Semantic Search"),
+        .init(id: .rebuildSemanticIndex, label: "Rebuild Semantic Index", menu: "Catalog Semantic Search", agentConfirmation: .always)
     ]
 
     private static let automation: [LensWorksCommandDescriptor] = [

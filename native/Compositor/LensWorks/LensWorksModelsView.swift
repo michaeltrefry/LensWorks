@@ -104,6 +104,19 @@ final class LWModelCenter {
         return try await store.runJob(id, pixels: pixels, inputs: inputs, runtime: try LWInferenceRuntime.installed(), request: request)
     }
 
+    /// One model's current state, for features that depend on it (probes it on first use).
+    func status(_ id: String) async -> LWModelStatus? {
+        guard let store = await makeStore() else { return nil }
+        return try? await store.status(id)
+    }
+    /// The runtime revision the bundled manifest is qualified with.
+    var manifestInferenceRevision: String? { store?.manifest.inferenceRevision }
+    /// Unloads models a keep_loaded job left resident.
+    func releaseResidents() async {
+        guard let store, let runtime = try? LWInferenceRuntime.installed() else { return }
+        await store.releaseResidents(runtime)
+    }
+
     func startDownload(_ id: String) {
         guard let store, tasks[id] == nil else { return }
         downloads[id] = DownloadState(progress: nil, running: true, error: nil)

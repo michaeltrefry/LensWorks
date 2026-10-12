@@ -2296,8 +2296,8 @@ struct LensWorksCatalogBrowserTests {
             try process.run(); process.waitUntilExit()
             guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("organization_probe prepare exited \(process.terminationStatus)") }
         }
-        func run(create: Bool = true, catalogService: LensWorksCatalogService? = nil, _ body: (LensWorksCatalog) async throws -> Void) async throws {
-            let model = LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false, catalogService: catalogService)
+        func run(create: Bool = true, catalogService: LensWorksCatalogService? = nil, semantic: LensWorksSemanticSearch? = nil, _ body: (LensWorksCatalog) async throws -> Void) async throws {
+            let model = LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false, catalogService: catalogService, semantic: semantic)
             await model.connect(catalog.path, create: create)
             do {
                 if let error = model.error { throw LensWorksCatalogError.message(error) }
@@ -2764,3 +2764,153 @@ extension LensWorksCatalogBrowserTests {
         }
     }
 }
+
+// MARK: - Semantic search over the real catalog engine (stub embedder, no weights)
+
+extension LensWorksCatalogBrowserTests {
+    private static func colorPNG(_ rgb: [UInt8], edge: Int = 48) throws -> Data {
+        let pixels = Data((0..<(edge * edge)).flatMap { _ in rgb + [255] })
+        let provider = try #require(CGDataProvider(data: pixels as CFData))
+        let image = try #require(CGImage(width: edge, height: edge, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: edge * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let data = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw LensWorksCatalogError.message("Fixture PNG encoding failed.") }
+        return data as Data
+    }
+    private static func settled(_ semantic: LensWorksSemanticSearch, indexed: Int) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(120))
+        while true {
+            if !semantic.isIndexing, case .ready(let count, let unindexed, _) = semantic.state, count == indexed, unindexed == 0 { return }
+            guard ContinuousClock.now < deadline else { throw LensWorksCatalogError.message("Semantic indexing stayed \(semantic.state); expected \(indexed) indexed.") }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
+    /// AC2 and AC3 against the real engine: previews (not originals) are embedded automatically after
+    /// import, description matches combine with the catalog's own filters, new and edited photos are
+    /// the only ones re-embedded, and with the originals offline a deleted index rebuilds and searches.
+    @Test func semanticSearchIndexesFromPreviewsCombinesWithFiltersAndRecoversWithOriginalsOffline() async throws {
+        let fixture = try Fixture(images: 0)
+        let colors: [(String, [UInt8])] = [("red", [230, 20, 20]), ("green", [20, 230, 20]), ("blue", [20, 20, 230]), ("yellow", [230, 230, 20]), ("cyan", [20, 230, 230]), ("magenta", [230, 20, 230])]
+        var originals: [URL: Data] = [:]
+        for (name, rgb) in colors.prefix(5) {
+            let url = (name == "blue" || name == "cyan" ? fixture.photos.appendingPathComponent("Nested") : fixture.photos).appendingPathComponent(name + ".png")
+            let data = try Self.colorPNG(rgb)
+            try data.write(to: url); originals[url] = data
+        }
+        let embedder = LensWorksStubEmbedder()
+        let semantic = LensWorksSemanticSearch(embedder: embedder, directory: fixture.root.appendingPathComponent("Semantic"), batchSize: 2)
+        try await fixture.run(semantic: semantic) { model in
+            try await fixture.importPhotos(model)
+            // Automatic: nobody asked for indexing.
+            try await Self.settled(semantic, indexed: 5)
+            #expect(embedder.imagesEmbedded == 5 && embedder.batches.allSatisfy { $0 <= 2 }, "bounded batches: \(embedder.batches)")
+            @MainActor func names() -> [String] { model.assets.map(\.filename) }
+
+            try await model.searchSemantically("red")
+            #expect(model.semanticQuery == "red" && names().count == 5 && names().first == "red.png", "\(names())")
+            #expect(model.status.contains("5 best matches") && model.error == nil)
+            try await model.searchSemantically("blue")
+            #expect(names().first == "blue.png")
+            #expect(names()[1] == "cyan.png" || names()[1] == "magenta.png", "the next-bluest photo follows: \(names())")
+
+            // Existing filters stay the authority on which photos are admitted; the description only orders them.
+            let rated = model.assets.filter { ["red.png", "cyan.png"].contains($0.filename) }
+            try await model.organize(.rating(5), rows: rated.compactMap { asset in asset.key.map { LensWorksSelectedRow(imageID: asset.id, key: $0) } })
+            try await model.setFilters(rating: .some(5))
+            #expect(model.semanticQuery == "blue" && names() == ["cyan.png", "red.png"], "rating filter ∩ description order: \(names())")
+            try await model.searchSemantically("red")
+            #expect(names() == ["red.png", "cyan.png"] && model.status.contains("within the current filters"), "\(model.status)")
+            let nested = try await model.folder(at: fixture.photos.appendingPathComponent("Nested").path)
+            try await model.browse(folder: nested)
+            #expect(model.semanticQuery == "red" && names() == ["cyan.png"], "folder ∩ rating ∩ description: \(names())")
+            try await model.browse()
+            try await model.browse(text: "yell")
+            try await model.clearFilters()
+            #expect(names() == ["yellow.png"], "filename text ∩ description: \(names())")
+            // Selection and organization act on description matches like on any page.
+            try await model.browse()
+            await model.select(try #require(model.assets.first))
+            #expect(model.selectedAsset?.filename == "red.png" && model.selectionCount == 1)
+            try await model.clearSemanticSearch()
+            #expect(model.semanticQuery == nil && names().count == 5 && model.status == "Showing 5 photos")
+
+            // Incremental: a newly imported photo is the only one embedded.
+            let added = fixture.photos.appendingPathComponent("magenta.png")
+            let magenta = try Self.colorPNG(colors[5].1)
+            try magenta.write(to: added); originals[added] = magenta
+            try await fixture.importPhotos(model)
+            try await Self.settled(semantic, indexed: 6)
+            #expect(embedder.imagesEmbedded == 6, "five photos were already indexed")
+            try await model.searchSemantically("magenta")
+            #expect(names().first == "magenta.png" && names().count == 6)
+            try await model.clearSemanticSearch()
+
+            // An edited photo is embedded again from its new preview; nothing else is.
+            let red = try #require(model.assets.first { $0.filename == "red.png" })
+            let index = LensWorksSemanticIndex(url: try #require(semantic.indexURL))
+            _ = try await index.prepare(model: embedder.identity)
+            let before = try #require(try await index.version(red.id))
+            await model.select(red); try await model.loadCatalogVariants()
+            await model.observeSelectedOriginal()
+            _ = try await model.changeCatalogRecipe(.exposure(1))
+            try await Self.settled(semantic, indexed: 6)
+            #expect(embedder.imagesEmbedded == 7)
+            let after = try #require(try await index.version(red.id))
+            #expect(after.revision > before.revision && after.recipeDigest != before.recipeDigest, "the stored vector follows the edited recipe")
+
+            // Originals go offline. Indexing and search read only stored previews, so both still work —
+            // including rebuilding an index that was deleted.
+            let moved = fixture.root.appendingPathComponent("Moved Photos")
+            try FileManager.default.moveItem(at: fixture.photos, to: moved)
+            defer { if !FileManager.default.fileExists(atPath: fixture.photos.path) { try? FileManager.default.moveItem(at: moved, to: fixture.photos) } }
+            await model.refresh()
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: index.url.path + suffix) }
+            semantic.schedule()
+            try await Self.settled(semantic, indexed: 6)
+            #expect(embedder.imagesEmbedded == 13, "the deleted index was rebuilt from the six stored previews")
+            try await model.searchSemantically("green")
+            #expect(names().first == "green.png" && names().count == 6 && model.error == nil)
+            // Pausing is a registered, reasoned state; a paused index still answers.
+            await semantic.pause()
+            try await model.searchSemantically("yellow")
+            #expect(names().first == "yellow.png" && semantic.state == .paused(indexed: 6))
+            semantic.resume()
+            try await Self.settled(semantic, indexed: 6)
+            try await model.clearSemanticSearch()
+            try FileManager.default.moveItem(at: moved, to: fixture.photos)
+        }
+        #expect(semantic.state == .noCatalog && !semantic.isIndexing, "closing the catalog stops indexing")
+        _ = originals // the fixture root (and with it the originals) is removed after a checked close
+    }
+
+    @Test func semanticSearchStatesWhyItIsUnavailableAndLeavesTheGridBrowsable() async throws {
+        let fixture = try Fixture(images: 3)
+        let missing = LensWorksSemanticUnavailable.modelNotInstalled("CLIP ViT-L/14: Not installed. Semantic search never downloads a model on its own; use AI Models.")
+        let embedder = LensWorksStubEmbedder(unavailable: missing)
+        let semantic = LensWorksSemanticSearch(embedder: embedder, directory: fixture.root.appendingPathComponent("Semantic"))
+        try await fixture.run(semantic: semantic) { model in
+            try await fixture.importPhotos(model)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            while semantic.state != .modelUnavailable(missing) {
+                guard ContinuousClock.now < deadline else { throw LensWorksCatalogError.message("state \(semantic.state)") }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            #expect(model.semanticSearchUnavailableReason == missing.message)
+            let page = model.assets.map(\.id)
+            do { try await model.searchSemantically("red"); Issue.record("a search without a model must be refused") }
+            catch { #expect(error.localizedDescription == missing.message) }
+            #expect(model.semanticQuery == nil && model.assets.map(\.id) == page && embedder.imagesEmbedded == 0)
+        }
+        // A catalog model built without the service says so instead of pretending.
+        let plain = try Fixture(images: 1)
+        try await plain.run { model in
+            #expect(model.semanticSearchUnavailableReason == "Semantic search is not available in this session.")
+            await #expect(throws: LensWorksCatalogError.self) { try await model.searchSemantically("red") }
+        }
+    }
+}
+

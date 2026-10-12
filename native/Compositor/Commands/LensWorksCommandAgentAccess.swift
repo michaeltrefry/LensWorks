@@ -102,7 +102,8 @@ extension LensWorksCommandID {
              .addToVirtualFolder, .removeFromVirtualFolder, .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder,
              .showNestedKeywords, .addKeyword, .removeKeyword, .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword,
              .sortBy, .sortDirection, .ratePhotos, .flagPhotos, .labelPhotos, .moveCatalogSelection, .selectPhotos,
-             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters:
+             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters,
+             .semanticSearch, .clearSemanticSearch, .pauseSemanticIndexing, .resumeSemanticIndexing, .rebuildSemanticIndex:
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
         case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
@@ -148,7 +149,9 @@ extension LensWorksCommandID {
     nonisolated static let agentReversals: [LensWorksCommandID: LensWorksCommandReversal] = {
         let groups: [(LensWorksCommandReversal, [LensWorksCommandID])] = [
             // The saved project file is replaced by the document as it stands; an emptied virtual folder is gone.
-            (.irreversible, [.save, .deleteVirtualFolder]),
+            // Rebuilding discards the catalog's whole semantic index: the old vectors are gone, and searching covers
+            // only what indexing has recomputed since (hours of inference on a large catalog).
+            (.irreversible, [.save, .deleteVirtualFolder, .rebuildSemanticIndex]),
             (.replacesFile, [.saveAs, .exportPNG, .exportJPEG]),
             (.replacesCatalog, [.openCatalog, .newCatalog]),
             // Running it again with the previous value restores what it changed. A located folder goes back with the
@@ -157,7 +160,10 @@ extension LensWorksCommandID {
             (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor]),
             (.transient, [.firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
                           .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
-                          .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors]),
+                          .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors,
+                          // A description search is a view of the catalog; pausing and resuming indexing is kept by
+                          // no file and loses nothing it stored.
+                          .semanticSearch, .clearSemanticSearch, .pauseSemanticIndexing, .resumeSemanticIndexing]),
             // Document history, or the catalog's own recipe and organization history (a deleted keyword too: the
             // person is still asked, because its menu marks it destructive).
             (.history, [.visibility, .opacity, .rename, .importImages, .cut, .paste, .fillForeground, .fillBackground, .clearSelectionPixels,

@@ -512,6 +512,18 @@ struct LensWorksAgentCatalogCommands {
             return asset
         }
     }
+    /// Why a description-search command cannot run now: the same reasons its button shows.
+    func semanticAvailability(_ id: LensWorksCommandID) -> String? {
+        switch id {
+        case .semanticSearch: return catalog.semanticSearchUnavailableReason
+        case .clearSemanticSearch: return catalog.semanticQuery == nil ? "No description search is active." : nil
+        case .pauseSemanticIndexing, .resumeSemanticIndexing, .rebuildSemanticIndex:
+            guard let semantic = catalog.semantic else { return "Semantic search is not available in this session." }
+            return id == .pauseSemanticIndexing ? semantic.pauseUnavailableReason
+                : id == .resumeSemanticIndexing ? semantic.resumeUnavailableReason : semantic.rebuildUnavailableReason
+        default: return nil
+        }
+    }
     private static let flags: [String: LWOrganizationFlag] = ["pick": .Pick, "reject": .Reject, "unflagged": .Unflagged]
     private static let sorts: [String: LWOrganizationSearchSort] = ["sequence": .Sequence, "capture": .Capture, "filename": .Filename, "rating": .Rating]
 
@@ -532,6 +544,8 @@ struct LensWorksAgentCatalogCommands {
             case .addKeyword, .removeKeyword, .renameKeyword, .addSynonym, .deleteKeyword: _ = try keyword(arguments)
             case .selectPhotos: _ = try photos(try arguments.strings("photos") ?? [])
             case .moveCatalogSelection: guard !catalog.assets.isEmpty else { throw refuse("There are no photos on the current catalog page.") }
+            case .semanticSearch, .clearSemanticSearch, .pauseSemanticIndexing, .resumeSemanticIndexing, .rebuildSemanticIndex:
+                if let reason = semanticAvailability(admission.id) { throw refuse(reason) }
             default: break
             }
             switch admission.id {
@@ -584,6 +598,11 @@ struct LensWorksAgentCatalogCommands {
         case .filterLabel: let value = try choice("label"); try await catalog.setFilters(label: .some(value == "any" ? nil : value))
         case .filterAnyKeyword: try await catalog.setFilters(keyword: .some(nil))
         case .clearFilters: try await catalog.clearFilters()
+        case .semanticSearch: try await catalog.searchSemantically(try choice("description"))
+        case .clearSemanticSearch: try await catalog.clearSemanticSearch()
+        case .pauseSemanticIndexing: await catalog.semantic?.pause()
+        case .resumeSemanticIndexing: catalog.semantic?.resume()
+        case .rebuildSemanticIndex: try await catalog.semantic?.rebuild()
         default: throw refuse("\(admission.id.rawValue) is not a catalog command.")
         }
         guard catalog.scopeIsCurrent(scope) else { throw refuse("The catalog changed while the command ran.") }

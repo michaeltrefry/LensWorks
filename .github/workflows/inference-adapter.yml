@@ -75,7 +75,9 @@ jobs:
       - name: Swift inference boundary tests
         timeout-minutes: 30
         # Resolves the weights outside the test host (see the script) and reports the
-        # real-weight suite as skipped when they are not readable from this runner.
+        # real-weight suite as skipped when they are not readable from this runner. Also runs
+        # the semantic search suites: index lifecycle and recovery with a stub embedder, and the
+        # declared real queries (SEMANTIC_SEARCH_FIXTURES.json) against staged CLIP weights.
         run: ./scripts/run-inference-swift-tests.sh InferenceTests.xcresult
       - name: Upload Swift inference test evidence
         if: always()

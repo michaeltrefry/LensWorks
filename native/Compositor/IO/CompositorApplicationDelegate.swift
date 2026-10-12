@@ -10,7 +10,7 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     var session: EditorSession { workspace.current.session }
     var projects: ProjectController { workspace.current.controller }
     var showEditor: (() -> Void)?
-    let catalog = LensWorksCatalog(defaults: CompositorApplicationDelegate.catalogDefaults())
+    let catalog = LensWorksCatalog(defaults: CompositorApplicationDelegate.catalogDefaults(), semantic: .application())
     /// Settings › Automation (MCP). Agents act on the current project tab and the open catalog. The setting lives
     /// with the catalog preferences; whether a launch serves it without being asked is `servesAtLaunch`.
     lazy var automation: LensWorksAutomation = {

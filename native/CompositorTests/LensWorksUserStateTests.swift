@@ -27,6 +27,7 @@ struct LensWorksUserStateTests {
         #expect(LensWorksUserState.applicationSupport(testing: true).path.hasPrefix(temporary + "/LensWorksTestState-"))
         #expect(LensWorksUserState.applicationSupport(testing: false).path == home + "/Library/Application Support/LensWorks")
         #expect(LWModelStore.Configuration.application().managedRoot.path.hasPrefix(support))
+        #expect(try LensWorksSemanticIndex.location(catalogPath: "/LensWorksUserStateTests/A.catalog").path.hasPrefix(support + "/SemanticIndex/"))
 
         // Clipboard: a private pasteboard, which is what a new editing session copies to and pastes from.
         #expect(LensWorksUserState.pasteboard.name != NSPasteboard.general.name && LensWorksUserState.pasteboard.name.rawValue.hasPrefix("LensWorksTestState-"))

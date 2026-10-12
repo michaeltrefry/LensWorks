@@ -105,6 +105,9 @@ struct LensWorksAgentArguments {
             case .cursor, .rating, .integer: numeric = try arguments.integer(name).map(Double.init)
             case .layerName, .catalogCopyName, .variant, .reference, .text, .path: _ = try arguments.string(name)
             case .color: _ = try arguments.color(name)
+            case .catalogDescription:
+                let text = (try arguments.string(name) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty, text.utf8.count <= 1024 else { throw LensWorksCommandRefusal(reason: "\(name) must be a nonempty description of at most 1,024 UTF-8 bytes.") }
             case .referenceArray, .pathArray: _ = try arguments.strings(name)
             case .choice:
                 let value = try arguments.string(name) ?? ""
@@ -158,7 +161,7 @@ enum LensWorksAgentSchema {
         case .cursor, .integer: schema = ["type": "integer"]
         case .rating: schema = ["type": "integer", "minimum": 0, "maximum": 5]
         case .layerName: schema = ["type": "string", "minLength": 1]
-        case .catalogCopyName: schema = ["type": "string", "minLength": 1, "maxLength": 1024]
+        case .catalogCopyName, .catalogDescription: schema = ["type": "string", "minLength": 1, "maxLength": 1024]
         case .variant, .reference, .text: schema = ["type": "string"]
         case .color: schema = ["type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"]
         case .path: schema = ["type": "string", "maxLength": LensWorksGrantedFolders.pathLimit]

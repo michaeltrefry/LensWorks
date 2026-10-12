@@ -20,6 +20,7 @@ struct LensWorksCatalogWorkspace: View {
     @State private var keywordEdit: KeywordEdit?
     @State private var relinkFocus: LensWorksRelinkFocus = .general
     @State private var showingRelink = false
+    @State private var semanticText = ""
     enum KeywordEdit: String, Identifiable { case rename = "Rename Keyword", move = "Move Keyword", synonym = "Add Synonym"; var id: String { rawValue } }
     static let labels = ["Red", "Yellow", "Green", "Blue", "Purple"]
 
@@ -377,17 +378,18 @@ struct LensWorksCatalogWorkspace: View {
                     .onSubmit { Task { await action { try await catalog.browse(folder: catalog.activeFolder, collection: catalog.browseOptions.collection, recursive: catalog.recursive, text: catalog.searchText) } } }
                 Text("\(catalog.selectionCount) selected").font(.caption).foregroundStyle(.secondary)
                 Menu("Sort") {
-                    LensWorksCommandButton(.sortBy, argument: "sequence", title: "Sequence") { Task { await catalog.setBrowseOrder(sort: .Sequence, direction: catalog.browseOptions.direction) } }
-                    LensWorksCommandButton(.sortBy, argument: "capture", title: "Capture Time") { Task { await catalog.setBrowseOrder(sort: .Capture, direction: catalog.browseOptions.direction) } }
-                    LensWorksCommandButton(.sortBy, argument: "filename", title: "Filename") { Task { await catalog.setBrowseOrder(sort: .Filename, direction: catalog.browseOptions.direction) } }
-                    LensWorksCommandButton(.sortBy, argument: "rating", title: "Rating") { Task { await catalog.setBrowseOrder(sort: .Rating, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "sequence", title: "Sequence", reason: sortReason) { Task { await catalog.setBrowseOrder(sort: .Sequence, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "capture", title: "Capture Time", reason: sortReason) { Task { await catalog.setBrowseOrder(sort: .Capture, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "filename", title: "Filename", reason: sortReason) { Task { await catalog.setBrowseOrder(sort: .Filename, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "rating", title: "Rating", reason: sortReason) { Task { await catalog.setBrowseOrder(sort: .Rating, direction: catalog.browseOptions.direction) } }
                     Divider()
-                    LensWorksCommandButton(.sortDirection, argument: "ascending", title: "Ascending") { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Ascending) } }
-                    LensWorksCommandButton(.sortDirection, argument: "descending", title: "Descending") { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Descending) } }
+                    LensWorksCommandButton(.sortDirection, argument: "ascending", title: "Ascending", reason: sortReason) { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Ascending) } }
+                    LensWorksCommandButton(.sortDirection, argument: "descending", title: "Descending", reason: sortReason) { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Descending) } }
                 }
                 Button("Select Page") { Task { await catalog.selectCurrentPage() } }
                 Button("Clear") { Task { await catalog.clearSelection() } }
             }.padding(10)
+            if let semantic = catalog.semantic { semanticBar(semantic).padding(.horizontal, 10).padding(.bottom, 6) }
             organizeBar.padding(.horizontal, 10).padding(.bottom, 6)
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200))], spacing: 12) {
@@ -417,6 +419,46 @@ struct LensWorksCatalogWorkspace: View {
                 }
                 return .handled
             }
+    }
+    /// Description matches are ranked by relevance, so the sort commands say why they are unavailable.
+    private var sortReason: String? { catalog.semanticQuery == nil ? nil : "Description matches are ordered by relevance. Clear the description search to sort." }
+    private func searchSemantically() {
+        let text = semanticText
+        Task { await action { try await catalog.searchSemantically(text) } }
+    }
+    /// Description search and the honest state of its index: no model, indexing with progress, paused, unavailable and why.
+    private func semanticBar(_ semantic: LensWorksSemanticSearch) -> some View {
+        let unavailable = catalog.semanticSearchUnavailableReason
+        let empty = semanticText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                TextField("Describe a photo, for example “red kayak on a lake”", text: $semanticText)
+                    .onSubmit { searchSemantically() }
+                    .disabled(unavailable != nil).help(unavailable ?? "Ranks the photos in this view by how well they match the description")
+                    .accessibilityIdentifier("LensWorks.semanticSearchField")
+                Menu("Description Search") {
+                    LensWorksCommandButton(.semanticSearch, reason: unavailable ?? (empty ? "Type a description first." : nil)) { searchSemantically() }
+                    LensWorksCommandButton(.clearSemanticSearch, reason: catalog.semanticQuery == nil ? "No description search is active." : nil) {
+                        semanticText = ""
+                        Task { await action { try await catalog.clearSemanticSearch() } }
+                    }
+                    Divider()
+                    LensWorksCommandButton(.pauseSemanticIndexing, reason: semantic.pauseUnavailableReason) { Task { await semantic.pause() } }
+                    LensWorksCommandButton(.resumeSemanticIndexing, reason: semantic.resumeUnavailableReason) { semantic.resume() }
+                    LensWorksCommandButton(.rebuildSemanticIndex, reason: semantic.rebuildUnavailableReason) { Task { await action { try await semantic.rebuild() } } }
+                    Divider()
+                    LensWorksCommandButton(.aiModels) { LWModelCenter.shared.show() }
+                }.fixedSize().accessibilityIdentifier("LensWorks.semanticMenu")
+            }
+            HStack(spacing: 6) {
+                if semantic.isIndexing { ProgressView().controlSize(.small) }
+                Text((catalog.semanticQuery.map { "Showing matches for “\($0)”. " } ?? "") + semantic.summary)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    .accessibilityIdentifier("LensWorks.semanticStatus").accessibilityValue(semantic.summary)
+            }
+        }
+        // A finished download or an accepted licence in AI Models makes the model usable: look again.
+        .onChange(of: LWModelCenter.shared.statuses) { _, _ in semantic.recheck() }
     }
     private static let flags: [String: LWOrganizationFlag] = ["pick": .Pick, "reject": .Reject, "unflagged": .Unflagged]
     private func organize(_ change: LensWorksOrganizationChange) { Task { await action { try await catalog.organize(change) } } }

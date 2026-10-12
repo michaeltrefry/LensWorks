@@ -1,0 +1,36 @@
+{
+  "schema": "lensworks.s31.semantic-search-fixtures.v1",
+  "description": "Declared acceptance set for semantic (natural-language) catalog search. The photographs are drawn procedurally by LensWorksSemanticFixtures in native/CompositorTests/LensWorksSemanticSearchTests.swift (Core Graphics and the system font only; no external asset; CC0-1.0). Each query must rank one of its relevant photographs at or above minimumRank among all photographs, using the bundled model through the real inference runtime.",
+  "model": "clip_vit_l14",
+  "edge": 384,
+  "photos": [
+    "sunset-over-sea",
+    "night-sky-crescent-moon",
+    "green-meadow-blue-sky",
+    "snowy-mountains",
+    "red-stop-sign",
+    "chessboard",
+    "rainbow",
+    "red-heart",
+    "yellow-smiley-face",
+    "flag-of-japan",
+    "flag-of-france",
+    "traffic-light"
+  ],
+  "queries": [
+    {"text": "a sunset over the ocean", "relevant": ["sunset-over-sea"], "minimumRank": 1},
+    {"text": "the moon and stars at night", "relevant": ["night-sky-crescent-moon"], "minimumRank": 1},
+    {"text": "a grassy field under a blue sky with clouds", "relevant": ["green-meadow-blue-sky"], "minimumRank": 1},
+    {"text": "snow-capped mountains", "relevant": ["snowy-mountains"], "minimumRank": 1},
+    {"text": "a stop sign", "relevant": ["red-stop-sign"], "minimumRank": 1},
+    {"text": "a chess board", "relevant": ["chessboard"], "minimumRank": 1},
+    {"text": "a rainbow", "relevant": ["rainbow"], "minimumRank": 1},
+    {"text": "a red heart", "relevant": ["red-heart"], "minimumRank": 1},
+    {"text": "a smiley face", "relevant": ["yellow-smiley-face"], "minimumRank": 1},
+    {"text": "the flag of Japan", "relevant": ["flag-of-japan"], "minimumRank": 1},
+    {"text": "the flag of France", "relevant": ["flag-of-france"], "minimumRank": 1},
+    {"text": "a traffic light", "relevant": ["traffic-light"], "minimumRank": 1},
+    {"text": "national flags", "relevant": ["flag-of-japan", "flag-of-france"], "minimumRank": 1},
+    {"text": "road signs and signals", "relevant": ["red-stop-sign", "traffic-light"], "minimumRank": 1}
+  ]
+}

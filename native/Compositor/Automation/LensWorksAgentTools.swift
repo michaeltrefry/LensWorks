@@ -167,7 +167,7 @@ final class LensWorksAgentTools {
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             if catalog.isBusy { return "Finish the current catalog operation first." }
             do { try catalog.admitCatalogWork() } catch { return error.localizedDescription }
-            return nil
+            return LensWorksAgentCatalogCommands(catalog: catalog, context: context).semanticAvailability(id)
         case .standalone:
             return LensWorksAgentProjectCommands(context: context).availability(id)
         }
@@ -531,6 +531,15 @@ final class LensWorksAgentTools {
                 return Pending(index: index, item: .init(action: label.replacingOccurrences(of: "…", with: ""), name: String(from.suffix(96)) + " → " + to)) { [weak self] in
                     guard let catalog = self?.catalog(), (try? LensWorksAgentProjectCommands.movedFolder(catalog, call.arguments).label) == from else {
                         throw LensWorksCommandRefusal(reason: "The catalog folder changed while waiting for confirmation: nothing was relinked.")
+                    }
+                    return nil
+                }
+            case .rebuildSemanticIndex:
+                guard let catalog = catalog(), let path = catalog.catalogPath else { throw LensWorksCommandRefusal(reason: "Open a catalog first.") }
+                let indexed = catalog.semantic?.indexedCount ?? 0
+                return Pending(index: index, item: .init(action: label + " (discards \(indexed) indexed photo\(indexed == 1 ? "" : "s"))", name: path)) { [weak self] in
+                    guard self?.catalog()?.catalogPath == path else {
+                        throw LensWorksCommandRefusal(reason: "The open catalog changed while waiting for confirmation: nothing was rebuilt.")
                     }
                     return nil
                 }
