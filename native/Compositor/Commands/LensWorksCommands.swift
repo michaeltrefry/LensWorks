@@ -307,6 +307,8 @@ struct LensWorksLayerCommandButton: View {
         if redo { session.redo() } else { session.undo() }
         return name
     }
+    /// Records an agent's admitted command as the last dispatch, as every menu and key dispatch is recorded.
+    static func noteAgent(_ admission: LensWorksAgentAdmission) { lastInvocation = .init(admission.id); lastOrigin = admission.origin }
     /// Who dispatched `lastInvocation` through a typed admission.
     private(set) static var lastOrigin: LensWorksCommandOrigin = .user
     /// The last command a menu item, button or key press dispatched, for diagnostics and the command audit tests.

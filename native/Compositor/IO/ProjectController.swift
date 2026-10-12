@@ -12,6 +12,9 @@ final class ProjectController {
     /// It is recorded by the next save and survives reloads of a package written elsewhere.
     var relinkedOriginal: (version: UUID, path: String, native: LWCatalogNativePath?)?
     private var saveGeneration = 0
+    /// Whether opening and saving add the project to File › Open Recent (macOS keeps that list for the person; tests
+    /// turn this off so a fixture never lands in it).
+    var recordsRecentProjects = true
     private(set) var sourceCloseRequested = false
     private var standaloneCloseConfirmed = false
     /// Keeps the document in step with its package when something else writes it. See ProjectController+ExternalChanges.
@@ -75,6 +78,24 @@ final class ProjectController {
             try await ImageExporter.shared.exportPNG(snapshot, to: url, workingVersion: workingVersion)
         }
         catch { await showError("Couldn’t export PNG", error: error) }
+    }
+
+    /// Export PNG straight to `url`, for a caller that already chose the destination (an agent's granted path).
+    func exportPNG(to url: URL) async throws {
+        guard session.document != nil, begin() else { throw LensWorksCommandRefusal(reason: "Finish the current project operation first.") }
+        defer { session.isProjectBusy = false }
+        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        try await ImageExporter.shared.exportPNG(snapshot, to: url, workingVersion: workingVersion)
+    }
+    /// Export JPEG straight to `url` with `options`, without the export sheet.
+    func exportJPEG(to url: URL, options: JPEGOptions) async throws {
+        guard session.document != nil, begin() else { throw LensWorksCommandRefusal(reason: "Finish the current project operation first.") }
+        defer { session.isProjectBusy = false }
+        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        let raster = try await ImageExporter.shared.render(snapshot)
+        let data = try await ImageExporter.shared.jpegFile(raster, options: options)
+        try data.check()
+        try await ImageExporter.shared.write(data.file, to: url, workingVersion: workingVersion)
     }
 
     func canvasSize() async {
@@ -268,7 +289,7 @@ final class ProjectController {
                 session.projectURL = destination
                 session.history.markSaved(revision)
                 saveGeneration += 1
-                RecentProjects.shared.note(destination)
+                if recordsRecentProjects { RecentProjects.shared.note(destination) }
                 await rememberProjectDigest(for: destination)
                 watchProject(at: destination)
                 if let registrationError { await showError("The project was saved; its catalog registration needs reconciliation", error: registrationError) }
@@ -324,7 +345,7 @@ final class ProjectController {
             }
             session.installProject(snapshot, from: source)
             workingVersion = snapshot.workingVersion
-            RecentProjects.shared.note(source)
+            if recordsRecentProjects { RecentProjects.shared.note(source) }
             await rememberProjectDigest(for: source)
             watchProject(at: source)
             return true
@@ -403,7 +424,10 @@ final class ProjectController {
         return response == .alertThirdButtonReturn
     }
 
+    /// While an agent's command runs, an error goes back to the agent instead of into an alert in front of the person.
+    static var agentErrorSink: ((String) -> Void)?
     private func showError(_ title: String, error: Error) async {
+        if let sink = Self.agentErrorSink { sink(title + ": " + error.localizedDescription); return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title

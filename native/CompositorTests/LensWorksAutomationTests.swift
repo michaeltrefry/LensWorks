@@ -276,8 +276,11 @@ struct LensWorksAutomationTests {
         let hide = try #require(rows.first { $0["id"] as? String == "layer.visibility" })
         #expect(hide["available"] as? Bool == true && hide["agentInvocable"] as? Bool == true && hide["title"] as? String == "Hide/Show Layer")
         #expect(((hide["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])?["layers"] != nil)
-        let save = try #require(rows.first { $0["id"] as? String == "file.save" })
-        #expect(save["available"] as? Bool == false && (save["reason"] as? String)?.contains("Agents cannot run this command") == true)
+        // A command agents never run says why in its own terms; one they can run says what it needs now.
+        let fit = try #require(rows.first { $0["id"] as? String == "view.fit" })
+        #expect(fit["agentInvocable"] as? Bool == false && fit["available"] as? Bool == false && fit["reason"] as? String == LensWorksAgentExclusion.canvasZoom.rawValue)
+        let export = try #require(rows.first { $0["id"] as? String == "file.exportPNG" })
+        #expect(export["agentInvocable"] as? Bool == true && export["available"] as? Bool == false && (export["reason"] as? String)?.contains("No folders are granted to automation") == true)
         let undo = try #require(rows.first { $0["id"] as? String == "edit.undo" })
         #expect(undo["agentInvocable"] as? Bool == true && undo["available"] as? Bool == false && undo["reason"] as? String == "There is nothing to undo.")
         let toggle = try #require(rows.first { $0["id"] as? String == "automation.enabled" })
@@ -494,8 +497,8 @@ struct LensWorksAutomationTests {
         let stepped = await tools.call("invoke_command", arguments: ["command": "edit.undo"])
         #expect(stepped["isError"] as? Bool == true && text(stepped) == "Finish the current layer interaction first.")
         try session.cancelCommandInteraction(token)
-        let unsupported = await tools.call("invoke_command", arguments: ["command": "file.save"])
-        #expect(unsupported["isError"] as? Bool == true && text(unsupported).contains("Agents cannot run this command"))
+        let unsupported = await tools.call("invoke_command", arguments: ["command": "view.fit"])
+        #expect(unsupported["isError"] as? Bool == true && text(unsupported) == "Agents cannot run view.fit. " + LensWorksAgentExclusion.canvasZoom.rawValue)
         let bad = await tools.call("invoke_command", arguments: ["command": "layer.opacity", "arguments": ["opacity": 3]])
         #expect(bad["isError"] as? Bool == true && text(bad).contains("Opacity must be"))
         let noCatalog = await tools.call("invoke_command", arguments: ["command": "catalog.virtualFolder.delete", "arguments": ["folder": "x"]])
@@ -741,9 +744,12 @@ struct LensWorksAutomationTests {
     @Test func confirmationIsDrivenByTheRegistryAndItsNamesAreClipped() throws {
         let harness = try Harness(); defer { harness.cleanUp() }
         let rows = harness.automation.tools.listCommands()
-        #expect(LensWorksCommandRegistry.descriptors.filter(\.requiresAgentConfirmation).map(\.id) == [.deleteVirtualFolder]
-                && rows.filter { $0["requiresConfirmation"] as? Bool == true }.map { $0["id"] as? String } == ["catalog.virtualFolder.delete"])
-        #expect(Set(rows.filter { $0["batchable"] as? Bool == true }.compactMap { $0["id"] as? String }) == Set(LensWorksAgentTools.agentCommands.map(\.rawValue)).subtracting(["edit.undo", "edit.redo"]))
+        let confirmed: Set<LensWorksCommandID> = [.deleteVirtualFolder, .deleteKeyword, .save, .saveAs, .exportPNG, .exportJPEG]
+        #expect(Set(LensWorksCommandRegistry.descriptors.filter(\.requiresAgentConfirmation).map(\.id)) == confirmed
+                && Set(rows.filter { $0["requiresConfirmation"] as? Bool == true }.compactMap { $0["id"] as? String }) == Set(confirmed.map(\.rawValue)))
+        // Document and catalog commands batch; history steps and project-file commands run one at a time.
+        #expect(Set(rows.filter { $0["batchable"] as? Bool == true }.compactMap { $0["id"] as? String })
+                == Set(LensWorksAgentTools.agentCommands.filter { $0.agentAccess.kind != .standalone }.map(\.rawValue)))
         #expect(LensWorksAgentConfirmation.Item(action: "Delete", name: String(repeating: "n", count: 5_000)).name.count == 256)
     }
 
@@ -772,7 +778,8 @@ struct LensWorksAutomationTests {
                     && LensWorksCommandDispatcher.lastInvocation?.id == .fitCanvas && session.activeLayer?.isVisible == true && session.history.undoCount == 0 && !session.isModified, comment)
         }
         await refused([hide, ["command": "layer.nope"]], "Command 2: Name a command id from list_commands. Nothing was run.", "unknown command")
-        await refused([hide, ["command": "file.save"]], "Command 2: Agents cannot run this command: it runs only from its menu, shortcut or panel. Nothing was run.", "a command agents cannot run")
+        await refused([hide, ["command": "view.fit"]], "Command 2: Agents cannot run view.fit. " + LensWorksAgentExclusion.canvasZoom.rawValue + " Nothing was run.", "a command agents cannot run")
+        await refused([hide, ["command": "file.closeProject"]], "Command 2: file.closeProject cannot be part of a batch (it opens, saves or switches projects or the catalog); run it with invoke_command. Nothing was run.", "a project command in a batch")
         await refused([hide, ["command": "layer.opacity", "arguments": ["opacity": "half"]]], "Command 2: opacity must be a number from 0 through 1. Nothing was run.", "a bad argument")
         await refused([hide, ["command": "layer.opacity", "arguments": ["opacity": 3]]], "Command 2 (layer.opacity): Opacity must be a finite value from 0 through 1. Nothing was run.", "an argument the app does not admit")
         await refused([hide, ["command": "layer.opacity", "arguments": ["opacity": 0.5, "layers": [UUID().uuidString]]]], "Command 2 (layer.opacity): The requested layer is no longer in this document. Nothing was run.", "a layer that is not there")
@@ -801,11 +808,11 @@ struct LensWorksAutomationTests {
         ]])
         let content = result["structuredContent"] as? [String: Any]
         #expect(result["isError"] as? Bool == false && content?["kind"] as? String == "document" && content?["completed"] as? Bool == true && content?["changed"] as? Bool == true
-                && content?["history"] as? String == "3 Layer Commands (Agent)"
+                && content?["history"] as? String == "3 Document Commands (Agent)"
                 && batchResults(result).map { $0["command"] as? String } == ["layer.visibility", "layer.opacity", "layer.rename"]
                 && batchResults(result).allSatisfy { $0["status"] as? String == "ran" && $0["changed"] as? Bool == true } && batchResults(result).map { $0["index"] as? Int } == [1, 2, 3], "\(result)")
         func applied() -> Bool { session.document?.layers[0].isVisible == false && session.document?.layers[0].name == "Batched" && session.document?.layers[1].opacity == 0.5 }
-        #expect(applied() && session.history.undoCount == 1 && session.history.undoName == "3 Layer Commands (Agent)")
+        #expect(applied() && session.history.undoCount == 1 && session.history.undoName == "3 Document Commands (Agent)")
         // The agent may undo its own batch: the one entry is its own.
         let undone = try await bridge.call("invoke_command", ["command": "edit.undo"])
         #expect(undone["isError"] as? Bool == false && session.document == starting && session.history.undoCount == 0, "\(undone)")
@@ -813,7 +820,7 @@ struct LensWorksAutomationTests {
         session.redo()
         let redone = applied()
         session.undo()
-        #expect(redone && session.document == starting && session.history.undoCount == 0 && session.history.redoName == "3 Layer Commands (Agent)")
+        #expect(redone && session.document == starting && session.history.undoCount == 0 && session.history.redoName == "3 Document Commands (Agent)")
     }
 
     /// A document batch that fails part-way is rolled back whole, and the connection is checked before every member.

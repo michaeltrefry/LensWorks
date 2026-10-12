@@ -9,7 +9,7 @@ struct LensWorksAutomationSettingsView: View {
                 Section {
                     LensWorksCommandToggle(.automationEnabled, isOn: Binding(get: { automation.isEnabled }, set: { automation.setEnabled($0) }))
                         .accessibilityIdentifier(LensWorksCommandID.automationEnabled.rawValue)
-                    Text("AI agents connected through the LensWorks MCP bridge can list and run commands, read the open document and catalog, and render previews. Their edits are labeled “(Agent)” in history, and permanent deletes ask you first.")
+                    Text("AI agents connected through the LensWorks MCP bridge can list and run commands, read the open document and catalog, and render previews. Their edits are labeled “(Agent)” in history; permanent deletes and replacing a file ask you first; and they name files only inside the folders you grant below.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text(status).font(.caption).accessibilityIdentifier("LensWorks.automation.status")
                 }
@@ -31,6 +31,20 @@ struct LensWorksAutomationSettingsView: View {
                                                reason: LensWorksCommandRegistry.unavailable(!automation.isEnabled, "Turn automation on first.") ?? automation.secretChangeReason) { automation.regenerateSecret() }
                     }
                 }
+                Section("Granted Folders") {
+                    Text("Agents can open, import, save and export files only inside the folders listed here. With none granted, no agent command can name a file.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(automation.folders.grants) { grant in
+                        HStack {
+                            Text(verbatim: grant.path).font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                                .accessibilityIdentifier("LensWorks.automation.folder")
+                            Spacer()
+                            LensWorksCommandButton(.automationRevokeFolder, argument: grant.path, role: .destructive) { automation.folders.revoke(grant.id) }
+                        }
+                    }
+                    LensWorksCommandButton(.automationGrantFolder) { automation.chooseGrantedFolder() }
+                        .accessibilityIdentifier(LensWorksCommandID.automationGrantFolder.rawValue)
+                }
                 Section("MCP client configuration") {
                     if let secret = automation.secret {
                         Text(automation.clientConfiguration(secret: automation.showsSecret ? secret : "<copy the secret above>"))
@@ -46,7 +60,7 @@ struct LensWorksAutomationSettingsView: View {
             .formStyle(.grouped)
             .tabItem { Label("Automation", systemImage: "point.3.connected.trianglepath.dotted") }
         }
-        .frame(width: 620, height: 520)
+        .frame(width: 620, height: 640)
     }
     private var status: String {
         if let error = automation.lastError { return "Error: " + error }

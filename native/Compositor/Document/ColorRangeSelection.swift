@@ -24,6 +24,8 @@ final class ColorRangeEdit {
     @ObservationIgnored let image: CGImage
     @ObservationIgnored let original: DocumentSelection?
     @ObservationIgnored var generation = 0
+    /// The newest generation whose match has finished (its selection shown, or its error set).
+    @ObservationIgnored var settledGeneration = 0
     init(image: CGImage, original: DocumentSelection?) { self.image = image; self.original = original }
     var hasColors: Bool { !include.isEmpty }
 }
@@ -72,6 +74,7 @@ extension EditorSession {
         Task {
             let result = await Task.detached(priority: .userInitiated) { Self.colorRangeResult(job) }.value
             guard colorRange === edit, edit.generation == generation, self.document?.id == document.id else { return }
+            edit.settledGeneration = generation
             edit.error = result.error?.localizedDescription
             edit.preview = result.preview
             if result.error != nil { return }

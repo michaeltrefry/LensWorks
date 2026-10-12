@@ -98,6 +98,8 @@ final class LensWorksAutomation {
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored let secretStore: LensWorksAutomationSecretStore
     @ObservationIgnored let tools: LensWorksAgentTools
+    /// The folders the person granted to automation: the only places an agent's command may name a file.
+    let folders: LensWorksGrantedFolders
     @ObservationIgnored private(set) var server: LensWorksAutomationServer!
     private(set) var isEnabled: Bool
     private(set) var secret: String?
@@ -129,7 +131,8 @@ final class LensWorksAutomation {
          session: @escaping () -> EditorSession?, catalog: @escaping () -> LensWorksCatalog?) {
         self.defaults = defaults; self.secretStore = secretStore
         isEnabled = defaults.bool(forKey: Self.enabledKey)
-        tools = LensWorksAgentTools(session: session, catalog: catalog)
+        folders = LensWorksGrantedFolders(defaults: defaults)
+        tools = LensWorksAgentTools(session: session, catalog: catalog, folders: folders)
         tools.automation = self
         server = LensWorksAutomationServer(socketPath: socketPath, handler: { [weak self] request, caller in
             await self?.handle(request, caller: caller) ?? LensWorksAgentTools.encodeError(id: nil, code: -32000, "LensWorks is quitting.")
@@ -241,6 +244,15 @@ final class LensWorksAutomation {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboard.setString("", forType: Self.concealedPasteboardType)
+    }
+
+    /// Settings › Automation › Grant Folder…: the person picks a folder agents may read and write files in.
+    func chooseGrantedFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+        panel.prompt = "Grant"; panel.message = "AI agents will be able to open, import, save and export files inside this folder."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try folders.grant(url); lastError = nil } catch { lastError = error.localizedDescription }
     }
 
     // MARK: Confirmations
