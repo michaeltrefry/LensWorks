@@ -63,7 +63,7 @@ struct NewCanvasSheet: View {
                     if let onCreate { onCreate(w, h) }
                     else { session.createDocument(width: w, height: h, emptyLayer: true) }
                 }
-                .configuredNativeShortcut(.return).buttonStyle(.borderedProminent)
+                .registeredCommandShortcut(.apply).buttonStyle(.borderedProminent)
                 .disabled(!valid).accessibilityIdentifier("createCanvas")
             }
         }

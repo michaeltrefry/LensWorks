@@ -45,7 +45,7 @@ struct TrimSheet: View {
 
             HStack {
                 Button("Cancel") { finish(nil) }
-                    .configuredNativeShortcut(.escape)
+                    .registeredCommandShortcut(.cancel)
                 Spacer()
                 Button("OK") {
                     let options = TrimOptions(
@@ -57,7 +57,7 @@ struct TrimSheet: View {
                     )
                     finish(options)
                 }
-                .configuredNativeShortcut(.return)
+                .registeredCommandShortcut(.apply)
                 .buttonStyle(.borderedProminent)
                 .disabled(!trimTop && !trimBottom && !trimLeft && !trimRight)
             }

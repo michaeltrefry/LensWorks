@@ -106,7 +106,7 @@ struct LensWorksRelinkSheet: View {
             HStack {
                 Text("Locate Originals").font(.title2.weight(.semibold))
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).accessibilityIdentifier("LensWorks.relinkDone")
+                Button("Done") { dismiss() }.registeredCommandShortcut(.cancel, role: .cancelAction).accessibilityIdentifier("LensWorks.relinkDone")
             }.padding()
             Divider()
             ScrollView {

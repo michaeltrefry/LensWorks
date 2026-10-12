@@ -116,13 +116,13 @@ struct NativeLayerList: NSViewRepresentable {
             let menu = NSMenu()
 
             // 1. Duplicate Layer
-            let duplicateItem = NSMenuItem(title: "Duplicate Layer", action: #selector(duplicateLayerAction), keyEquivalent: "")
+            let duplicateItem = LensWorksCommandRegistry.menuItem(.duplicateLayer, title: "Duplicate Layer", target: self, action: #selector(duplicateLayerAction))
             duplicateItem.target = self
             duplicateItem.isEnabled = validateMenuItem(duplicateItem)
             menu.addItem(duplicateItem)
 
             // 2. Rename…
-            let renameItem = NSMenuItem(title: "Rename…", action: #selector(renameLayerAction), keyEquivalent: "")
+            let renameItem = LensWorksCommandRegistry.menuItem(.beginRename, title: "Rename…", target: self, action: #selector(renameLayerAction))
             renameItem.target = self
             renameItem.isEnabled = validateMenuItem(renameItem)
             menu.addItem(renameItem)
@@ -136,7 +136,7 @@ struct NativeLayerList: NSViewRepresentable {
             } else {
                 deleteTitle = "Delete Layer"
             }
-            let deleteItem = NSMenuItem(title: deleteTitle, action: #selector(deleteLayerAction), keyEquivalent: "")
+            let deleteItem = LensWorksCommandRegistry.menuItem(.deleteLayer, title: deleteTitle, target: self, action: #selector(deleteLayerAction))
             deleteItem.target = self
             deleteItem.isEnabled = validateMenuItem(deleteItem)
             menu.addItem(deleteItem)
@@ -145,33 +145,33 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 4. Create Clipping Mask / Release Clipping Mask
             let clippingTitle = session.activeLayer?.maskSourceID != nil ? "Release Clipping Mask" : "Create Clipping Mask"
-            let clippingItem = NSMenuItem(title: clippingTitle, action: #selector(toggleClippingMaskAction), keyEquivalent: "")
+            let clippingItem = LensWorksCommandRegistry.menuItem(.clippingMask, title: clippingTitle, target: self, action: #selector(toggleClippingMaskAction))
             clippingItem.target = self
             clippingItem.isEnabled = validateMenuItem(clippingItem)
             menu.addItem(clippingItem)
 
             // 5. Group Selected Layers
-            let groupItem = NSMenuItem(title: "Group Selected Layers", action: #selector(groupSelectedLayersAction), keyEquivalent: "")
+            let groupItem = LensWorksCommandRegistry.menuItem(.groupLayers, title: "Group Selected Layers", target: self, action: #selector(groupSelectedLayersAction))
             groupItem.target = self
             groupItem.isEnabled = validateMenuItem(groupItem)
             menu.addItem(groupItem)
 
             // A folder right-clicked can be ungrouped: its layers stay where they are, and the folder goes.
             if rows[row].isGroup {
-                let ungroupItem = NSMenuItem(title: "Ungroup Layers", action: #selector(ungroupLayersAction), keyEquivalent: "")
+                let ungroupItem = LensWorksCommandRegistry.menuItem(.ungroupLayers, title: "Ungroup Layers", target: self, action: #selector(ungroupLayersAction))
                 ungroupItem.target = self
                 ungroupItem.isEnabled = validateMenuItem(ungroupItem)
                 menu.addItem(ungroupItem)
             }
 
             // 6. Move Out of Folder
-            let moveOutItem = NSMenuItem(title: "Move Out of Folder", action: #selector(moveOutOfFolderAction), keyEquivalent: "")
+            let moveOutItem = LensWorksCommandRegistry.menuItem(.moveOutOfFolder, title: "Move Out of Folder", target: self, action: #selector(moveOutOfFolderAction))
             moveOutItem.target = self
             moveOutItem.isEnabled = validateMenuItem(moveOutItem)
             menu.addItem(moveOutItem)
 
             // 7. Merge Down / Merge Layers / Merge Group
-            let mergeItem = NSMenuItem(title: session.mergeTitle, action: #selector(mergeLayersAction), keyEquivalent: "")
+            let mergeItem = LensWorksCommandRegistry.menuItem(.mergeLayers, title: session.mergeTitle, target: self, action: #selector(mergeLayersAction))
             mergeItem.target = self
             mergeItem.isEnabled = validateMenuItem(mergeItem)
             menu.addItem(mergeItem)
@@ -179,13 +179,14 @@ struct NativeLayerList: NSViewRepresentable {
             menu.addItem(NSMenuItem.separator())
 
             // 8. Add Mask >
+            // The submenu holder runs nothing itself; its items are the registered Add Mask commands.
             let addMaskItem = NSMenuItem(title: "Add Mask", action: nil, keyEquivalent: "")
             let addMaskSubmenu = NSMenu(title: "Add Mask")
-            let revealAllItem = NSMenuItem(title: "Reveal All (White)", action: #selector(addWhiteMaskAction), keyEquivalent: "")
+            let revealAllItem = LensWorksCommandRegistry.menuItem(.addMask, argument: "white", title: "Reveal All (White)", target: self, action: #selector(addWhiteMaskAction))
             revealAllItem.target = self
             revealAllItem.isEnabled = validateMenuItem(revealAllItem)
             addMaskSubmenu.addItem(revealAllItem)
-            let hideAllItem = NSMenuItem(title: "Hide All (Black)", action: #selector(addBlackMaskAction), keyEquivalent: "")
+            let hideAllItem = LensWorksCommandRegistry.menuItem(.addMask, argument: "black", title: "Hide All (Black)", target: self, action: #selector(addBlackMaskAction))
             hideAllItem.target = self
             hideAllItem.isEnabled = validateMenuItem(hideAllItem)
             addMaskSubmenu.addItem(hideAllItem)
@@ -195,20 +196,20 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 9. Enable Mask / Disable Mask
             let toggleMaskTitle = session.activeLayer?.mask?.isEnabled == false ? "Enable Mask" : "Disable Mask"
-            let toggleMaskItem = NSMenuItem(title: toggleMaskTitle, action: #selector(toggleMaskAction), keyEquivalent: "")
+            let toggleMaskItem = LensWorksCommandRegistry.menuItem(.toggleMask, title: toggleMaskTitle, target: self, action: #selector(toggleMaskAction))
             toggleMaskItem.target = self
             toggleMaskItem.isEnabled = validateMenuItem(toggleMaskItem)
             menu.addItem(toggleMaskItem)
 
             // 10. Delete Mask
-            let deleteMaskItem = NSMenuItem(title: "Delete Mask", action: #selector(deleteMaskAction), keyEquivalent: "")
+            let deleteMaskItem = LensWorksCommandRegistry.menuItem(.deleteMask, title: "Delete Mask", target: self, action: #selector(deleteMaskAction))
             deleteMaskItem.target = self
             deleteMaskItem.isEnabled = validateMenuItem(deleteMaskItem)
             menu.addItem(deleteMaskItem)
 
             // 11. Link Mask / Unlink Mask
             let linkMaskTitle = session.activeLayer?.mask?.isLinked == false ? "Link Mask" : "Unlink Mask"
-            let linkMaskItem = NSMenuItem(title: linkMaskTitle, action: #selector(toggleMaskLinkAction), keyEquivalent: "")
+            let linkMaskItem = LensWorksCommandRegistry.menuItem(.linkMask, title: linkMaskTitle, target: self, action: #selector(toggleMaskLinkAction))
             linkMaskItem.target = self
             linkMaskItem.isEnabled = validateMenuItem(linkMaskItem)
             menu.addItem(linkMaskItem)
@@ -217,7 +218,7 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 12. Hide Layer / Show Layer
             let visibilityTitle = session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer"
-            let visibilityItem = NSMenuItem(title: visibilityTitle, action: #selector(toggleVisibilityAction), keyEquivalent: "")
+            let visibilityItem = LensWorksCommandRegistry.menuItem(.visibility, title: visibilityTitle, target: self, action: #selector(toggleVisibilityAction))
             visibilityItem.target = self
             visibilityItem.isEnabled = validateMenuItem(visibilityItem)
             menu.addItem(visibilityItem)
@@ -267,70 +268,105 @@ struct NativeLayerList: NSViewRepresentable {
             }
         }
 
+        /// Runs a context-menu item's command through the registry's dispatcher, identified by the item itself.
+        private func run(_ sender: Any?, _ handler: () -> Void) {
+            if let identifier = (sender as? NSMenuItem)?.identifier?.rawValue, let invocation = LensWorksCommandInvocation(identifier: identifier) {
+                LensWorksCommandDispatcher.perform(invocation, handler)
+            } else { handler() }
+        }
+
         @objc func duplicateLayerAction(_ sender: Any?) {
-            session.duplicateActiveLayer()
+            run(sender) {
+                session.duplicateActiveLayer()
+            }
         }
 
         @objc func renameLayerAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            _ = session.runCommand(.beginRename(id))
+            run(sender) {
+                guard let id = session.activeLayerID else { return }
+                _ = session.runCommand(.beginRename(id))
+            }
         }
 
         @objc func deleteLayerAction(_ sender: Any?) {
-            session.deleteLayerOrMask()
+            run(sender) {
+                session.deleteLayerOrMask()
+            }
         }
 
         @objc func toggleClippingMaskAction(_ sender: Any?) {
-            if let id = session.activeLayerID { session.toggleClippingMask(id) }
+            run(sender) {
+                if let id = session.activeLayerID { session.toggleClippingMask(id) }
+            }
         }
 
         @objc func groupSelectedLayersAction(_ sender: Any?) {
-            session.groupSelectedLayers()
+            run(sender) {
+                session.groupSelectedLayers()
+            }
         }
 
         @objc func ungroupLayersAction(_ sender: Any?) {
-            session.ungroupLayers()
+            run(sender) {
+                session.ungroupLayers()
+            }
         }
 
         @objc func moveOutOfFolderAction(_ sender: Any?) {
-            session.moveActiveLayerOutOfGroup()
+            run(sender) {
+                session.moveActiveLayerOutOfGroup()
+            }
         }
 
         @objc func mergeLayersAction(_ sender: Any?) {
-            session.mergeLayers()
+            run(sender) {
+                session.mergeLayers()
+            }
         }
 
         @objc func addWhiteMaskAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            session.selectLayerTarget(id, mask: false)
-            session.addMask(revealing: true)
+            run(sender) {
+                guard let id = session.activeLayerID else { return }
+                session.selectLayerTarget(id, mask: false)
+                session.addMask(revealing: true)
+            }
         }
 
         @objc func addBlackMaskAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            session.selectLayerTarget(id, mask: false)
-            session.addMask(revealing: false)
+            run(sender) {
+                guard let id = session.activeLayerID else { return }
+                session.selectLayerTarget(id, mask: false)
+                session.addMask(revealing: false)
+            }
         }
 
         @objc func toggleMaskAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            session.selectLayerTarget(id, mask: false)
-            session.toggleLayerMask()
+            run(sender) {
+                guard let id = session.activeLayerID else { return }
+                session.selectLayerTarget(id, mask: false)
+                session.toggleLayerMask()
+            }
         }
 
         @objc func deleteMaskAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            session.selectLayerTarget(id, mask: false)
-            session.deleteLayerMask()
+            run(sender) {
+                guard let id = session.activeLayerID else { return }
+                session.selectLayerTarget(id, mask: false)
+                session.deleteLayerMask()
+            }
         }
 
         @objc func toggleMaskLinkAction(_ sender: Any?) {
-            if let id = session.activeLayerID { session.toggleMaskLink(id) }
+            run(sender) {
+                if let id = session.activeLayerID { session.toggleMaskLink(id) }
+            }
         }
 
         @objc func toggleVisibilityAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            session.toggleLayerVisibility(id)
+            run(sender) {
+                guard let id = session.activeLayerID else { return }
+                session.toggleLayerVisibility(id)
+            }
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -721,38 +757,46 @@ final class LayerTableView: NSTableView {
     override func keyDown(with event: NSEvent) {
         guard let event = ShortcutSettings.shared.canvasEvent(event) else { return }
         let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
-        if event.keyCode == 53, session?.transformEdit != nil {
+        // The canvas keys the Layers panel answers, resolved through the registry like the canvas's own.
+        let command = LensWorksCommandDispatcher.resolveKey(ShortcutChord(event), in: [.canvas], effective: false)
+        let tools: [LensWorksCommandID: NavigationTool] = [.selectTool: .idle, .eyedropperTool: .eyedropper, .cropTool: .crop, .blurTool: .blur,
+            .gradientTool: .gradient, .spotHealingTool: .spotHealing, .cloneStampTool: .cloneStamp, .shapeTool: .shape,
+            .moveTool: .move, .handTool: .hand, .zoomTool: .zoom]
+        switch command?.id {
+        case .cancel? where session?.transformEdit != nil:
             session?.cancelTransform()
-        } else if [36, 76].contains(event.keyCode), session?.transformEdit != nil {
+        case .apply? where session?.transformEdit != nil:
             session?.commitTransform()
-        } else if plain, event.keyCode == 48 {
+        case .cycleToolMode? where plain:
             session?.cycleToolMode()
-        } else if plain, event.charactersIgnoringModifiers?.lowercased() == "x" {
+        case .swapColors? where plain:
             session?.swapPaletteColors()
-        } else if plain, event.charactersIgnoringModifiers?.lowercased() == "d" {
+        case .resetColors? where plain:
             session?.resetPaletteColors()
-        } else if plain, event.charactersIgnoringModifiers?.lowercased() == "t" {
+        case .typeTool? where plain:
             session?.selectTool(.type)
-        } else if plain, ["a", "v", "h", "z", "b", "e", "g", "l", "m", "w", "j", "s", "u", "r", "i", "c"].contains(event.charactersIgnoringModifiers?.lowercased() ?? "") {
-            let key = event.charactersIgnoringModifiers?.lowercased()
-            if key == "m" { if !event.isARepeat { session?.pressMarqueeKey() } }
-            else if key == "l" { if !event.isARepeat { session?.pressLassoKey() } }
-            else if key == "b" || key == "e" {
-                session?.selectTool(.brush)
-                session?.brushMode = key == "e" ? .erase : .paint
-            }
-            else if key == "w" { if !event.isARepeat { session?.pressWandKey() } }
-            else { session?.selectTool(key == "a" ? .idle : key == "i" ? .eyedropper : key == "c" ? .crop : key == "r" ? .blur : key == "b" ? .brush : key == "g" ? .gradient : key == "l" ? .lasso : key == "m" ? .marquee : key == "j" ? .spotHealing : key == "s" ? .cloneStamp : key == "u" ? .shape : key == "v" ? .move : key == "h" ? .hand : .zoom) }
-        } else if plain, let digit = Int(event.charactersIgnoringModifiers ?? ""), session?.usesOpacityKeys == true {
-            session?.typeOpacityDigit(digit)
+        case .marqueeTool? where plain:
+            if !event.isARepeat { session?.pressMarqueeKey() }
+        case .lassoTool? where plain:
+            if !event.isARepeat { session?.pressLassoKey() }
+        case .magicTool? where plain:
+            if !event.isARepeat { session?.pressWandKey() }
+        case .brushTool? where plain, .eraserTool? where plain:
+            session?.selectTool(.brush)
+            session?.brushMode = command?.id == .eraserTool ? .erase : .paint
+        case .cycleShapeKind? where plain:
+            session?.selectTool(.shape)
+        case let id? where plain && tools[id] != nil:
+            session?.selectTool(tools[id]!)
+        case .opacityDigit? where plain && session?.usesOpacityKeys == true:
+            session?.typeOpacityDigit(Int(command?.argument ?? "") ?? 0)
         // With the Move tool the arrows move the layer, as on the canvas, rather than changing the row selection.
-        } else if plain, session?.transformEdit != nil || session?.tool == .move, [123, 124, 125, 126].contains(event.keyCode) {
-            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            session?.nudgeLayer(dx: event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0,
-                                dy: event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0)
-        } else if [51, 117].contains(event.keyCode), plain {
+        case .nudge? where plain && (session?.transformEdit != nil || session?.tool == .move):
+            if let step = CanvasView.step(command?.argument) { session?.nudgeLayer(dx: step.dx, dy: step.dy) }
+        case .canvasDelete? where plain:
             session?.deleteKeyPressed()
-        } else { super.keyDown(with: event) }
+        default: super.keyDown(with: event)
+        }
     }
 }
 

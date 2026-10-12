@@ -305,15 +305,15 @@ private struct OverflowMenuAnchor: NSViewRepresentable {
             actions = entries.map(\.action)
             let menu = NSMenu()
             for (index, entry) in entries.enumerated() {
-                let item = NSMenuItem(title: entry.title, action: #selector(choose(_:)), keyEquivalent: "")
-                item.target = self
+                let item = LensWorksCommandRegistry.menuItem(.selectProjectTab, argument: String(index), title: entry.title, target: self, action: #selector(choose(_:)))
                 item.tag = index
                 menu.addItem(item)
             }
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.maxY + 4 : -4), in: self)
         }
         @objc private func choose(_ item: NSMenuItem) {
-            if actions.indices.contains(item.tag) { actions[item.tag]() }
+            guard actions.indices.contains(item.tag) else { return }
+            LensWorksCommandDispatcher.perform(.init(.selectProjectTab, String(item.tag))) { actions[item.tag]() }
         }
     }
 }

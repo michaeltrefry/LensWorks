@@ -94,7 +94,7 @@ struct GridSettingsSheet: View {
                 .foregroundStyle(valid ? Color.secondary : Color.orange).font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.configuredNativeShortcut(.escape)
+                Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.registeredCommandShortcut(.cancel)
                 Button("Restore Defaults") {
                     spacing = LayoutGrid().spacing
                     subdivisions = LayoutGrid().subdivisions
@@ -110,7 +110,7 @@ struct GridSettingsSheet: View {
                     DialogColorSwatch.closePicker(session)
                     finish((grid, appearance))
                 }
-                .configuredNativeShortcut(.return)
+                .registeredCommandShortcut(.apply)
                 .buttonStyle(.borderedProminent)
                 .disabled(!valid)
             }

@@ -39,8 +39,8 @@ struct RawDevelopSheet: View {
             HStack {
                 Button("Reset") { settings.reset() }.disabled(settings.isAsShot)
                 Spacer()
-                Button("Cancel") { session.finishRawDevelop(nil) }.keyboardShortcut(.cancelAction)
-                Button("Import") { session.finishRawDevelop(settings) }.keyboardShortcut(.defaultAction)
+                Button("Cancel") { session.finishRawDevelop(nil) }.registeredCommandShortcut(.cancel, role: .cancelAction)
+                Button("Import") { session.finishRawDevelop(settings) }.registeredCommandShortcut(.apply, role: .defaultAction)
             }
         }
         .padding(24).fixedSize()

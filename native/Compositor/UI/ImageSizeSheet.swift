@@ -158,13 +158,13 @@ struct ImageSizeSheet: View {
             Text(valid ? "Result: \(Int(width.rounded())) × \(Int(height.rounded())) pixels" : "Use 1–\(DocumentLimits.maxSide.formatted()) pixels per side, up to \(DocumentLimits.maxSurfaceMegapixels) megapixels, and 1–9,600 pixels/inch.")
                 .foregroundStyle(valid ? Color.secondary : Color.orange).font(.callout)
             HStack {
-                Button("Cancel") { finish(nil) }.configuredNativeShortcut(.escape)
+                Button("Cancel") { finish(nil) }.registeredCommandShortcut(.cancel)
                 Spacer()
                 Button("Resize") {
                     guard valid else { return }
                     finish(ImageSizeOptions(width: Int(width.rounded()), height: Int(height.rounded()),
                         resolution: resolution, sampling: sampling))
-                }.configuredNativeShortcut(.return).disabled(!valid)
+                }.registeredCommandShortcut(.apply).disabled(!valid)
             }
         }.textFieldStyle(.roundedBorder).padding(24).frame(width: 430)
     }

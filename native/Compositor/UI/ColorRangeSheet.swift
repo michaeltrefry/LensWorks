@@ -38,10 +38,10 @@ struct ColorRangeSheet: View {
             }
             Divider()
             HStack {
-                Button("Cancel") { session.cancelColorRange() }.configuredNativeShortcut(.escape)
+                Button("Cancel") { session.cancelColorRange() }.registeredCommandShortcut(.cancel)
                 Spacer()
                 Button("OK") { session.commitColorRange() }
-                    .configuredNativeShortcut(.return).buttonStyle(.borderedProminent)
+                    .registeredCommandShortcut(.apply).buttonStyle(.borderedProminent)
             }
         }
         .padding(24).frame(width: 340).fixedSize()

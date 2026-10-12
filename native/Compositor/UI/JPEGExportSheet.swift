@@ -77,7 +77,7 @@ struct JPEGExportSheet: View {
                 else if readyOptions == options, let result {
                     Text(ByteCountFormatter.string(fromByteCount: Int64(result.file.byteCount), countStyle: .file)).monospacedDigit()
                 } else { Text("Updating…").foregroundStyle(.secondary) }
-                Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.configuredNativeShortcut(.escape)
+                Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.registeredCommandShortcut(.cancel)
                 Button("Export…") {
                     DialogColorSwatch.closePicker(session)
                     do {
@@ -86,7 +86,7 @@ struct JPEGExportSheet: View {
                         finish(result)
                     } catch { self.error=error.localizedDescription;self.result=nil;readyOptions=nil }
                 }
-                    .configuredNativeShortcut(.return)
+                    .registeredCommandShortcut(.apply)
                     .disabled(result == nil || readyOptions != options || error != nil)
             }
         }

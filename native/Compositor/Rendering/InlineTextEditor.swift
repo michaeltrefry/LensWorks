@@ -40,24 +40,29 @@ final class CanvasTextView: NSTextView {
     }
     override func keyDown(with event: NSEvent) {
         guard let event = ShortcutSettings.shared.textEvent(event) else { return }
-        if event.keyCode == 53 { editor?.canvas?.session.cancelText(); return }
+        // Registered text-editing commands; every other key is typing and goes to the text view.
+        let chord = ShortcutChord(event)
+        let cancels = LensWorksCommandRegistry.resolve(chord, in: [.canvas], effective: false)?.id == .cancel
+        let command = LensWorksCommandDispatcher.resolveKey(chord, in: cancels ? [.canvas] : [.text], effective: false)
+        switch command?.id {
+        case .cancel?: editor?.canvas?.session.cancelText(); return
         // Option with the arrows sets spacing, as in Photoshop: left and right the tracking, up and down the
         // leading. Shift makes each step ten.
-        if event.modifierFlags.contains(.option), [123, 124, 125, 126].contains(event.keyCode),
-           let session = editor?.canvas?.session {
-            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            switch event.keyCode {
-            case 123: session.changeTextStyle { $0.tracking -= step }
-            case 124: session.changeTextStyle { $0.tracking += step }
+        case .tracking?, .leading?:
+            guard let session = editor?.canvas?.session, let argument = command?.argument else { break }
+            let step: CGFloat = argument.hasSuffix(".10") ? 10 : 1
+            switch (command?.id, argument.hasPrefix("decrease")) {
+            case (.tracking?, true): session.changeTextStyle { $0.tracking -= step }
+            case (.tracking?, false): session.changeTextStyle { $0.tracking += step }
             // Up closes the lines up, down opens them out, counting from whatever Auto works out to.
-            case 126: session.changeTextStyle { $0.leading = max(1, $0.lineHeight - step) }
+            case (_, true): session.changeTextStyle { $0.leading = max(1, $0.lineHeight - step) }
             default: session.changeTextStyle { $0.leading = $0.lineHeight + step }
             }
             return
-        }
-        if (event.keyCode == 36 || event.keyCode == 76), event.modifierFlags.contains(.command) {
+        case .finishText?:
             _ = editor?.canvas?.session.finishText()
             return
+        default: break
         }
         holdsSelection = false
         super.keyDown(with: event)

@@ -76,8 +76,8 @@ struct CameraRawControls: View {
                 .padding(4)
             }
             .contextMenu {
-                Button("Histogram") { session.filterEdit?.cameraRawScopeMode = .histogram }
-                Button("Vectorscope") { session.filterEdit?.cameraRawScopeMode = .vectorscope }
+                LensWorksCommandButton(.cameraRawScope, argument: "histogram", title: "Histogram") { session.filterEdit?.cameraRawScopeMode = .histogram }
+                LensWorksCommandButton(.cameraRawScope, argument: "vectorscope", title: "Vectorscope") { session.filterEdit?.cameraRawScopeMode = .vectorscope }
             }
             .help(mode == .histogram
                   ? "Tones from black on the left to white on the right: blacks, shadows, midtones, highlights, whites. Control-click to show the vectorscope."

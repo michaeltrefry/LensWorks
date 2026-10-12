@@ -1,64 +1,4 @@
 import SwiftUI
-
-nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
-    case visibility = "layer.visibility"
-    case opacity = "layer.opacity"
-    case rename = "layer.rename"
-    case beginRename = "layer.rename.begin"
-    case firstVariants = "catalog.variants.first"
-    case moreVariants = "catalog.variants.more"
-    case selectVariant = "catalog.variant.select"
-    case copy = "catalog.recipe.copy"
-    case exposure = "catalog.recipe.exposure"
-    case undoRecipe = "catalog.recipe.undo"
-    case redoRecipe = "catalog.recipe.redo"
-    case rating = "catalog.rating"
-}
-nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
-    case document, nativeRecipe, nativeMetadata, none
-}
-nonisolated enum LensWorksCommandParameterType: String, Codable, Sendable {
-    case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating
-}
-nonisolated struct LensWorksCommandParameter: Codable, Sendable {
-    let name: String
-    let type: LensWorksCommandParameterType
-    let description: String
-}
-nonisolated struct LensWorksCommandShortcut: Codable, Sendable {
-    let key: String
-    let modifiers: Int
-    init(_ key: String, _ modifiers: Int) { self.key = key; self.modifiers = modifiers }
-}
-nonisolated struct LensWorksCommandDescriptor: Codable, Identifiable, Sendable {
-    let id: LensWorksCommandID
-    let label: String
-    let menu: String
-    let shortcut: LensWorksCommandShortcut?
-    let parameters: [LensWorksCommandParameter]
-    let undoable: Bool
-    let historyOwner: LensWorksCommandHistoryOwner
-}
-nonisolated enum LensWorksCommandRegistry {
-    static let descriptors: [LensWorksCommandDescriptor] = [
-        .init(id: .visibility, label: "Hide/Show Layer", menu: "Layer", shortcut: LensWorksCommandShortcut("h", 9), parameters: [.init(name: "layers", type: .uuidArray, description: "Exact layer identities in the admitted document; visibility toggles or an explicit Bool."), .init(name: "visible", type: .optionalBoolean, description: "Nil toggles each admitted layer; Bool sets explicit visibility.")], undoable: true, historyOwner: .document),
-        .init(id: .opacity, label: "Layer Opacity", menu: "Layer/Appearance", shortcut: nil, parameters: [.init(name: "layers", type: .uuidArray, description: "Exact layer UUIDs in the admitted document."), .init(name: "opacity", type: .unitInterval, description: "Finite value from 0 through 1 applied to the admitted layer identities.")], undoable: true, historyOwner: .document),
-        .init(id: .rename, label: "Rename Layer", menu: "Layer", shortcut: nil, parameters: [.init(name: "layer", type: .uuid, description: "Exact admitted layer UUID."), .init(name: "name", type: .layerName, description: "Nonempty trimmed name, at most 16,384 UTF-8 bytes, for one exact layer UUID.")], undoable: true, historyOwner: .document),
-        .init(id: .beginRename, label: "Rename Layer…", menu: "Layer", shortcut: nil, parameters: [.init(name: "layer", type: .uuid, description: "The exact layer to name in this admitted document.")], undoable: false, historyOwner: .none),
-        .init(id: .firstVariants, label: "First Catalog Copies", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch.") ], undoable: false, historyOwner: .none),
-        .init(id: .moreVariants, label: "More Catalog Copies", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch."), .init(name: "cursor", type: .cursor, description: "Exact continuing cursor from the admitted page.")], undoable: false, historyOwner: .none),
-        .init(id: .selectVariant, label: "Select Catalog Version", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch."), .init(name: "variant", type: .variant, description: "Full native VariantKey and revision from this admitted photo's variant page.")], undoable: false, historyOwner: .none),
-        .init(id: .copy, label: "Create Named Catalog Copy", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch."), .init(name: "label", type: .catalogCopyName, description: "Nonempty catalog version name, at most 1,024 UTF-8 bytes.")], undoable: false, historyOwner: .nativeRecipe),
-        .init(id: .exposure, label: "Apply Catalog Exposure", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch."), .init(name: "exposureEV", type: .exposure, description: "Finite native recipe exposure; full VariantKey, revision and recipe digest CAS are captured synchronously.")], undoable: true, historyOwner: .nativeRecipe),
-        .init(id: .undoRecipe, label: "Undo Catalog Recipe", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch.") ], undoable: false, historyOwner: .nativeRecipe),
-        .init(id: .redoRecipe, label: "Redo Catalog Recipe", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch.") ], undoable: false, historyOwner: .nativeRecipe),
-        .init(id: .rating, label: "Catalog Rating", menu: "Catalog/Recipe", shortcut: nil, parameters: [.init(name: "expected", type: .variant, description: "Required current full VariantKey, revision and recipe digest captured before dispatch."), .init(name: "rating", type: .rating, description: "0 (unrated) through 5; native metadata revision CAS owns publication.")], undoable: false, historyOwner: .nativeMetadata)
-    ]
-    static func menuLabel(_ label: String, reason: String?) -> String { label + (reason.map { " — " + $0 } ?? "") }
-    static func descriptor(_ id: LensWorksCommandID) -> LensWorksCommandDescriptor {
-        descriptors.first { $0.id == id }!
-    }
-}
 nonisolated enum LensWorksLayerCommand: Codable, Equatable, Sendable {
     case visibility([UUID], Bool?)
     case opacity([UUID], Double)
@@ -264,21 +204,31 @@ struct LensWorksLayerCommandButton: View {
     }
 }
 
-extension View {
-    @ViewBuilder func registeredCommandShortcut(_ id: LensWorksCommandID) -> some View {
-        if let definition = ShortcutDefinition.all.first(where: { $0.commandID == id }) {
-            let chord = ShortcutSettings.shared.chord(definition)
-            self.keyboardShortcut(KeyEquivalent(chord.key.first!), modifiers: chord.eventModifiers)
-        } else { self }
-    }
-}
-
 /// One UI-thread dispatch namespace; native catalog history remains native, and document edits commit the atomic project/history snapshot.
 @MainActor enum LensWorksCommandDispatcher {
     @discardableResult static func dispatch(_ admission: LensWorksLayerAdmission, in session: EditorSession) throws -> Bool {
-        try session.applyAdmittedCommand(admission)
+        lastInvocation = .init(admission.command.id)
+        return try session.applyAdmittedCommand(admission)
     }
     static func dispatch(_ admission: LensWorksCatalogCommandAdmission, in catalog: LensWorksCatalog) async throws {
+        lastInvocation = .init(admission.id)
         try await catalog.performCatalogControl(admission.native)
+    }
+    /// The last command a menu item, button or key press dispatched, for diagnostics and the command audit tests.
+    private(set) static var lastInvocation: LensWorksCommandInvocation?
+    /// The last dispatch refused because its command was unavailable, with the reason the item showed.
+    private(set) static var lastRefusal: (invocation: LensWorksCommandInvocation, reason: String)?
+    /// Every menu item, context-menu item and pull-down item runs its command through here.
+    @discardableResult static func perform(_ invocation: LensWorksCommandInvocation, reason: String? = nil, _ handler: () -> Void) -> Bool {
+        lastInvocation = invocation
+        if let reason { lastRefusal = (invocation, reason); return false }
+        handler()
+        return true
+    }
+    /// Every key handler resolves a press through the registry's bindings here before acting on it.
+    static func resolveKey(_ chord: ShortcutChord, in scopes: Set<LensWorksShortcutScope>, effective: Bool) -> LensWorksCommandInvocation? {
+        guard let invocation = LensWorksCommandRegistry.resolve(chord, in: scopes, effective: effective) else { return nil }
+        lastInvocation = invocation
+        return invocation
     }
 }

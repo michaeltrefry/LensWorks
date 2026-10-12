@@ -133,13 +133,13 @@ struct CanvasSizeSheet: View {
                 }
             }
             HStack {
-                Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.configuredNativeShortcut(.escape)
+                Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.registeredCommandShortcut(.cancel)
                 Spacer()
                 Button("OK") {
                     guard draft.valid else { return }
                     DialogColorSwatch.closePicker(session)
                     finish(CanvasSizeOptions(width: Int(draft.width.rounded()), height: Int(draft.height.rounded()), anchor: anchor, fill: fill))
-                }.configuredNativeShortcut(.return).disabled(!draft.valid)
+                }.registeredCommandShortcut(.apply).disabled(!draft.valid)
             }
         }.textFieldStyle(.roundedBorder).padding(24).frame(width: 450)
     }
