@@ -20,12 +20,18 @@ nonisolated struct HDRBracketFixture {
         let physical = try #require(realpath(FileManager.default.temporaryDirectory.path, nil)); defer { free(physical) }
         let root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWHDR-\(UUID())")
         let generated = root.appendingPathComponent("generated")
-        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)  // the generator creates `generated` itself
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", repository.appendingPathComponent("scripts/generate_s47_procedural_photos.py").path, "--output", generated.path, "--seed", String(seed)]
-        try process.run(); process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("S47 generator exited \(process.terminationStatus)") }
+        // The generator needs Python 3.10+ (the provisioned CI interpreter); macOS's /usr/bin/python3 is older.
+        let python = ProcessInfo.processInfo.environment["LW_PYTHON"]
+            ?? ["/opt/homebrew/opt/python@3.12/bin/python3.12", "/usr/local/bin/python3", "/usr/bin/python3"].first { FileManager.default.isExecutableFile(atPath: $0) }!
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = [repository.appendingPathComponent("scripts/generate_s47_procedural_photos.py").path, "--output", generated.path, "--seed", String(seed)]
+        let errors = Pipe(); process.standardError = errors
+        try process.run()
+        let diagnostics = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("S47 generator exited \(process.terminationStatus): \(diagnostics)") }
         struct Manifest: Decodable { let photos: [Record] }
         struct Record: Decodable { let kind: String; let path: String; let exposure_stops: Int?; let subject_bounds: [Int]?; let sha256: String }
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: generated.appendingPathComponent("fixture-manifest.json")))
@@ -72,12 +78,12 @@ struct HDRMergeTests {
         #expect(result.exposures[0] < 1 && result.exposures[2] > 1, "\(result.exposures)")
         #expect(result.maskedPixels[1] == 0 && result.maskedPixels[0] > 0 && result.maskedPixels[2] > 0)
 
-        // The reference subject's red channel is clipped in the +1 EV frame yet recovered in the merge.
-        let width = result.width, bounds = fixture.frames[1].subject_bounds
-        let center = (bounds[1] + bounds[3]) / 2 * width + (bounds[0] + bounds[2]) / 2
+        // The subject's red channel clips in the +1 EV frame; the merge keeps the reference subject unclipped.
+        let width = result.width
+        func center(_ frame: Int) -> Int { let b = fixture.frames[frame].subject_bounds; return (b[1] + b[3]) / 2 * width + (b[0] + b[2]) / 2 }
         let brightClip = LWHDRMerger.clipLevel(frames[2])
-        #expect(max(frames[2].pixels[center].x, frames[2].pixels[center].y, frames[2].pixels[center].z) >= brightClip)
-        #expect(abs(result.radiance[center].x - frames[1].pixels[center].x) / frames[1].pixels[center].x < 0.02)
+        #expect(frames[2].pixels[center(2)].x >= brightClip)
+        #expect(abs(result.radiance[center(1)].x - frames[1].pixels[center(1)].x) / frames[1].pixels[center(1)].x < 0.02)
         // Expected dynamic range: the merge holds the full reference range, records values above
         // what the brightest frame can (its clip, in its own exposure units), and is not 8-bit quantized.
         func span(_ values: [Float]) -> Float { log2(values.max()! / values.filter { $0 > 1e-6 }.min()!) }

@@ -227,36 +227,48 @@ nonisolated enum LWHDRMerger {
         return levels
     }
 
-    /// The translation of `frame` that best matches `referenceFrame`, searched coarse to fine.
+    /// Disagreement rate of the two bitmaps over their compared (non-excluded, overlapping)
+    /// pixels at shift (sx, sy), so a larger shift is not rewarded for comparing fewer pixels.
+    static func mismatch(_ m: Bitmaps, _ r: Bitmaps, _ sx: Int, _ sy: Int) -> Double {
+        var error = 0, compared = 0
+        for y in max(0, -sy)..<min(r.height, m.height - sy) {
+            for x in max(0, -sx)..<min(r.width, m.width - sx) {
+                let a = y * r.width + x, b = (y + sy) * m.width + x + sx
+                guard r.exclusion[a], m.exclusion[b] else { continue }
+                compared += 1
+                if r.threshold[a] != m.threshold[b] { error += 1 }
+            }
+        }
+        return compared == 0 ? .infinity : Double(error) / Double(compared)
+    }
+    /// The best shift within `radius` of (cx, cy); ties prefer the smaller shift.
+    static func search(_ m: Bitmaps, _ r: Bitmaps, around cx: Int, _ cy: Int, radius: Int) -> (rate: Double, x: Int, y: Int) {
+        var best = (rate: Double.infinity, x: cx, y: cy)
+        for oy in -radius...radius {
+            for ox in -radius...radius {
+                let sx = cx + ox, sy = cy + oy
+                guard abs(sx) < m.width, abs(sy) < m.height else { continue }
+                let rate = mismatch(m, r, sx, sy)
+                if rate < best.rate - 1e-12 || (abs(rate - best.rate) <= 1e-12 && abs(sx) + abs(sy) < abs(best.x) + abs(best.y)) { best = (rate, sx, sy) }
+            }
+        }
+        return best
+    }
+
+    /// The translation of `frame` that best matches `referenceFrame`: a coarse-to-fine
+    /// pyramid search (large handheld shifts), checked against a full-resolution search
+    /// near zero (fine texture that averaging removes from coarse levels); the lower
+    /// full-resolution disagreement wins.
     static func align(_ frame: LWHDRFrame, clip: Float, to referenceFrame: LWHDRFrame, referenceClip: Float) -> LWHDROffset {
         let levels = pyramidLevels(width: frame.width, height: frame.height)
         let moving = Bitmaps.pyramid(frame, clip: clip, levels: levels)
         let reference = Bitmaps.pyramid(referenceFrame, clip: referenceClip, levels: levels)
-        var dx = 0, dy = 0
+        var dx = 0, dy = 0, rate = Double.infinity
         for level in stride(from: levels, through: 0, by: -1) {
-            dx *= 2; dy *= 2
-            let m = moving[level], r = reference[level]
-            var best = (error: Int.max, x: dx, y: dy)
-            for oy in -1...1 {
-                for ox in -1...1 {
-                    let sx = dx + ox, sy = dy + oy
-                    var error = 0
-                    for y in 0..<r.height {
-                        let my = y + sy
-                        guard my >= 0, my < m.height else { continue }
-                        for x in 0..<r.width {
-                            let mx = x + sx
-                            guard mx >= 0, mx < m.width else { continue }
-                            let a = y * r.width + x, b = my * m.width + mx
-                            if r.exclusion[a], m.exclusion[b], r.threshold[a] != m.threshold[b] { error += 1 }
-                        }
-                    }
-                    // Prefer the smaller shift on ties so a static scene stays at zero.
-                    if error < best.error || (error == best.error && abs(sx) + abs(sy) < abs(best.x) + abs(best.y)) { best = (error, sx, sy) }
-                }
-            }
-            dx = best.x; dy = best.y
+            (rate, dx, dy) = search(moving[level], reference[level], around: dx * 2, dy * 2, radius: level == levels ? 1 : 2)
         }
+        let near = search(moving[0], reference[0], around: 0, 0, radius: 2)
+        if near.rate < rate - 1e-12 || (abs(near.rate - rate) <= 1e-12 && abs(near.x) + abs(near.y) < abs(dx) + abs(dy)) { (dx, dy) = (near.x, near.y) }
         return LWHDROffset(x: dx, y: dy)
     }
 
