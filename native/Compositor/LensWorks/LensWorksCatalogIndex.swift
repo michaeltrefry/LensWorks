@@ -32,8 +32,19 @@ nonisolated struct LensWorksDictionaryRecord: Sendable {
     let inverse: Data
 }
 
+/// One source photo of a derived catalog photo (a Merge to HDR… result).
+nonisolated struct LensWorksDerivedSource: Sendable, Equatable {
+    let imageID: String
+    let assetID: String
+    let variantID: String
+    /// The source's file name when the link was recorded, for display.
+    let filename: String
+    var row: LensWorksSelectedRow { LensWorksSelectedRow(imageID: imageID, key: LWCatalogEditsVariantKey(asset_id: assetID, variant_id: variantID)) }
+}
+
 /// Rebuildable LensWorks metadata only. Native package records remain the version authority.
 /// Selection is disk-backed TEMP storage; neither browse nor save materializes the global registry.
+/// Derived-photo source links persist here per catalog; a merged DNG's own XMP carries the same record.
 actor LensWorksCatalogIndex {
     static let shared = LensWorksCatalogIndex()
     /// Where the shared index lives: in LensWorks's Application Support folder (a throwaway one under XCTest).
@@ -118,7 +129,7 @@ actor LensWorksCatalogIndex {
         do {
             sqlite3_busy_timeout(pointer, 3000)
             sqlite3_progress_handler(pointer, 1000, { _ in Task.isCancelled ? 1 : 0 }, nil)
-            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TABLE IF NOT EXISTS recipe_origins(catalog TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,revision INTEGER NOT NULL,digest TEXT NOT NULL,undo TEXT NOT NULL,redo TEXT NOT NULL,PRIMARY KEY(catalog,asset,variant)); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE organization_history(step INTEGER NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,image)); CREATE TEMP TABLE organization_dictionary(step INTEGER NOT NULL,phase INTEGER NOT NULL,ordinal INTEGER NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,phase,ordinal)); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
+            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TABLE IF NOT EXISTS derived_sources(catalog TEXT NOT NULL,image TEXT NOT NULL,position INTEGER NOT NULL,source_image TEXT NOT NULL,source_asset TEXT NOT NULL,source_variant TEXT NOT NULL,source_name TEXT NOT NULL,PRIMARY KEY(catalog,image,position)); CREATE TABLE IF NOT EXISTS recipe_origins(catalog TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,revision INTEGER NOT NULL,digest TEXT NOT NULL,undo TEXT NOT NULL,redo TEXT NOT NULL,PRIMARY KEY(catalog,asset,variant)); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE organization_history(step INTEGER NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,image)); CREATE TEMP TABLE organization_dictionary(step INTEGER NOT NULL,phase INTEGER NOT NULL,ordinal INTEGER NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,phase,ordinal)); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
         } catch { sqlite3_close_v2(pointer); database = nil; throw error }
     }
     private func execute(_ sql: String) throws {
@@ -308,6 +319,34 @@ actor LensWorksCatalogIndex {
             guard try ownedCount("selection", owner: owner) <= Self.maximumLogicalRows else { throw LensWorksManagedError.resourceLimit("Logical-row authority exceeds ten million.") }
             try execute("COMMIT")
         } catch { try? execute("ROLLBACK"); throw error }
+    }
+    static func catalogKey(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path }
+    /// Records, replacing any earlier record, the ordered source photos a catalog photo was derived from.
+    func recordSources(catalog: String, image: String, sources: [LensWorksDerivedSource]) throws {
+        guard !image.isEmpty, !sources.isEmpty, sources.count <= 100, sources.allSatisfy({ !$0.filename.utf8.contains(0) && $0.filename.utf8.count <= 1024 }) else { throw LensWorksManagedError.resourceLimit("Derived-photo source allowance.") }
+        try validate(sources.map(\.row))
+        let key = Self.catalogKey(catalog)
+        try open(); try execute("BEGIN IMMEDIATE")
+        do {
+            try statement("DELETE FROM derived_sources WHERE catalog=? AND image=?", strings: [key, image]) { guard sqlite3_step($0) == SQLITE_DONE else { throw failure() } }
+            for (position, source) in sources.enumerated() {
+                try statement("INSERT INTO derived_sources(catalog,image,position,source_image,source_asset,source_variant,source_name) VALUES(?,?,CAST(? AS INTEGER),?,?,?,?)",
+                    strings: [key, image, String(position), source.imageID, source.assetID, source.variantID, source.filename]) { guard sqlite3_step($0) == SQLITE_DONE else { throw failure() } }
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    /// The recorded source photos of a catalog photo, in merge order; empty when it has none.
+    func sources(catalog: String, image: String) throws -> [LensWorksDerivedSource] {
+        try statement("SELECT source_image,source_asset,source_variant,source_name FROM derived_sources WHERE catalog=? AND image=? ORDER BY position", strings: [Self.catalogKey(catalog), image]) { prepared in
+            var rows: [LensWorksDerivedSource] = []
+            while true {
+                let step = sqlite3_step(prepared)
+                if step == SQLITE_DONE { return rows }
+                guard step == SQLITE_ROW else { throw failure() }
+                rows.append(LensWorksDerivedSource(imageID: text(prepared, 0), assetID: text(prepared, 1), variantID: text(prepared, 2), filename: text(prepared, 3)))
+            }
+        }
     }
     func clearSelection(owner: String) throws {
         rangeLeases[owner] = nil; rangeQueries[owner] = nil

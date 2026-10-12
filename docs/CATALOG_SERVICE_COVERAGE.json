@@ -4,7 +4,7 @@
   "baseline": {
     "revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
     "source": "engines/catalog",
-    "source_digest": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5"
+    "source_digest": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3"
   },
   "root_type_ids": [
     "application::dto::Request",
@@ -34348,7 +34348,7 @@
   "source_files": [
     {
       "file": "engines/catalog/src/application.rs",
-      "sha256": "aebc2c88485dafe6227a0601ca0b663df605cff5f7a804548a06d37dcd311a69"
+      "sha256": "3b55ae78107a56a13fde9b8926dceb8f8fb0fdaf89aab2658d31e3dab4d06fec"
     },
     {
       "file": "engines/catalog/src/application/backup.rs",
@@ -69742,7 +69742,7 @@
         "Use a foreign catalog token: Reply::Error StaleSession.",
         "Use page limit 0: InvalidRequest; request bytes over configured cap: ResourceLimit."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69813,7 +69813,7 @@
         "Reject stale token/generation/review digest and wrong epoch; no overwrite from a stale review.",
         "Interrupted publication retains recovery evidence instead of reporting successful rollback."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69842,7 +69842,7 @@
         "Stale image revision rejects the edit without changing rating/member rows.",
         "Collection placement cycle and deleting an in-use keyword fail; current rows remain unchanged."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69943,7 +69943,7 @@
         "Changed candidate bytes or stale plan revision prevents Apply.",
         "Ambiguous candidates remain unresolved until explicit review; cancellation preserves the previous mapping."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70008,7 +70008,7 @@
         "Mutate target recipe after Append; Run reports conflict and preserves newer target.",
         "Active cancellation requires the matching operation id; no overwrite of newer edits."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70067,7 +70067,7 @@
         "Overlapping original/cache roots reject admission.",
         "Stale original-root review token or changed storage epoch cannot validate another mapping; StepRelocation selects exact tier."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70138,7 +70138,7 @@
         "Wrong offset, byte total, digest, role, operation or Guard fails before migration authority is admitted.",
         "Cancel with uncertain drain reports DrainPending; no false successful close/discard."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70563,7 +70563,7 @@
         "Stale workbench/generation/evidence or wrong input offset rejects the action.",
         "Open read-only never writes source SQLite; Cancel/Close drains before releasing authority."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70670,7 +70670,7 @@
         "Stale plan authority/source fingerprint or changed destination blocks publication.",
         "Existing output is preserved when overwrite=false; truncated staged output is recoverable and is never reported complete."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71005,7 +71005,7 @@
         "Open missing path fails without creating it.",
         "Wrong catalog token returns StaleSession; request after shutdown reports Closed."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71232,7 +71232,7 @@
         "Relative source path is InvalidRequest.",
         "Overlapping import is Busy; wrong import id cannot cancel another operation."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71399,7 +71399,7 @@
         "Wrong restore_id fails; refusal to acknowledge pending jobs leaves jobs held.",
         "Existing restore destination or altered bundle digest fails without replacing existing catalog."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71518,7 +71518,7 @@
         "Search rating6 or limit0 is InvalidRequest.",
         "Stale edit/metadata revision cannot overwrite a newer recipe or cull."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71685,7 +71685,7 @@
         "Expired/unknown ticket gives StaleSession.",
         "Canceled or superseded viewport request cannot deliver current-generation authority."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71879,7 +71879,7 @@
       "faults": [
         "Invalid VariantKey fails; mixed source/image key is rejected."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -72014,7 +72014,7 @@
         "Wrong fingerprint or decoded allocation limit fails before admission.",
         "Cancellation/stale source blocks publication."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -72148,7 +72148,7 @@
       "faults": [
         "Unknown enum discriminator/denied unknown field and noncanonical decimal forms fail."
       ],
-      "source_revision": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": []
     }

@@ -833,7 +833,16 @@ final class LensWorksCatalog {
     private(set) var pageComplete = true
     private(set) var scanned: UInt32 = 0
     private(set) var catalogToken: String?
-    private(set) var catalogEpoch: UInt64 = 0
+    /// A catalog scope ending (connect, close) cancels a running Merge to HDR….
+    private(set) var catalogEpoch: UInt64 = 0 { didSet { hdrMerge?.cancel() } }
+    /// The running Merge to HDR…; its Cancel command and the end of the catalog scope cancel it.
+    var hdrMerge: Task<LensWorksHDRMergeOutcome, Error>?
+    /// True once the merged DNG is being added to the catalog, when the merge can no longer be cancelled.
+    var hdrMergeAdmitting = false
+    #if DEBUG
+    /// Opt-in test observation of a merge after its DNG is in place and before the catalog import.
+    @ObservationIgnored var hdrMergeWrittenFixture: ((URL) async throws -> Void)?
+    #endif
     private(set) var catalogVariant: LWApplicationDtoVariant?
     private(set) var catalogVariants: [LWApplicationDtoVariant] = []
     private(set) var catalogVariantsNext: LWCatalogI64?
@@ -1091,7 +1100,9 @@ final class LensWorksCatalog {
     }
 
     private var checkpointKey: String? { catalogPath.map { "LensWorks.importSource." + $0 } }
-    func startImport(_ path: String? = nil, resume: Bool = false) async throws {
+    /// `path` is a folder, walked recursively, or one regular file, imported alone (its folder is
+    /// not walked). `remember: false` leaves the folder-import resume source as it was.
+    func startImport(_ path: String? = nil, resume: Bool = false, remember: Bool = true) async throws {
         try admitCatalogWork()
         guard catalogPath != nil, !isImporting, !isBusy else { throw LensWorksCatalogError.message("Wait for the current catalog action to retire before starting another import.") }
         let busy = beginBusy(); defer { finishBusy(busy) }
@@ -1110,7 +1121,7 @@ final class LensWorksCatalog {
         }
         guard !closingRequested, catalogEpoch == epoch, catalogPath == path, catalogToken == token else { throw CancellationError() }
         guard started.id != previous else { throw LensWorksManagedError.protocolViolation("An import restart reused its previous attempt identity.") }
-        if let key = checkpoint { defaults.set(try LWCatalogCodec.encode(source), forKey: key) }
+        if remember, let key = checkpoint { defaults.set(try LWCatalogCodec.encode(source), forKey: key) }
         importProgress = started; importSamples = [started]
         importMonitor?.cancel()
         let id = started.id
@@ -1207,6 +1218,73 @@ final class LensWorksCatalog {
             }
             try await Task.sleep(for: .milliseconds(50))
         }
+    }
+    /// Imports exactly one file through the engine's single-file import route and selects its
+    /// catalog photo. Nothing else in the file's folder is imported, the folder-import resume
+    /// source is not replaced, and the browse scope, filters and search text are left alone.
+    func importOriginal(_ url: URL) async throws -> LensWorksCatalogAsset {
+        let scope = captureScope()
+        try await startImport(url.path, remember: false)
+        try checkScope(scope)
+        // A large original's previews can outlast one 60-second observation window.
+        var windows = 1
+        while true {
+            do { try await waitImport(terminal: true); break }
+            catch LensWorksCatalogError.importObservationTimeout where windows < 10 { windows += 1; try checkScope(scope) }
+        }
+        try checkScope(scope)
+        guard let row = try await recentCatalogRow(original: url) else {
+            throw LensWorksCatalogError.message("“\(url.lastPathComponent)” was written but the catalog did not add it" + (importProgress?.error.map { ": " + $0 } ?? "."))
+        }
+        try checkScope(scope)
+        if let shown = assets.first(where: { $0.id == row.image_id }) { await select(shown) }
+        else { try await selectCreatedCatalogFocus(row, scope: scope, query: queryOwner) }
+        try checkScope(scope)
+        guard let asset = selectedAsset, asset.id == row.image_id else { throw CancellationError() }
+        return asset
+    }
+    /// The catalog photo whose original is the file at `url`, searched newest first without
+    /// touching the browse state. A photo is identified by its original's location, never by its
+    /// file name alone: the same name can exist in another cataloged folder.
+    func recentCatalogRow(original url: URL) async throws -> LWApplicationDtoGridImage? {
+        try admitCatalogWork()
+        let scope = captureScope(), name = url.lastPathComponent
+        let target = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let options = LWApplicationBrowseOptions(text: nil, keyword: nil, keyword_direct: false, folder: nil, folder_recursive: true, collection: nil, date_from: nil, date_until: nil, camera_make: nil, camera: nil, lens: nil, format: nil, rating: nil, flag: nil, label: nil, only_conflicted: false, sort: .Sequence, direction: .Descending)
+        var cursor: String?
+        for _ in 0..<64 {
+            let page = try await service.browse(options: options, cursor: cursor)
+            try checkScope(scope)
+            for row in page.rows where URL(fileURLWithPath: row.filename).lastPathComponent == name {
+                let location = try await service.originalLocation(row.key).localFileURL()
+                try checkScope(scope)
+                if location.resolvingSymlinksInPath().standardizedFileURL.path == target { return row }
+            }
+            guard page.hasMore, let next = page.next, next != cursor else { return nil }
+            cursor = next
+        }
+        return nil
+    }
+    /// The source photos a merged HDR photo is linked to in this catalog; empty for any other photo.
+    func hdrMergeSources(of asset: LensWorksCatalogAsset) async throws -> [LensWorksDerivedSource] {
+        guard let catalogPath else { return [] }
+        return try await index.sources(catalog: catalogPath, image: asset.id)
+    }
+    /// Follows a merged HDR photo's link: its source photos become the catalog selection.
+    func selectHDRMergeSources(of asset: LensWorksCatalogAsset) async throws {
+        try admitCatalogWork()
+        let scope = captureScope(), owner = selectionOwner, query = queryOwner, generation = previewGeneration
+        let sources = try await hdrMergeSources(of: asset)
+        try checkScope(scope)
+        guard !sources.isEmpty else { throw LensWorksCatalogError.message("“\(asset.filename)” has no recorded HDR merge sources in this catalog.") }
+        catalogSelectionEpoch &+= 1
+        try await index.setSelection(owner: owner, rows: sources.map(\.row), replace: true)
+        try checkScope(scope)
+        guard owner == selectionOwner, query == queryOwner, generation == previewGeneration else { throw CancellationError() }
+        selectionAnchor = nil
+        if let shown = assets.first(where: { row in sources.contains { $0.imageID == row.id } }) { selectedPhotoID = shown.id }
+        try await refreshSelectionProjection(owner: owner, query: query, scope: scope, generation: generation)
+        status = "Selected the \(sources.count) source photos of \(asset.filename)."
     }
     func cancelImport() async throws {
         try admitCatalogWork()
