@@ -31,6 +31,20 @@ private nonisolated func resolveSanaSprintQ4(timeout: TimeInterval = 20) -> Resu
     return .success(url)
 }
 
+/// Whether this process can read a file under `dir` within the deadline. A model volume that
+/// macOS privacy consent withholds from the (ad-hoc signed, rebuilt) test host blocks `open`
+/// instead of failing, so the probe runs off the test thread.
+private nonisolated func canRead(_ file: URL, timeout: TimeInterval = 30) -> Bool {
+    final class Box: @unchecked Sendable { var ok = false }
+    let box = Box()
+    let done = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .userInitiated).async {
+        box.ok = (try? FileHandle(forReadingFrom: file).read(upToCount: 8))?.count == 8
+        done.signal()
+    }
+    return done.wait(timeout: .now() + timeout) == .success && box.ok
+}
+
 private nonisolated let runRealWeights = hasLibrary && ProcessInfo.processInfo.environment["LW_INFERENCE_REAL_WEIGHTS"] == "1"
 
 /// Pixel, alpha and colour-space conversion at the Swift side of the boundary (no adapter needed).
@@ -192,6 +206,11 @@ nonisolated struct LensWorksInferenceRealWeightTests {
     @Test func realImageJobProgressOutputCancelAndFailure() async throws {
         let runtime = try LWInferenceRuntime.installed()
         let weights = try resolveSanaSprintQ4().get()
+        let probe = weights.appendingPathComponent("vae/diffusion_pytorch_model.safetensors")
+        guard canRead(probe) else {
+            throw LWInferenceError.libraryUnavailable(
+                "The test host cannot read \(probe.path) (blocked or missing). If the model cache is on another volume, grant the LensWorks development build access to it in Privacy & Security.")
+        }
         func request(_ prompt: String, steps: Int) -> LWInferenceRequest {
             .generate(provider: "sana_sprint_1600m", weights: .dir(weights), load: .init(residency: .keepLoaded),
                       LWGenerateParams(prompt: prompt, width: 512, height: 512, seed: 7, steps: steps))

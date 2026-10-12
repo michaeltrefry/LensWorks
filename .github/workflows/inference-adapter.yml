@@ -28,14 +28,16 @@ jobs:
         run: CARGO_TARGET_DIR="$LW_INFERENCE_TARGET_DIR" cargo test --manifest-path adapters/inference/Cargo.toml --locked
       - name: Locate local SceneWorks model files
         # Real-weight runs reuse the SceneWorks Hugging Face cache on this runner; nothing is downloaded.
+        # The cache may live on another volume that macOS privacy consent keeps from the runner
+        # service; a read there blocks instead of failing, so the probe has a deadline.
         run: |
           hub="$HOME/.cache/huggingface/hub"
-          sana=$(ls -d "$hub"/models--SceneWorks--Sana_Sprint_1.6B_1024px_mlx/snapshots/*/q4 2>/dev/null | head -1 || true)
+          sana=$(perl -e 'alarm shift; exec @ARGV' 30 /bin/bash -c 'ls -d "$1"/models--SceneWorks--Sana_Sprint_1.6B_1024px_mlx/snapshots/*/q4 2>/dev/null | head -1' _ "$hub") || sana=""
           if [[ -n "$sana" ]]; then
             echo "LW_INFERENCE_REAL=1" >> "$GITHUB_ENV"
             echo "LW_INFERENCE_SANA_SPRINT_DIR=$sana" >> "$GITHUB_ENV"
           else
-            echo "::notice::Sana Sprint q4 weights are not on this runner; real-weight tests are skipped."
+            echo "::warning::Sana Sprint q4 weights are not readable by this runner (missing, or the model volume needs macOS access for the runner service); real-weight tests are skipped."
           fi
       - name: Real-weight adapter tests (serial)
         if: env.LW_INFERENCE_REAL == '1'
@@ -54,18 +56,9 @@ jobs:
             -configuration Debug -derivedDataPath .build/xcode-inference CODE_SIGN_IDENTITY=-
       - name: Swift inference boundary tests
         timeout-minutes: 30
-        run: |
-          export TEST_RUNNER_LW_INFERENCE_LIBRARY="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/liblensworks_inference.dylib"
-          if [[ "${LW_INFERENCE_REAL:-}" == 1 ]]; then
-            export TEST_RUNNER_LW_INFERENCE_REAL_WEIGHTS=1 TEST_RUNNER_LW_INFERENCE_SANA_SPRINT_DIR="$LW_INFERENCE_SANA_SPRINT_DIR"
-          else
-            export XCODEBUILD_TEST_ALLOW_SKIPPED=CompositorTests/LensWorksInferenceRealWeightTests
-          fi
-          ./scripts/ci/xcodebuild_test.sh InferenceTests.xcresult -project native/Compositor.xcodeproj -scheme Compositor \
-            -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-inference -parallel-testing-enabled NO \
-            -only-testing:CompositorTests/LensWorksInferenceBufferTests \
-            -only-testing:CompositorTests/LensWorksInferenceRuntimeTests \
-            -only-testing:CompositorTests/LensWorksInferenceRealWeightTests
+        # Resolves the weights outside the test host (see the script) and reports the
+        # real-weight suite as skipped when they are not readable from this runner.
+        run: ./scripts/run-inference-swift-tests.sh InferenceTests.xcresult
       - name: Upload Swift inference test evidence
         if: always()
         uses: actions/upload-artifact@v4
