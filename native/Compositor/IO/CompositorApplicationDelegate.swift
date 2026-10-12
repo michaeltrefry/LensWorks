@@ -11,8 +11,10 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     var projects: ProjectController { workspace.current.controller }
     var showEditor: (() -> Void)?
     let catalog = LensWorksCatalog(defaults: CompositorApplicationDelegate.catalogDefaults())
-    /// Settings › Automation (MCP). Agents act on the current project tab and the open catalog.
-    lazy var automation = LensWorksAutomation(session: { [unowned self] in self.session }, catalog: { [unowned self] in self.catalog })
+    /// Settings › Automation (MCP). Agents act on the current project tab and the open catalog. The setting lives
+    /// with the catalog preferences, so a launch given `--lensworks-defaults-suite` never serves the person's socket.
+    lazy var automation = LensWorksAutomation(defaults: CompositorApplicationDelegate.catalogDefaults(),
+                                              session: { [unowned self] in self.session }, catalog: { [unowned self] in self.catalog })
     /// Automation (for example a CI fixture import) can keep catalog preferences out of the
     /// app's own domain with `--lensworks-defaults-suite <name>`.
     static func catalogDefaults(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> UserDefaults {

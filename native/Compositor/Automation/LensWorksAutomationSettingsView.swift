@@ -62,7 +62,8 @@ struct LensWorksAgentConfirmationSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(confirmation.title, systemImage: "exclamationmark.triangle").font(.headline)
-            Text(confirmation.message)
+                .accessibilityIdentifier("LensWorks.automation.confirmation.title")
+            Text(confirmation.message).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
                 LensWorksCommandButton(.automationDecline) { automation.resolveConfirmation(false) }
@@ -73,6 +74,5 @@ struct LensWorksAgentConfirmationSheet: View {
             }
         }
         .padding(20).frame(width: 440)
-        .interactiveDismissDisabled()
     }
 }

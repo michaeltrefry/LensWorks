@@ -8,6 +8,7 @@
 use serde_json::{Value, json};
 use std::ffi::{CStr, c_char, c_int};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,6 +16,8 @@ use std::time::Duration;
 pub const SUPPORTED_PROTOCOLS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 /// The largest app reply accepted (a bounded preview PNG in base64 fits well inside).
 pub const REPLY_LIMIT: u64 = 64 << 20;
+/// The largest request forwarded to the app, which closes a connection that sends a longer line.
+pub const REQUEST_LIMIT: usize = 1 << 20;
 /// A tool call may wait on the person confirming a permanent delete in the app (the app times out at 120 s).
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -23,8 +26,11 @@ pub const REFUSED: i64 = -32001;
 
 unsafe extern "C" {
     fn confstr(name: c_int, buf: *mut c_char, len: usize) -> usize;
+    fn recv(socket: c_int, buffer: *mut u8, length: usize, flags: c_int) -> isize;
 }
 const CS_DARWIN_USER_TEMP_DIR: c_int = 65537;
+const MSG_PEEK: c_int = 0x2;
+const MSG_DONTWAIT: c_int = 0x80;
 
 /// The app's default socket: `<per-user temp dir>/net.trefry.lensworks.automation/automation.sock`.
 pub fn default_socket_path() -> PathBuf {
@@ -48,6 +54,26 @@ struct Link {
     writer: UnixStream,
     reader: BufReader<UnixStream>,
     next_id: u64,
+}
+
+impl Link {
+    /// Whether the app already closed this connection (it quit, automation was turned off, or the secret changed).
+    /// Checked before a request is sent, so a request is never sent twice.
+    fn is_closed(&self) -> bool {
+        let mut byte = 0u8;
+        // SAFETY: the descriptor is open for the life of `writer` and the buffer is one writable byte.
+        let count = unsafe {
+            recv(
+                self.writer.as_raw_fd(),
+                &mut byte,
+                1,
+                MSG_PEEK | MSG_DONTWAIT,
+            )
+        };
+        // 0 is end of stream; an error other than "nothing to read yet" is a dead socket. Bytes waiting with no
+        // request outstanding are a protocol violation, so that connection is dropped too.
+        count >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock
+    }
 }
 
 pub struct Bridge {
@@ -131,18 +157,14 @@ impl Bridge {
         })
     }
 
-    /// Sends one request to the app, connecting (and reconnecting once after a dropped connection) as needed.
+    /// Sends one request to the app, connecting first when there is no live connection. A request is sent at most
+    /// once: when the connection fails after it was sent, the failure is reported rather than the request repeated,
+    /// because the app may already have run it.
     pub fn forward(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
-        let reused = self.link.is_some();
-        match self.exchange(method, &params) {
-            Err(failure)
-                if reused && failure.code == REFUSED && failure.message.contains("connection") =>
-            {
-                self.link = None;
-                self.exchange(method, &params)
-            }
-            other => other,
+        if self.link.as_ref().is_some_and(Link::is_closed) {
+            self.link = None;
         }
+        self.exchange(method, &params)
     }
 
     fn exchange(&mut self, method: &str, params: &Value) -> Result<Value, Failure> {
@@ -153,12 +175,21 @@ impl Bridge {
         link.next_id += 1;
         let id = link.next_id;
         let request = json!({"id": id, "method": method, "params": params}).to_string() + "\n";
+        if request.len() > REQUEST_LIMIT {
+            return Err(Failure {
+                code: -32600,
+                message: format!(
+                    "The request is {} bytes; LensWorks accepts at most {REQUEST_LIMIT}.",
+                    request.len()
+                ),
+            });
+        }
         let reply = link
             .writer
             .write_all(request.as_bytes())
             .map_err(|error| {
                 refused(format!(
-                    "LensWorks closed the automation connection: {error}"
+                    "LensWorks closed the automation connection before answering ({error}); check get_state before repeating the request."
                 ))
             })
             .and_then(|()| read_line(&mut link.reader));
@@ -243,7 +274,9 @@ fn read_line(reader: &mut BufReader<UnixStream>) -> Result<Value, Failure> {
         .read_line(&mut line)
         .map_err(|error| refused(format!("The automation connection failed: {error}")))?;
     if count == 0 || !line.ends_with('\n') {
-        return Err(refused("LensWorks closed the automation connection."));
+        return Err(refused(
+            "LensWorks closed the automation connection before answering; check get_state before repeating the request.",
+        ));
     }
     serde_json::from_str(&line)
         .map_err(|error| refused(format!("LensWorks sent malformed JSON: {error}")))
@@ -438,6 +471,104 @@ mod tests {
                 .unwrap()
                 .contains("automation is off")
         );
+    }
+
+    /// A stand-in app that counts the requests it receives and closes each connection after `answers` replies
+    /// (0: it reads the request and closes without answering).
+    fn closing_app(
+        answers: usize,
+    ) -> (
+        tempdir::Dir,
+        PathBuf,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempdir::Dir::new();
+        let path = dir.0.join("s.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let received = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = received.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut writer = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                writeln!(writer, "{}", json!({"type": "welcome"})).unwrap();
+                for answered in 0.. {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let count = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    if answered >= answers {
+                        break;
+                    }
+                    writeln!(
+                        writer,
+                        "{}",
+                        json!({"id": request["id"], "result": {"count": count}})
+                    )
+                    .unwrap();
+                    if answered + 1 == answers {
+                        break;
+                    }
+                }
+            }
+        });
+        (dir, path, received)
+    }
+
+    #[test]
+    fn a_closed_connection_is_replaced_before_the_next_request_is_sent() {
+        let (_dir, path, received) = closing_app(1);
+        let mut bridge = Bridge::new(Some("s".into()), path);
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "invoke_command"}});
+        assert_eq!(call_reply(&mut bridge, &call)["result"]["count"], 1);
+        // The app closed that connection after answering; the next request goes out once, on a new one.
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(call_reply(&mut bridge, &call)["result"]["count"], 2);
+        assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_request_the_app_never_answered_is_reported_and_never_sent_twice() {
+        let (_dir, path, received) = closing_app(0);
+        let mut bridge = Bridge::new(Some("s".into()), path);
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "invoke_command"}});
+        let reply = call_reply(&mut bridge, &call);
+        assert_eq!(reply["error"]["code"], REFUSED);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("before answering")
+        );
+        assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_oversized_request_is_refused_without_being_sent() {
+        let (_dir, path, received) = closing_app(1);
+        let mut bridge = Bridge::new(Some("s".into()), path);
+        let reply = call_reply(
+            &mut bridge,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "x", "arguments": {"pad": "a".repeat(REQUEST_LIMIT)}}}),
+        );
+        assert_eq!(reply["error"]["code"], -32600);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("at most 1048576")
+        );
+        assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    fn call_reply(bridge: &mut Bridge, message: &Value) -> Value {
+        serde_json::from_str(&bridge.handle(&message.to_string()).unwrap()).unwrap()
     }
 
     #[test]

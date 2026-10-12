@@ -92,6 +92,16 @@ extension EditorSession {
         }
         return .init(command: command, document: document, selection: activeLayerID, selected: selectedLayerIDs, revision: history.currentRevision, epoch: commandContextEpoch, interactionToken: commandInteraction?.token, origin: origin)
     }
+    /// Why an agent cannot step document history now, or nil when it can. An agent never steps history under a
+    /// person's open edit (a layer interaction, a name editor, a pending gradient or any modal edit).
+    func agentHistoryAvailability(redo: Bool) -> String? {
+        guard document != nil else { return "Open a document first." }
+        if isProjectBusy || isImporting { return "Finish the current project operation first." }
+        if commandInteraction != nil || renamingLayerID != nil { return "Finish the current layer interaction first." }
+        if gradientEdit != nil || !canUseHistory { return "Finish the current edit in LensWorks first." }
+        if redo { return canRedo ? nil : "There is nothing to redo." }
+        return canUndo ? nil : "There is nothing to undo."
+    }
     func commandIsCurrent(_ admission: LensWorksLayerAdmission) -> Bool {
         document == admission.document && activeLayerID == admission.selection && selectedLayerIDs == admission.selected && history.currentRevision == admission.revision && commandContextEpoch == admission.epoch && commandInteraction?.token == admission.interactionToken
     }
@@ -249,6 +259,15 @@ struct LensWorksLayerCommandButton: View {
     static func dispatch(_ admission: LensWorksCatalogDeleteAdmission, in catalog: LensWorksCatalog) async throws {
         lastInvocation = .init(admission.id, admission.folder.id); lastOrigin = admission.origin
         try await catalog.deleteGroup(admission.folder)
+    }
+    /// Edit › Undo or Redo for an agent: the same document history step, refused under a person's open edit.
+    /// Returns the name of the history entry it stepped over.
+    @discardableResult static func dispatchHistory(redo: Bool, origin: LensWorksCommandOrigin, in session: EditorSession) throws -> String {
+        if let reason = session.agentHistoryAvailability(redo: redo) { throw LensWorksCommandRefusal(reason: reason) }
+        lastInvocation = .init(redo ? .redo : .undo); lastOrigin = origin
+        let name = redo ? session.history.redoName : session.history.undoName
+        if redo { session.redo() } else { session.undo() }
+        return name
     }
     /// Who dispatched `lastInvocation` through a typed admission.
     private(set) static var lastOrigin: LensWorksCommandOrigin = .user

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import Security
+import SwiftUI
 
 /// Where the automation secret lives. The app uses the Keychain; tests inject an in-memory store or a Keychain store
 /// bound to a temporary keychain so they never touch the person's own items.
@@ -74,6 +75,9 @@ struct LensWorksAgentConfirmation: Identifiable {
     let message: String
     let actionTitle: String
 }
+/// How a confirmation ended: the person's answer, no answer (timed out, automation turned off, secret changed), or
+/// never asked because another confirmation was already open.
+enum LensWorksAgentConfirmationAnswer: Equatable { case allowed, declined, unanswered, busy }
 
 /// Settings › Automation: off by default. When on, a secret (Keychain) authenticates the MCP bridge over a socket
 /// only this Mac account can reach, and agents run registered commands through the same dispatcher as menus.
@@ -92,9 +96,17 @@ final class LensWorksAutomation {
     private(set) var isListening = false
     private(set) var lastError: String?
     var showsSecret = false
-    /// The destructive agent command waiting for the person's answer; the editor window shows it as a sheet.
+    /// The destructive agent command waiting for the person's answer, shown as a sheet on the app's window.
     private(set) var pendingConfirmation: LensWorksAgentConfirmation?
-    @ObservationIgnored private var confirmationReply: CheckedContinuation<Bool, Never>?
+    @ObservationIgnored private var confirmationReply: CheckedContinuation<LensWorksAgentConfirmationAnswer, Never>?
+    /// The sheet asking `pendingConfirmation`, and the window it is attached to (nil: shown on its own).
+    @ObservationIgnored private(set) var confirmationPanel: NSWindow?
+    @ObservationIgnored private weak var confirmationParent: NSWindow?
+    /// The window a confirmation sheet attaches to: the app's main window, else any visible one.
+    @ObservationIgnored var confirmationWindow: () -> NSWindow? = {
+        NSApp?.mainWindow ?? NSApp?.windows.first { $0.isVisible && $0.canBecomeMain && !($0 is NSPanel) }
+    }
+    @ObservationIgnored var confirmationTimeout = LensWorksAutomation.confirmationTimeout
 
     init(defaults: UserDefaults = .standard, secretStore: LensWorksAutomationSecretStore = LensWorksKeychainSecretStore(),
          socketPath: String = LensWorksAutomationServer.defaultSocketPath(),
@@ -130,7 +142,7 @@ final class LensWorksAutomation {
             startServer()
         } else {
             server.stop(); isListening = false
-            resolveConfirmation(false)
+            endConfirmation(.unanswered)
         }
     }
 
@@ -144,10 +156,10 @@ final class LensWorksAutomation {
         do { try secretStore.delete(); lastError = nil } catch { lastError = error.localizedDescription }
         secret = nil
         server.setSecretDigest(nil)
-        resolveConfirmation(false)
+        endConfirmation(.unanswered)
     }
 
-    func stop() { server.stop(); isListening = false; resolveConfirmation(false) }
+    func stop() { server.stop(); isListening = false; endConfirmation(.unanswered) }
 
     private func storeNewSecret() throws {
         var bytes = [UInt8](repeating: 0, count: 32)
@@ -156,7 +168,7 @@ final class LensWorksAutomation {
         try secretStore.save(value)
         secret = value
         server.setSecretDigest(LensWorksAutomationServer.digest(value))
-        resolveConfirmation(false)
+        endConfirmation(.unanswered)
     }
 
     private func startServer() {
@@ -179,27 +191,51 @@ final class LensWorksAutomation {
 
     // MARK: Confirmations
 
-    /// Asks the person in the app; false when they decline, when it times out, or when another confirmation is open.
-    func confirm(_ confirmation: LensWorksAgentConfirmation) async -> Bool {
-        guard pendingConfirmation == nil else { return false }
+    /// Asks the person in the app with a sheet and waits for Allow or Don’t Allow. Nothing but Allow lets the
+    /// command run: no answer in time, automation turned off and a changed secret all end it unanswered.
+    func confirm(_ confirmation: LensWorksAgentConfirmation) async -> LensWorksAgentConfirmationAnswer {
+        guard pendingConfirmation == nil else { return .busy }
         pendingConfirmation = confirmation
+        presentConfirmation(confirmation)
         NSApp?.requestUserAttention(.criticalRequest)
-        let id = confirmation.id
+        let id = confirmation.id, limit = confirmationTimeout
         let timeout = Task { [weak self] in
-            try? await Task.sleep(for: Self.confirmationTimeout)
+            try? await Task.sleep(for: limit)
             guard !Task.isCancelled, self?.pendingConfirmation?.id == id else { return }
-            self?.resolveConfirmation(false)
+            self?.endConfirmation(.unanswered)
         }
         defer { timeout.cancel() }
         return await withCheckedContinuation { continuation in confirmationReply = continuation }
     }
 
-    /// The person's answer to the pending confirmation (the sheet's Allow / Don't Allow).
-    func resolveConfirmation(_ allowed: Bool) {
+    /// The person's answer to the pending confirmation (the sheet's Allow / Don’t Allow).
+    func resolveConfirmation(_ allowed: Bool) { endConfirmation(allowed ? .allowed : .declined) }
+
+    private func endConfirmation(_ answer: LensWorksAgentConfirmationAnswer) {
         guard pendingConfirmation != nil else { return }
         pendingConfirmation = nil
+        if let panel = confirmationPanel {
+            if let parent = confirmationParent { parent.endSheet(panel) } else { panel.close() }
+        }
+        confirmationPanel = nil; confirmationParent = nil
         let reply = confirmationReply; confirmationReply = nil
-        reply?.resume(returning: allowed)
+        reply?.resume(returning: answer)
+    }
+
+    /// The confirmation as a sheet on the app's window, or as its own window when none is open.
+    private func presentConfirmation(_ confirmation: LensWorksAgentConfirmation) {
+        let panel = NSPanel(contentViewController: NSHostingController(rootView: LensWorksAgentConfirmationSheet(automation: self, confirmation: confirmation)))
+        panel.styleMask = [.titled]
+        panel.title = "LensWorks Automation"
+        panel.isReleasedWhenClosed = false
+        confirmationPanel = panel
+        if let parent = confirmationWindow() {
+            confirmationParent = parent
+            parent.beginSheet(panel)
+        } else {
+            panel.center()
+            panel.orderFrontRegardless()
+        }
     }
 
     // MARK: Requests

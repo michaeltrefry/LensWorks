@@ -16,7 +16,7 @@ final class LensWorksAgentTools {
     /// Commands with a typed admission an agent can supply arguments for. The rest of the registry is listed with the
     /// reason an agent cannot run it.
     static let agentCommands: [LensWorksCommandID] = [
-        .visibility, .opacity, .rename,
+        .visibility, .opacity, .rename, .undo, .redo,
         .firstVariants, .moreVariants, .selectVariant, .copy, .exposure, .undoRecipe, .redoRecipe, .rating,
         .deleteVirtualFolder
     ]
@@ -83,9 +83,12 @@ final class LensWorksAgentTools {
     func agentAvailability(_ id: LensWorksCommandID) -> String? {
         guard Self.agentCommands.contains(id) else {
             return id.rawValue.hasPrefix("automation.") ? "Automation settings and confirmations are never available to agents."
-                : "Agents cannot run this command yet: it runs only from its menu, shortcut or panel."
+                : "Agents cannot run this command: it runs only from its menu, shortcut or panel."
         }
         switch id {
+        case .undo, .redo:
+            guard let session = session() else { return "Open a document first." }
+            return session.agentHistoryAvailability(redo: id == .redo)
         case .visibility, .opacity, .rename:
             guard let session = session(), session.document != nil else { return "Open a document first." }
             guard let layer = session.activeLayer else { return session.layerMenuAvailability(nil) }
@@ -157,6 +160,7 @@ final class LensWorksAgentTools {
                 "selectedLayer": session.activeLayerID?.uuidString ?? NSNull(),
                 "selectedLayers": session.selectedLayerIDs.map(\.uuidString).sorted(),
                 "canUndo": session.canUndo, "undoName": session.history.undoName,
+                "canRedo": session.canRedo, "redoName": session.history.redoName,
                 "layers": document.layers.reversed().map { layer in
                     ["id": layer.id.uuidString, "name": layer.name, "visible": layer.isVisible, "opacity": layer.opacity,
                      "isGroup": layer.isGroup, "parent": layer.parentID?.uuidString ?? NSNull()] as [String: Any]
@@ -190,6 +194,10 @@ final class LensWorksAgentTools {
         let values = arguments["arguments"] as? [String: Any] ?? [:]
         switch id {
         case .visibility, .opacity, .rename: return try invokeLayer(id, values)
+        case .undo, .redo:
+            guard let session = session() else { throw LensWorksCommandRefusal(reason: "Open a document first.") }
+            let name = try LensWorksCommandDispatcher.dispatchHistory(redo: id == .redo, origin: .agent, in: session)
+            return ["command": id.rawValue, "changed": true, "history": name, "message": (id == .redo ? "Redid " : "Undid ") + (name.isEmpty ? "the last edit." : "“\(name)”.")]
         case .deleteVirtualFolder: return try await invokeFolderDelete(values)
         default: return try await invokeCatalog(id, values)
         }
@@ -271,11 +279,16 @@ final class LensWorksAgentTools {
         guard let folder = values["folder"] as? String else { throw LensWorksCommandRefusal(reason: "folder must be a virtual folder id from get_state.") }
         let admission = try catalog.admitFolderDelete(folder, origin: .agent)
         guard let automation else { throw LensWorksCommandRefusal(reason: "LensWorks automation is off.") }
-        let allowed = await automation.confirm(.init(commandID: .deleteVirtualFolder,
+        let answer = await automation.confirm(.init(commandID: .deleteVirtualFolder,
             title: "Allow an AI agent to delete the virtual folder “\(admission.folder.name)”?",
             message: "An agent connected over automation asked to permanently delete this virtual folder. This cannot be undone.",
             actionTitle: "Delete Folder"))
-        guard allowed else { throw LensWorksCommandRefusal(reason: "The person declined in LensWorks: the virtual folder “\(admission.folder.name)” was not deleted.") }
+        switch answer {
+        case .allowed: break
+        case .declined: throw LensWorksCommandRefusal(reason: "The person declined in LensWorks: the virtual folder “\(admission.folder.name)” was not deleted.")
+        case .busy: throw LensWorksCommandRefusal(reason: "LensWorks is already asking the person to confirm another agent command: the virtual folder “\(admission.folder.name)” was not deleted.")
+        case .unanswered: throw LensWorksCommandRefusal(reason: "The person did not answer the confirmation in LensWorks (it timed out, or automation was turned off or its secret changed): the virtual folder “\(admission.folder.name)” was not deleted.")
+        }
         // The catalog may have changed while the sheet was open: re-admit against the folder the person approved.
         let current = try catalog.admitFolderDelete(folder, origin: .agent)
         guard current.folder.revision == admission.folder.revision else { throw LensWorksCommandRefusal(reason: "The virtual folder changed while waiting for confirmation; nothing was deleted.") }

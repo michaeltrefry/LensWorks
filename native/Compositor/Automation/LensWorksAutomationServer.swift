@@ -14,6 +14,8 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
     static let helloLimit = 4096
     static let requestLimit = 1 << 20
     static let helloTimeout: TimeInterval = 10
+    /// Open connections (authenticated or still in their handshake) served at once; further ones are closed.
+    static let connectionLimit = 16
 
     enum ServerError: LocalizedError {
         case path(String), system(String, Int32), alreadyServing
@@ -58,6 +60,8 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
 
     var isListening: Bool { lock.withLock { listener != nil } }
     var authenticatedConnections: Int { lock.withLock { authenticatedCount } }
+    /// Connections being served, authenticated or still in their handshake.
+    var openConnections: Int { lock.withLock { connections.count } }
 
     /// Replaces the accepted secret (nil: revoked, every handshake is refused) and drops every open connection, which
     /// authenticated with the previous one.
@@ -68,6 +72,8 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
 
     func start() throws {
         guard !isListening else { return }
+        // A client that disconnects mid-reply must cost a failed write, never the app (SIGPIPE's default is to exit).
+        signal(SIGPIPE, SIG_IGN)
         let directory = (socketPath as NSString).deletingLastPathComponent
         try Self.preparePrivateDirectory(directory)
         guard socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else { throw ServerError.path("The automation socket path is too long: \(socketPath)") }
@@ -86,7 +92,7 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
             umask(previous)
             guard bound == 0 else { throw ServerError.system("bind", errno) }
             guard chmod(socketPath, 0o600) == 0 else { throw ServerError.system("chmod", errno) }
-            guard listen(fd, 8) == 0 else { throw ServerError.system("listen", errno) }
+            guard listen(fd, Int32(Self.connectionLimit)) == 0 else { throw ServerError.system("listen", errno) }
             guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else { throw ServerError.system("fcntl", errno) }
         } catch { close(fd); unlink(socketPath); throw error }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "net.trefry.lensworks.automation.accept"))
@@ -117,9 +123,17 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
             guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else { close(client); continue }
             _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
             var on: Int32 = 1
-            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            // Fails when the peer already hung up (a probe from a second LensWorks): there is nobody to serve.
+            guard setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size)) == 0 else { close(client); continue }
             let connection = Connection(fd: client)
-            lock.withLock { connections[ObjectIdentifier(connection)] = connection }
+            let admitted = lock.withLock { () -> Bool in
+                guard connections.count < Self.connectionLimit else { return false }
+                connections[ObjectIdentifier(connection)] = connection; return true
+            }
+            guard admitted else {
+                connection.write(["type": "refused", "reason": "LensWorks is already serving \(Self.connectionLimit) automation connections."])
+                connection.close(); continue
+            }
             let thread = Thread { [weak self] in
                 self?.serve(connection)
                 connection.close()
@@ -185,6 +199,7 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
             while true {
                 if let newline = buffer.firstIndex(of: 0x0a) {
                     let line = buffer[buffer.startIndex..<newline]
+                    guard line.count <= limit else { return nil }
                     buffer.removeSubrange(buffer.startIndex...newline)
                     return Data(line)
                 }
