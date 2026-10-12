@@ -1,6 +1,6 @@
 # Frozen capability inventory
 
-28319 source-surface rows across 735 audited source files; 11774 declared controls/services have planned fixtures; 16545 support declarations are provenance-only; 2375 baseline test cases indexed. None are native acceptance evidence.
+28319 source-surface rows across 735 audited source files; 11774 declared controls/services have fixtures (192 passing with recorded native test evidence, 11582 planned); 16545 support declarations are provenance-only; 2375 baseline test cases indexed. Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.
 
 This ledger is deliberately finer than a feature checklist: each enum case, configuration field, command/control, exposed service operation and format route gets its own source anchor, story and fixture. Implementation-support declarations remain separately labeled; the row count is not a user-visible feature count.
 
@@ -39,7 +39,7 @@ See `DEPENDENCIES.json` and `THIRD_PARTY_NOTICES.md`; individual retained licens
 | sc-24662 | 7627 | exposed: planned; support: provenance-only |
 | sc-24663 | 441 | exposed: planned; support: provenance-only |
 | sc-24664 | 364 | exposed: planned; support: provenance-only |
-| sc-24665 | 603 | exposed: planned; support: provenance-only |
+| sc-24665 | 603 | exposed: 192 passing, 110 planned; support: provenance-only |
 | sc-24666 | 1589 | exposed: planned; support: provenance-only |
 | sc-24667 | 663 | exposed: planned; support: provenance-only |
 | sc-24668 | 424 | exposed: planned; support: provenance-only |

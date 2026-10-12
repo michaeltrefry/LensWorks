@@ -563,8 +563,11 @@ def markdown(data):
     kinds = collections.Counter(r['kind'] for r in rows)
     covered = sum(bool(r['baseline_test_references']) for r in rows)
     exposed = [r for r in rows if r['surface'] != 'implementation_support']
+    passing = sum(r['acceptance_fixture']['status'] == 'passing' for r in exposed)
+    fixtures = 'planned fixtures' if not passing else f'fixtures ({passing} passing with recorded native test evidence, {len(exposed) - passing} planned)'
+    evidence = 'None are native acceptance evidence.' if not passing else 'Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.'
     out = ['# Frozen capability inventory', '',
-           f"{len(rows)} source-surface rows across {len(data['files'])} audited source files; {len(exposed)} declared controls/services have planned fixtures; {len(rows)-len(exposed)} support declarations are provenance-only; {len(data['baseline_test_cases'])} baseline test cases indexed. None are native acceptance evidence.", '',
+           f"{len(rows)} source-surface rows across {len(data['files'])} audited source files; {len(exposed)} declared controls/services have {fixtures}; {len(rows)-len(exposed)} support declarations are provenance-only; {len(data['baseline_test_cases'])} baseline test cases indexed. {evidence}", '',
            'This ledger is deliberately finer than a feature checklist: each enum case, configuration field, command/control, exposed service operation and format route gets its own source anchor, story and fixture. Implementation-support declarations remain separately labeled; the row count is not a user-visible feature count.', '',
            'Run `python3 scripts/audit-capabilities.py` from any working directory. It re-extracts source anchors and verifies frozen refs, file digests, story membership, fixture identities, baseline tests, provenance and license digests. Regeneration with `--write` updates only this JSON and Markdown ledger and resets fixtures to planned; review mappings before accepting a new baseline.', '',
            '## Frozen provenance', '']
@@ -572,7 +575,10 @@ def markdown(data):
     out += ['', 'See `DEPENDENCIES.json` and `THIRD_PARTY_NOTICES.md`; individual retained license/notice hashes live in JSON.', '', '## Limits and unresolved qualification', '']
     out += ['- ' + s for s in data['limitations']]
     out += ['', f'{covered} rows reference baseline test bodies. These are discovery pointers only: tests have not been executed by this inventory task, and token mention does not establish assertion coverage.', '', '## Story coverage', '', '| Story | Source-surface rows | Fixture status |', '| --- | ---: | --- |']
-    out += [f'| {story} | {count} | exposed: planned; support: provenance-only |' for story, count in sorted(counts.items())]
+    for story, count in sorted(counts.items()):
+        states = collections.Counter(r['acceptance_fixture']['status'] for r in exposed if r['story_id'] == story)
+        status = 'planned' if set(states) <= {'planned'} else ', '.join(f'{states[k]} {k}' for k in ('passing', 'failing', 'blocked', 'planned') if states[k])
+        out.append(f'| {story} | {count} | exposed: {status}; support: provenance-only |')
     out += ['', 'The complete 37-story plan includes new AI/version/recovery and distribution requirements beyond frozen behavior. Absence of baseline rows for a story does not remove those requirements; the epic requirements and story AC remain authoritative. `sc-24691` reviews every inventory row at integrated acceptance.', '', '## Extracted surface kinds', '', '| Kind | Rows |', '| --- | ---: |']
     out += [f'| {kind} | {count} |' for kind, count in sorted(kinds.items())]
     out += ['', '## Concrete fixture profiles', '', 'Asset recipes and exact per-capability parameter bindings live in JSON. Profiles are planned specifications; fixture construction/execution is still required by the owning story. Every enum variant and source parameter remains separately bound rather than being waived by the shared recipe.', '']

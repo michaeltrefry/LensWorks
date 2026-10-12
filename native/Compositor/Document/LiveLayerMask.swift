@@ -75,6 +75,7 @@ nonisolated enum LiveMaskBaker {
     static func bake(_ snapshot: ProjectSnapshot, target: UUID) throws -> ImportedImage? {
         guard let record = snapshot.manifest.layers.first(where: { $0.id == target }), let original = snapshot.images[target] else { return nil }
         let w = original.image.width, h = original.image.height
+        if original.linear != nil || original.linearPlane != nil { return try bakeFloat(snapshot, record: record, original: original) }
         let context = try BrushRaster.context(width: w, height: h, mask: false)
         let inverse = BrushRaster.pixelToDocument(record.transform, width: w, height: h).inverted()
         let records = Dictionary(uniqueKeysWithValues: snapshot.manifest.layers.map { ($0.id, $0) })
@@ -94,6 +95,35 @@ nonisolated enum LiveMaskBaker {
         live.draw(target, in: context)
         guard let image = context.makeImage() else { throw ExportError.render }
         return ImportedImage(image: image, thumbnail: try PixelAdjust.thumbnail(of: image), name: original.name)
+    }
+}
+
+nonisolated extension LiveMaskBaker {
+    /// A float layer keeps its float samples: only its alpha is multiplied, by the coverage its source lends it
+    /// (as the float document graph computes it) resampled into the layer's own grid. The target's own mask and
+    /// appearance stay live, as in the 8-bit bake.
+    fileprivate static func bakeFloat(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, original: ImportedImage) throws -> ImportedImage? {
+        guard let source = record.maskSourceID else { return original }
+        let records = Dictionary(uniqueKeysWithValues: snapshot.manifest.layers.map { ($0.id, $0) })
+        // The source drawn alone, without its folders' masks: its alpha is then exactly the coverage it lends.
+        var shown = Set<UUID>(), next: UUID? = source
+        while let id = next, shown.insert(id).inserted { next = records[id]?.parentID }
+        var manifest = snapshot.manifest
+        for i in manifest.layers.indices {
+            manifest.layers[i].isVisible = shown.contains(manifest.layers[i].id)
+            if manifest.layers[i].isGroup == true { manifest.layers[i].maskFile = nil }
+        }
+        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+        let coverage = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks), workspace: workspace)
+        let local = try original.linearPlane ?? LWFloatCompositor.from(original.linear ?? LWLinearSurface.read(original.image, maximumBytes: LWFloatCompositor.maximumBytes), workspace: workspace)
+        let toLocal = BrushRaster.pixelToDocument(record.transform, width: local.width, height: local.height).inverted()
+        let placed = try LWFloatCompositor.project(coverage, mapping: toLocal, width: local.width, height: local.height,
+            workspace: workspace, sampling: record.transform.sampling)
+        let sampler = placed.sampler()
+        let baked = try LWFloatCompositor.map(local, workspace: workspace) { pixel, x, y in
+            var result = pixel; result.w *= try sampler.pixel(x: x, y: y).w; return result
+        }
+        return try ImportedImage(plane: baked, name: original.name)
     }
 }
 
