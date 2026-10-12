@@ -50,10 +50,20 @@ import QuartzCore
         var entry = entry
         clock += 1; entry.touched = clock
         textures[key] = entry
+        enforceBudget(keeping: key)
+    }
+    /// Evicts down to the budget: least-recently-used layer textures first (never `keeping`), then stroke
+    /// textures the current frame has not drawn, oldest first. Only what the current frame is drawing
+    /// (the newest texture and live strokes) can hold the cache above its budget.
+    private func enforceBudget(keeping: Key? = nil) {
         var total = residentTextureBytes
         while total > textureBudgetBytes,
-              let victim = textures.filter({ $0.key != key }).min(by: { $0.value.touched < $1.value.touched })?.key {
+              let victim = textures.filter({ $0.key != keeping }).min(by: { $0.value.touched < $1.value.touched })?.key {
             total -= textures.removeValue(forKey: victim)?.bytes ?? 0
+        }
+        while total > textureBudgetBytes,
+              let victim = strokes.filter({ $0.value.used < frame }).min(by: { $0.value.used < $1.value.used })?.key {
+            total -= strokes.removeValue(forKey: victim)?.texture.bytes ?? 0
         }
         peakTextureBytes = max(peakTextureBytes, total)
     }
@@ -183,7 +193,9 @@ import QuartzCore
             buffer.waitUntilCompleted()
             entry = StrokeTexture(texture: texture, image: image)
         }
+        let isNew = strokes[id] == nil
         strokes[id] = (stroke, entry, frame)
+        if isNew { enforceBudget() }
         let writes = TileWrites(renderer: self, into: entry.texture, mask: stroke.isMask)
         for patch in stroke.patches {
             let key = patch.rect.origin, identity = ObjectIdentifier(patch.image)
@@ -346,8 +358,22 @@ import QuartzCore
     /// The display boundary: working samples converted to `target`'s extended color space in a half-float
     /// texture. Values above 1 (HDR/RAW latitude) and below 0 (out-of-gamut wide colors) are kept for the
     /// system's EDR and gamut mapping rather than clamped here.
-    func render(_ image: CIImage, to texture: MTLTexture, commandBuffer: MTLCommandBuffer, size: CGSize, target: LWDisplayTarget) {
-        context.render(image, to: texture, commandBuffer: commandBuffer,
+    ///
+    /// `headroom`: the screen's current EDR headroom (`maximumExtendedDynamicRangeColorComponentValue`, linear,
+    /// 1 on an SDR screen). Components above it saturate at it here, per channel, as the display would clip them;
+    /// that also keeps any value inside half float's range, where a larger one would become infinity. Negative
+    /// (out-of-gamut) components are kept for the system's gamut mapping. Nil leaves values as they are.
+    func render(_ image: CIImage, to texture: MTLTexture, commandBuffer: MTLCommandBuffer, size: CGSize, target: LWDisplayTarget,
+                headroom: CGFloat? = nil) {
+        var shown = image
+        if let headroom, headroom.isFinite, headroom >= 1 {
+            // The working space is encoded extended sRGB: clamp at the headroom's encoded value.
+            let top = CGFloat(LWDisplayTarget.encode(Double(min(headroom, 65504))))
+            shown = image.applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: -65504, y: -65504, z: -65504, w: 0),
+                "inputMaxComponents": CIVector(x: top, y: top, z: top, w: 1)])
+        }
+        context.render(shown, to: texture, commandBuffer: commandBuffer,
                        bounds: CGRect(x: 0, y: 0, width: size.width, height: size.height), colorSpace: target.colorSpace)
     }
 
@@ -362,7 +388,7 @@ import QuartzCore
 
     /// Draws `image` into `layer`'s next drawable, in step with the Core Animation transaction it's drawn in, so it
     /// lands on the same frame as the overlays above it.
-    func present(_ image: CIImage,in layer:CAMetalLayer,validateBeforePresentation:(() throws -> Void)? = nil) throws -> Bool {
+    func present(_ image: CIImage,in layer:CAMetalLayer,headroom:CGFloat? = nil,validateBeforePresentation:(() throws -> Void)? = nil) throws -> Bool {
         guard let drawable=layer.nextDrawable(),let buffer=queue.makeCommandBuffer() else { return false }
         defer { endFrame() }
         let size = layer.drawableSize
@@ -371,7 +397,7 @@ import QuartzCore
         let upright = drawable.texture.usage.contains(.renderTarget)
             ? image.transformed(by: CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)) : image
         render(upright, to: drawable.texture, commandBuffer: buffer, size: size,
-               target: LWDisplayTarget(colorSpace: layer.colorspace) ?? .extendedSRGB)
+               target: LWDisplayTarget(colorSpace: layer.colorspace) ?? .extendedSRGB, headroom: headroom)
         buffer.commit()
         if let validateBeforePresentation {
             // Provider callbacks may run after scheduling and outside the originating Task.
@@ -417,9 +443,34 @@ final class MetalCanvasView: NSView {
     /// Wide-gamut screens take Display P3; others extended sRGB. Both are extended ranges.
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        let target: LWDisplayTarget = window?.screen?.canRepresent(.p3) == true ? .extendedDisplayP3 : .extendedSRGB
+        updateDisplayTarget()
+    }
+
+    private var screenObservers: [NSObjectProtocol] = []
+    /// A window moved between two screens of the same scale changes no backing property, yet the new screen
+    /// may have another gamut or headroom: follow the window's screen changes too.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        for observer in screenObservers { NotificationCenter.default.removeObserver(observer) }
+        screenObservers = []
+        guard let window else { return }
+        let update: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.updateDisplayTarget() } }
+        screenObservers = [
+            NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main, using: update),
+            NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: update)]
+        updateDisplayTarget()
+    }
+
+    /// The display target for `screen`.
+    static func target(for screen: NSScreen?) -> LWDisplayTarget { screen?.canRepresent(.p3) == true ? .extendedDisplayP3 : .extendedSRGB }
+
+    func updateDisplayTarget() {
+        let target = Self.target(for: window?.screen)
         if LWDisplayTarget(colorSpace: metalLayer.colorspace) != target { metalLayer.colorspace = target.colorSpace }
     }
+
+    /// The screen's EDR headroom now. It changes with brightness and other content, so it is read for every frame.
+    var headroom: CGFloat { max(1, window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1) }
 
     /// Sizes the drawable to the view in screen pixels.
     func fit(scale: CGFloat) {
@@ -656,6 +707,11 @@ nonisolated enum LWDisplayTarget: CaseIterable, Sendable {
         case .extendedSRGB: CGColorSpace(name: CGColorSpace.extendedSRGB)!
         case .extendedDisplayP3: CGColorSpace(name: CGColorSpace.extendedDisplayP3)!
         }
+    }
+    /// The sign-mirrored sRGB transfer both targets use.
+    static func encode(_ x: Double) -> Double {
+        let a = abs(x), y = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1 / 2.4) - 0.055
+        return x < 0 ? -y : y
     }
     init?(colorSpace: CGColorSpace?) {
         guard let name = colorSpace?.name else { return nil }

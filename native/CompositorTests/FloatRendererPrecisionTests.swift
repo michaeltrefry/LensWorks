@@ -1,4 +1,5 @@
 import Testing
+import AppKit
 import Foundation
 import CoreGraphics
 import CoreImage
@@ -10,15 +11,18 @@ import QuartzCore
 struct RendererContract: Decodable {
     struct Large: Decodable {
         let width: Int, height: Int
-        let cache_budget_bytes: Int, peak_working_set_bytes: Int, texture_budget_bytes: Int
+        let cache_budget_bytes: Int, peak_working_set_bytes: Int, texture_budget_bytes: Int, peak_footprint_growth_bytes: Int
     }
     let blend_reference_relative: Double
     let blend_core_image_in_range_abs: Double
     let tile_parity_pointwise_abs: Double
+    let resampler_reference_relative: Double
+    let raster_fast_path_relative: Double
     let document_region_parity_relative: Double
     let document_region_spatial_relative: Double
     let display_conversion_relative: Double
     let tile_cache_budget_bytes: Int
+    let canvas_frame_budget_bytes: Int
     let texture_budget_bytes: Int
     let large_document: Large
     static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -27,68 +31,20 @@ struct RendererContract: Decodable {
     }
 }
 
-/// An independent float64 transcription of the declared blend semantics (see LWFloatBlend).
+/// Float64 transfer functions and the source-over compositing equation. The per-mode mixing
+/// function is LWFloatBlend's own (its semantics are checked by property tests, not by a copy of
+/// the formulas), so this verifies the vForce transfer and compositing path around it.
 enum ReferenceBlend {
-    typealias V = SIMD3<Double>
     static func enc(_ x: Double) -> Double { let a = abs(x), y = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1 / 2.4) - 0.055; return x < 0 ? -y : y }
     static func dec(_ x: Double) -> Double { let a = abs(x), y = a <= 0.04045 ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4); return x < 0 ? -y : y }
-    static func sep(_ m: LayerBlendMode, _ b: Double, _ s: Double) -> Double {
-        let lo = min(0, b, s), hi = max(1, b, s)
-        func burn(_ b: Double, _ s: Double) -> Double { b >= 1 ? b : s <= 0 ? lo : max(lo, 1 - (1 - b) / s) }
-        func dodge(_ b: Double, _ s: Double) -> Double { b <= 0 ? b : s >= 1 ? hi : min(hi, b / (1 - s)) }
-        func hard(_ b: Double, _ s: Double) -> Double { s <= 0.5 ? b * 2 * s : b + (2 * s - 1) - b * (2 * s - 1) }
-        switch m {
-        case .normal: return s
-        case .darken: return min(b, s)
-        case .lighten: return max(b, s)
-        case .multiply: return b * s
-        case .screen: return b + s - b * s
-        case .colorBurn: return burn(b, s)
-        case .colorDodge: return dodge(b, s)
-        case .linearBurn: return max(lo, b + s - 1)
-        case .linearDodge: return min(hi, b + s)
-        case .hardLight: return hard(b, s)
-        case .overlay: return hard(s, b)
-        case .softLight:
-            if s <= 0.5 { return b - (1 - 2 * s) * b * (1 - b) }
-            return b + (2 * s - 1) * ((b <= 0.25 ? ((16 * b - 12) * b + 4) * b : b.squareRoot()) - b)
-        case .vividLight: return s <= 0.5 ? burn(b, 2 * s) : dodge(b, 2 * s - 1)
-        case .linearLight: return min(hi, max(lo, b + 2 * s - 1))
-        case .pinLight: return s <= 0.5 ? min(b, 2 * s) : max(b, 2 * s - 1)
-        case .hardMix: return b + s >= 1 ? hi : lo
-        case .difference: return abs(b - s)
-        case .exclusion: return b + s - 2 * b * s
-        case .subtract: return max(lo, b - s)
-        case .divide: return s > 0 ? min(hi, b / s) : (b > 0 ? hi : b < 0 ? lo : 0)
-        case .hue, .saturation, .color, .luminosity: fatalError()
-        }
-    }
-    static func lum(_ c: V) -> Double { 0.3 * c.x + 0.59 * c.y + 0.11 * c.z }
-    static func clip(_ c: V, _ lo: Double, _ hi: Double) -> V {
-        let l = lum(c), n = c.min(), x = c.max(); var r = c
-        if n < lo, l > lo { r = V(repeating: l) + (r - V(repeating: l)) * (l - lo) / (l - n) }
-        if x > hi, l < hi { r = V(repeating: l) + (r - V(repeating: l)) * (hi - l) / (x - l) }
-        return r
-    }
-    static func setLum(_ c: V, _ l: Double, _ lo: Double, _ hi: Double) -> V { clip(c + V(repeating: l - lum(c)), lo, hi) }
-    static func setSat(_ c: V, _ s: Double) -> V { let n = c.min(), x = c.max(); return x > n ? (c - V(repeating: n)) * s / (x - n) : .zero }
-    static func mix(_ m: LayerBlendMode, _ b: V, _ s: V) -> V {
-        let lo = min(0, b.min(), s.min()), hi = max(1, b.max(), s.max())
-        switch m {
-        case .hue: return setLum(setSat(s, b.max() - b.min()), lum(b), lo, hi)
-        case .saturation: return setLum(setSat(b, s.max() - s.min()), lum(b), lo, hi)
-        case .color: return setLum(s, lum(b), lo, hi)
-        case .luminosity: return setLum(b, lum(s), lo, hi)
-        default: return V(sep(m, b.x, s.x), sep(m, b.y, s.y), sep(m, b.z, s.z))
-        }
-    }
     static func pixel(_ m: LayerBlendMode, top t: SIMD4<Float>, bottom u: SIMD4<Float>) -> SIMD4<Double> {
         let a = Double(t.w), b = Double(u.w), ao = a + b * (1 - a)
         if a <= 0 && b <= 0 { return .zero }
         if a <= 0 { return SIMD4(Double(u.x), Double(u.y), Double(u.z), b) }
         if b <= 0 || (m == .normal && a >= 1) { return SIMD4(Double(t.x), Double(t.y), Double(t.z), a) }
-        let cs = V(enc(Double(t.x)), enc(Double(t.y)), enc(Double(t.z))), cb = V(enc(Double(u.x)), enc(Double(u.y)), enc(Double(u.z)))
-        let co = (cs * (a * (1 - b)) + mix(m, cb, cs) * (a * b) + cb * ((1 - a) * b)) / ao
+        let cs = SIMD3(enc(Double(t.x)), enc(Double(t.y)), enc(Double(t.z))), cb = SIMD3(enc(Double(u.x)), enc(Double(u.y)), enc(Double(u.z)))
+        let mixed = LWFloatBlend.mix(m, backdrop: SIMD3<Float>(cb), source: SIMD3<Float>(cs))
+        let co = (cs * (a * (1 - b)) + SIMD3<Double>(mixed) * (a * b) + cb * ((1 - a) * b)) / ao
         return SIMD4(dec(co.x), dec(co.y), dec(co.z), ao)
     }
 }
@@ -119,8 +75,8 @@ enum PrecisionFixture {
 
     private func relative(_ actual: Float, _ expected: Double) -> Double { abs(Double(actual) - expected) / max(1, abs(expected)) }
 
-    /// Every mode, on HDR, negative, transparent and partially transparent straight samples, against the
-    /// float64 reference. The comparison is per straight channel, so color under partial alpha counts.
+    /// Every mode, on HDR, negative, transparent and partially transparent straight samples: the buffer path
+    /// against float64 transfer and compositing around the mode's mixing function, per straight channel.
     @Test(arguments: LayerBlendMode.allCases)
     func blendModePreservesExtendedRangeAndAlphaSemantics(_ mode: LayerBlendMode) throws {
         let n = 4096, top = PrecisionFixture.samples(n, seed: 11), bottom = PrecisionFixture.samples(n, seed: 23)
@@ -161,6 +117,106 @@ enum PrecisionFixture {
         #expect(one(.multiply, hdr, SIMD4(1, 1, 1, 0)) == hdr)
         #expect(one(.screen, SIMD4(9, 9, 9, 0), hdr) == hdr)
         #expect(one(.normal, SIMD4(3, -1, 2, 1), hdr) == SIMD4(3, -1, 2, 1))
+    }
+
+    // MARK: Extended-range blend properties
+
+    /// Encoded operands spanning negative, zero, subnormal, in-range, the 0.5 and 1 breakpoints and HDR.
+    static let probes: [Float] = [-1e30, -7.5, -1, -0.5, -Float.leastNormalMagnitude, -Float.leastNonzeroMagnitude, 0,
+        Float.leastNonzeroMagnitude, Float.leastNormalMagnitude, 1e-7, 0.1, 0.25, 0.3, 0.5, 0.5000001, 0.7, 0.999, 1, 1.001, 1.5, 2, 3, 6, 100, 1e30,
+        Float.greatestFiniteMagnitude]
+    static let separableModes = LayerBlendMode.allCases.filter { ![.hue, .saturation, .color, .luminosity].contains($0) }
+
+    /// Each mode's extended rule is declared, in the kernel and in the repository contract.
+    @Test func everyModeDeclaresItsExtendedRule() throws {
+        let contract = try JSONSerialization.jsonObject(with: Data(contentsOf: RendererContract.repository
+            .appendingPathComponent("RENDERER_PRECISION_CONTRACT.json"))) as? [String: Any]
+        let declared = try #require(contract?["blend_extended_rules"] as? [String: String])
+        for mode in LayerBlendMode.allCases {
+            let rule = try #require(LWFloatBlend.extendedRules[mode], "\(mode) has no extended rule")
+            #expect(declared[mode.rawValue] == rule, "\(mode): contract and kernel disagree")
+        }
+        #expect(declared.count == LayerBlendMode.allCases.count)
+    }
+
+    /// The defining cases of the extended rules.
+    @Test func extendedRulesKeepHighlightsAndNeutrals() {
+        let sep = LWFloatBlend.separable
+        // Screen never pulls HDR down; extrapolating b + s - bs would give 2 and 0 here.
+        #expect(sep(.screen, 3, 0.5) == 3)
+        #expect(sep(.screen, 2, 2) == 2)
+        #expect(sep(.screen, 0.5, 4) == 4)
+        // Exclusion of equal HDR operands is zero, not -4.
+        #expect(sep(.exclusion, 2, 2) == 0)
+        // Mid gray is neutral for Overlay and Hard Light over HDR, and neither goes negative.
+        #expect(sep(.overlay, 3, 0.5) == 3)
+        #expect(sep(.hardLight, 3, 0.5) == 3)
+        #expect(sep(.overlay, 3, 2) >= 0 && sep(.hardLight, 2, 3) >= 0 && sep(.overlay, 0.75, 2) >= 0)
+        // Soft Light keeps an HDR backdrop for every source.
+        for s: Float in [0, 0.25, 0.5, 0.75, 1, 4] { #expect(sep(.softLight, 2.5, s) == 2.5) }
+    }
+
+    /// Screen and Lighten never darken a non-negative operand, in the encoded mix and through the
+    /// whole pixel (transfer, compositing) for opaque operands.
+    @Test func screenAndLightenNeverDarken() {
+        let positive = Self.probes.filter { $0 >= 0 && $0 < 1e29 }
+        for mode in [LayerBlendMode.screen, .lighten] {
+            for b in positive { for s in positive {
+                let made = LWFloatBlend.separable(mode, b, s), floor = max(b, s)
+                #expect(made >= floor - 1e-6 * max(1, floor), "\(mode)(\(b), \(s)) = \(made)")
+                let pixel = LWFloatBlend.pixel(mode, top: SIMD4(s, s, s, 1), bottom: SIMD4(b, b, b, 1))
+                #expect(pixel.x >= floor - 2e-5 * max(1, floor), "\(mode) pixel (\(b), \(s)) = \(pixel.x)")
+            } }
+        }
+    }
+
+    /// Non-negative operands never give a negative result, in any mode.
+    @Test(arguments: LayerBlendMode.allCases)
+    func nonNegativeOperandsNeverGiveNegativeResults(_ mode: LayerBlendMode) {
+        let positive = Self.probes.filter { $0 >= 0 }
+        for b in positive { for s in positive {
+            if Self.separableModes.contains(mode) {
+                let made = LWFloatBlend.separable(mode, b, s)
+                #expect(made.isNaN || made >= 0, "\(mode)(\(b), \(s)) = \(made)")
+            }
+            for (cb, cs) in [(SIMD3(b, 0.3, 0.7), SIMD3(s, 0.9, 0.1)), (SIMD3(0.2, b, 1.5), SIMD3(s, s, 0))] {
+                let mixed = LWFloatBlend.mix(mode, backdrop: cb, source: cs)
+                #expect(mixed.min() >= 0 || (0..<3).contains { mixed[$0].isNaN }, "\(mode) mix \(cb) \(cs) = \(mixed)")
+            }
+            for alpha: Float in [1, 0.5] {
+                let pixel = LWFloatBlend.pixel(mode, top: SIMD4(s, 0.4, s, alpha), bottom: SIMD4(b, b, 0.2, 1))
+                #expect(pixel.x >= 0 && pixel.y >= 0 && pixel.z >= 0, "\(mode) pixel (\(b), \(s), \(alpha)) = \(pixel)")
+            }
+        } }
+    }
+
+    /// No finite input — negative, zero, subnormal, huge, any alpha — produces NaN or infinity.
+    @Test(arguments: LayerBlendMode.allCases)
+    func finiteInputsGiveFiniteResults(_ mode: LayerBlendMode) {
+        let linear: [Float] = Self.probes + [-Float.greatestFiniteMagnitude]
+        let alphas: [Float] = [1, 0.5, 1e-7, Float.leastNormalMagnitude, Float.leastNonzeroMagnitude]
+        for b in linear { for s in linear { for ta in alphas { for ba in [Float(1), 0.3, Float.leastNonzeroMagnitude] {
+            let p = LWFloatBlend.pixel(mode, top: SIMD4(s, b, 0.5, ta), bottom: SIMD4(b, s, -s, ba))
+            #expect((0..<4).allSatisfy { p[$0].isFinite } && (0...1).contains(p.w), "\(mode): \(s) over \(b) alpha \(ta)/\(ba) = \(p)")
+        } } } }
+    }
+
+    /// Every mode except the Hard Mix threshold is continuous where its rule changes, at 1 for either
+    /// operand (and at 0, except where the W3C definition itself jumps: Color Dodge and Vivid Light at a zero backdrop).
+    @Test(arguments: LayerBlendMode.allCases)
+    func extendedRulesAreContinuousAtTheDisplayBounds(_ mode: LayerBlendMode) {
+        guard mode != .hardMix else { return }
+        let eps: Float = 1e-3, others: [Float] = [0.05, 0.3, 0.6, 0.9, 1.5, 3]
+        let bounds: [Float] = [.colorDodge, .vividLight].contains(mode) ? [1] : [0, 1]
+        func value(_ b: Float, _ s: Float) -> SIMD3<Float> {
+            LWFloatBlend.mix(mode, backdrop: SIMD3(b, 0.4, 0.8), source: SIMD3(s, 0.6, 0.2))
+        }
+        for edge in bounds { for o in others {
+            for (lower, upper) in [(value(edge - eps, o), value(edge + eps, o)), (value(o, edge - eps), value(o, edge + eps))] {
+                let jump = (lower - upper).max() > -(lower - upper).min() ? (lower - upper).max() : -(lower - upper).min()
+                #expect(jump <= 50 * eps, "\(mode) jumps by \(jump) across \(edge) with the other operand \(o)")
+            }
+        } }
     }
 
     /// In range the kernel is the Core Image definition the float compositor used before this change.
@@ -242,39 +298,135 @@ enum PrecisionFixture {
         }
     }
 
-    /// Placement crops a tile's source when the layer is a pixel copy (native size, whole-pixel origin, no
-    /// rotation or flip); every transform must give exactly the samples of the uncropped per-tile draw.
-    @Test(arguments: ["integer", "fractional", "rotated", "reduced", "enlarged-flipped"])
-    func croppedTilePlacementMatchesUncroppedDraw(_ kind: String) throws {
+    /// Placement reads only the crop of the layer under each tile, and resamples it from document coordinates, so a
+    /// tiled placement gives exactly the samples of one whole-frame evaluation for every transform. On smooth
+    /// content the resampler also stays close to Core Graphics' own resampling of the whole image.
+    @Test(arguments: ["integer", "fractional", "rotated", "reduced", "enlarged-flipped", "nearest-rotated", "smooth-reduced"])
+    func tiledPlacementMatchesWholeFrameEvaluation(_ kind: String) throws {
         let workspace = try LWFloatWorkspace(workingSet: LWFloatWorkingSet(limit: 256 * 1024 * 1024))
-        let source = ProceduralImage.make(width: 700, height: 610) { x, y in
-            SIMD4(Float((x * 7 + y * 3) % 97) / 30, Float((x + y * 5) % 89) / 70 - 0.35, Float(x % 61) / 61, 0.5 + Float((x / 9 + y / 7) % 5) / 8)
+        // Smooth HDR and out-of-gamut content, partly transparent.
+        @Sendable func smooth(_ u: Float, _ v: Float) -> SIMD4<Float> {
+            SIMD4(1.6 + 1.5 * sin(u * 0.05) * cos(v * 0.043), 0.3 + 0.6 * sin(u * 0.031 + v * 0.017), 0.5 + 0.5 * cos(v * 0.06),
+                  0.6 + 0.4 * sin(u * 0.023) * sin(v * 0.029))
         }
+        let source = ProceduralImage.make(width: 700, height: 610) { x, y in smooth(Float(x), Float(y)) }
         var transform = LayerTransform(origin: CGPoint(x: 37, y: 21), size: CGSize(width: 700, height: 610))
         switch kind {
         case "fractional": transform.origin = CGPoint(x: 37.5, y: 21.25)
         case "rotated": transform.rotation = 23
         case "reduced": transform.size = CGSize(width: 233, height: 199); transform.origin = CGPoint(x: 300.3, y: 410)
         case "enlarged-flipped": transform.size = CGSize(width: 1250, height: 1100); transform.flipX = true; transform.flipY = true; transform.origin = CGPoint(x: -100, y: -50)
+        case "nearest-rotated": transform.rotation = -31; transform.sampling = .nearest
+        case "smooth-reduced": transform.size = CGSize(width: 310, height: 270); transform.rotation = 8; transform.sampling = .smooth
         default: break
         }
-        #expect((LWFloatCompositor.visiblePart(of: source, transform: transform, range: LWFloatRange(x: 256, y: 256, width: 256, height: 256))?.image.width == 700) == (kind != "integer"))
+        // An interior tile reads only the part of the layer that reaches it.
+        let part = try #require(LWFloatCompositor.visiblePart(of: source, transform: transform, range: LWFloatRange(x: 256, y: 256, width: 256, height: 256)))
+        #expect(part.width < 700 && part.height < 610, "\(kind): crop \(part.width)x\(part.height)")
         let width = 900, height = 800
         let tiled = try LWFloatCompositor.place(source, transform: transform, width: width, height: height, workspace: workspace)
+        let whole: LWLinearSurface
+        if kind == "integer" {
+            // A pixel copy: Core Graphics drawing the whole layer into one whole-frame context.
+            let context = try LWLinearSurface.context(width: width, height: height, maximumBytes: width * height * 16)
+            context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 1, y: -1)
+            context.translateBy(x: transform.center.x, y: transform.center.y); context.scaleBy(x: 1, y: -1)
+            context.draw(source, in: CGRect(x: -350, y: -305, width: 700, height: 610))
+            whole = try LWLinearSurface.read(try #require(context.makeImage()), maximumBytes: width * height * 16)
+        } else {
+            whole = try LWFloatCompositor.resampled(source, transform: transform, range: LWFloatRange(x: 0, y: 0, width: width, height: height),
+                workingSet: workspace.workingSet)
+        }
         var worst: Float = 0
         try tiled.forEachTile { range in
-            // Reference: the whole layer drawn into this range's context, as placement did before cropping.
-            let context = try LWLinearSurface.context(width: range.width, height: range.height, maximumBytes: range.width * range.height * 16)
-            context.translateBy(x: -CGFloat(range.x), y: CGFloat(range.y + range.height)); context.scaleBy(x: 1, y: -1)
-            context.translateBy(x: transform.center.x, y: transform.center.y); context.rotate(by: transform.radians)
-            context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? 1 : -1)
-            context.interpolationQuality = transform.sampling.quality
-            context.draw(source, in: CGRect(x: -transform.size.width / 2, y: -transform.size.height / 2, width: transform.size.width, height: transform.size.height))
-            let expected = try LWLinearSurface.read(try #require(context.makeImage()), maximumBytes: range.width * range.height * 16)
             let tile = try tiled.read(range: range)
-            for (p, e) in zip(tile.surface.pixels, expected.pixels) { for c in 0..<4 { worst = max(worst, abs(p[c] - e[c])) } }
+            for (i, p) in tile.surface.pixels.enumerated() {
+                let e = whole.pixels[(range.y + i / range.width) * width + range.x + i % range.width]
+                for c in 0..<4 { worst = max(worst, abs(p[c] - e[c])) }
+            }
         }
         #expect(Double(worst) <= Self.contract.tile_parity_pointwise_abs, "\(kind): worst \(worst)")
+        guard kind != "integer", kind != "nearest-rotated" else { return }
+        // Against Core Graphics drawing the whole layer into one context, on interior samples (away from the layer's
+        // edge, where the two antialias differently) whose alpha is not tiny.
+        let context = try LWLinearSurface.context(width: width, height: height, maximumBytes: width * height * 16)
+        context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 1, y: -1)
+        context.translateBy(x: transform.center.x, y: transform.center.y); context.rotate(by: transform.radians)
+        context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? 1 : -1)
+        context.interpolationQuality = transform.sampling.quality
+        context.draw(source, in: CGRect(x: -transform.size.width / 2, y: -transform.size.height / 2, width: transform.size.width, height: transform.size.height))
+        let cg = try LWLinearSurface.read(try #require(context.makeImage()), maximumBytes: width * height * 16)
+        let toImage = LWFloatCompositor.documentToImage(source, transform: transform)
+        var far = 0.0, analytic = 0.0, compared = 0, hdr = 0
+        for y in 0..<height { for x in 0..<width {
+            let p = CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5).applying(toImage)
+            guard p.x > 6, p.y > 6, p.x < 694, p.y < 604 else { continue }
+            let a = whole.pixels[y * width + x], e = cg.pixels[y * width + x]
+            for ch in 0..<4 { far = max(far, Double(abs(a[ch] - e[ch])) / max(1, Double(abs(e[ch])))) }
+            // The continuous content at the pixel centre's image position (sample centres at +0.5).
+            let f = smooth(Float(p.x - 0.5), Float(p.y - 0.5))
+            for ch in 0..<4 { analytic = max(analytic, Double(abs(a[ch] - f[ch])) / max(1, Double(abs(f[ch])))) }
+            if a.x > 1.5 { hdr += 1 }
+            compared += 1
+        } }
+        #expect(compared > 10_000)
+        #expect(hdr > compared / 10, "\(kind): HDR samples \(hdr) of \(compared)")
+        // The resampler reproduces the continuous content (bilinear interpolation of a smooth function, and the
+        // box mean of a reduction, stay within a small fraction of its range).
+        #expect(analytic <= Self.contract.resampler_reference_relative, "\(kind): \(analytic) from the content")
+        // Core Graphics' high-quality reduction of an extended float image is not a usable reference (it returns
+        // alpha far from the content's: 0.82 where the content is 0.27); every other transform stays close to it.
+        if kind != "reduced" {
+            #expect(far <= Self.contract.resampler_reference_relative, "\(kind): \(far) from Core Graphics")
+        }
+        print("S09 placement \(kind): tiled vs whole \(worst), resampler vs content \(analytic), vs Core Graphics \(far)")
+    }
+
+    /// A plain raster layer is placed straight from its image. Placement converts the crop it reads to premultiplied
+    /// extended-linear float before resampling, so an 8-bit sRGB raster that is rotated or scaled is still interpolated
+    /// on linear samples: the result is the path every raster took before (a float plane of the whole image, then
+    /// placement of that plane), within float rounding of the plane's straight/premultiplied round trip.
+    @Test(arguments: ["8-bit rotated", "8-bit reduced", "8-bit integer", "float rotated", "float reduced"])
+    func rasterPlacementMatchesTheFloatPlanePath(_ kind: String) throws {
+        let workspace = try LWFloatWorkspace(workingSet: LWFloatWorkingSet(limit: 256 * 1024 * 1024))
+        let w = 300, h = 260
+        let source: CGImage
+        if kind.hasPrefix("8-bit") {
+            let context = try #require(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            for y in 0..<h / 4 { for x in 0..<w / 4 {
+                // Hard-edged high-contrast blocks: resampling them in encoded or linear space differs visibly.
+                let on = (x + y) % 2 == 0
+                context.setFillColor(CGColor(red: on ? 1 : 0.02, green: CGFloat(x % 7) / 6, blue: on ? 0 : 1, alpha: CGFloat(3 + y % 2) / 4))
+                context.fill(CGRect(x: x * 4, y: y * 4, width: 4, height: 4))
+            } }
+            source = try #require(context.makeImage())
+        } else {
+            source = ProceduralImage.make(width: w, height: h) { x, y in
+                SIMD4(Float((x * 7 + y * 3) % 97) / 30, Float((x + y * 5) % 89) / 70 - 0.35, Float(x % 61) / 61, 0.5 + Float((x / 9 + y / 7) % 5) / 8)
+            }
+        }
+        var transform = LayerTransform(origin: CGPoint(x: 30, y: 25), size: CGSize(width: w, height: h))
+        if kind.hasSuffix("rotated") { transform.rotation = 19; transform.origin = CGPoint(x: 41.5, y: 33.25) }
+        if kind.hasSuffix("reduced") { transform.size = CGSize(width: 177, height: 151); transform.origin = CGPoint(x: 60.4, y: 47) }
+        let id = UUID()
+        var record = ProjectLayerRecord(id: id, name: "Raster", isVisible: true, transform: transform, imageFile: id.uuidString + ".png")
+        record.blendMode = .normal
+        let doc = ProjectSnapshot(manifest: ProjectManifest(documentID: UUID(), width: 420, height: 380, activeLayerID: id, layers: [record]),
+            images: [id: ImportedImage(image: source, thumbnail: source, name: "fixture")], masks: [:])
+        let made = try LWFloatCompositor.renderPlane(doc, workspace: workspace)
+        // The path every raster took before: a float plane of the image, then placement of that plane.
+        let reference = try LWFloatCompositor.place(LWFloatCompositor.from(source, workspace: workspace), transform: transform,
+            width: 420, height: 380, workspace: workspace)
+        var worst = 0.0
+        try made.forEachTile { range in
+            let a = try made.read(range: range), b = try reference.read(range: range)
+            for (p, e) in zip(a.surface.pixels, b.surface.pixels) {
+                for c in 0..<4 { worst = max(worst, Double(abs(p[c] - e[c])) / max(1, Double(abs(e[c])))) }
+            }
+        }
+        #expect(worst <= Self.contract.raster_fast_path_relative, "\(kind): worst \(worst)")
+        print("S09 raster placement \(kind): worst \(worst)")
     }
 
     // MARK: Display conversion
@@ -310,6 +462,43 @@ enum PrecisionFixture {
             }
         }
         #expect(aboveOne && belowZero)
+    }
+
+    /// Values above the screen's EDR headroom saturate at it (as the display clips them, and inside half float's
+    /// range); values below it, and negative components, are untouched.
+    @Test func displayConversionSaturatesAtTheScreenHeadroom() throws {
+        let renderer = try #require(GPUCanvasRenderer.shared)
+        let lin = try #require(CGColorSpace(name: CGColorSpace.extendedLinearSRGB))
+        let samples: [SIMD4<Float>] = [SIMD4(4, 1.5, -0.05, 1), SIMD4(1e6, 0.5, 0.25, 1)]
+        let image = CIImage(bitmapData: samples.withUnsafeBytes { Data($0) }, bytesPerRow: samples.count * 16,
+            size: CGSize(width: samples.count, height: 1), format: .RGBAf, colorSpace: lin)
+        let texture = try #require(renderer.displayTexture(width: samples.count, height: 1))
+        let buffer = try #require(renderer.queue.makeCommandBuffer())
+        renderer.render(image, to: texture, commandBuffer: buffer, size: CGSize(width: samples.count, height: 1), target: .extendedSRGB, headroom: 2)
+        buffer.commit(); buffer.waitUntilCompleted()
+        var halves = [Float16](repeating: 0, count: samples.count * 4)
+        halves.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: samples.count * 8,
+            from: MTLRegionMake2D(0, 0, samples.count, 1), mipmapLevel: 0) }
+        let expected: [Double] = [ReferenceBlend.enc(2), ReferenceBlend.enc(1.5), ReferenceBlend.enc(-0.05), 1,
+                                  ReferenceBlend.enc(2), ReferenceBlend.enc(0.5), ReferenceBlend.enc(0.25), 1]
+        for (i, e) in expected.enumerated() {
+            #expect(abs(Double(halves[i]) - e) <= Self.contract.display_conversion_relative * max(1, abs(e)), "component \(i): \(halves[i]) vs \(e)")
+        }
+        #expect(halves.allSatisfy { $0.isFinite })
+    }
+
+    /// Moving the canvas's window to another screen re-derives its display target even when the backing scale
+    /// stays the same (no backing-property change is delivered then).
+    @Test func canvasFollowsItsWindowsScreen() throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 40, height: 40), styleMask: [.borderless], backing: .buffered, defer: false)
+        let view = MetalCanvasView(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
+        window.contentView = view
+        let expected = MetalCanvasView.target(for: window.screen)
+        view.metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: window)
+        #expect(LWDisplayTarget(colorSpace: view.metalLayer.colorspace) == expected)
+        #expect(view.headroom >= 1)
+        window.contentView = nil
     }
 
     @Test func canvasDrawableIsExtendedHalfFloat() {

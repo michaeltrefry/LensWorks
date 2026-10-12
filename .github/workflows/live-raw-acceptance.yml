@@ -7,7 +7,7 @@ permissions: {contents: read}
 jobs:
   live-raw:
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
@@ -27,7 +27,7 @@ jobs:
       - name: Run every S08 live RAW and S09 float renderer suite
         # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
         # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
-        timeout-minutes: 90
+        timeout-minutes: 60
         run: |
           suites=(FloatCameraRawTests TiledFloatCameraRawTests TiledFloatAdmissionTests FloatCoreImageProviderTests
             FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
@@ -38,9 +38,11 @@ jobs:
             "${only[@]}"
       - name: Refuse a run that executed fewer S08 tests than expected
         if: always()
-        # Swift Testing argument cases count individually. Raise S08_EXPECTED_TESTS when tests are added;
-        # a filter typo, a skipped suite or an empty bundle executes fewer and fails here.
-        env: {S08_EXPECTED_TESTS: "240"}
+        # The xcresult summary counts test functions: a parameterized Swift Testing test counts once, however
+        # many argument cases it runs (verified against a local result bundle: 14 functions, 107 argument cases).
+        # Raise S08_EXPECTED_TESTS when test functions are added; a filter typo, a skipped suite or an empty
+        # bundle executes fewer and fails here.
+        env: {S08_EXPECTED_TESTS: "257"}
         run: |
           test -d LiveRawAcceptance.xcresult
           xcrun xcresulttool get test-results summary --path LiveRawAcceptance.xcresult --format json > s08-summary.json

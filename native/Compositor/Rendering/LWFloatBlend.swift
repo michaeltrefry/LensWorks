@@ -8,15 +8,15 @@ import Accelerate
 /// This kernel keeps the editor's blend definition — the separable and non-separable formulas of
 /// the W3C Compositing specification plus Photoshop's linear/light/hard-mix/subtract/divide modes,
 /// computed in sign-mirrored encoded sRGB and composited with the general source-over equation —
-/// and reproduces Core Image for operands inside [0, 1]. Outside [0, 1]:
+/// and reproduces Core Image for operands inside [0, 1].
 ///
-/// - Arithmetic modes (Normal, Multiply, Screen, Darken, Lighten, Overlay, Hard/Soft Light,
-///   Pin Light, Difference, Exclusion) are evaluated unclamped.
-/// - Modes whose definition saturates (Color Burn/Dodge, Linear Burn/Dodge/Light, Vivid Light,
-///   Hard Mix, Subtract, Divide, and the ClipColor step of Hue/Saturation/Color/Luminosity)
-///   saturate to the union of the display range and the operands' own range,
-///   `[min(0, b, s), max(1, b, s)]`, rather than to [0, 1]. In range this is exactly the
-///   specified clamp; an HDR or negative operand is never pulled back inside [0, 1].
+/// Outside [0, 1] each mode follows a declared extended rule (`extendedRules`, mirrored in
+/// RENDERER_PRECISION_CONTRACT.json). The rules are chosen so that every continuous mode stays
+/// continuous across 0 and 1, the in-range formula is unchanged, Screen and Lighten never darken a
+/// non-negative operand, non-negative operands never give a negative result, and no finite input
+/// gives NaN or infinity. In particular the in-range polynomials of Screen, Overlay, Hard Light,
+/// Soft Light and Exclusion are not extrapolated: extrapolating them makes Screen darken HDR
+/// (3 screen 0.5 would be 2) and Exclusion or Overlay go negative for positive operands.
 ///
 /// The operator is pointwise, so any tiling of the frame gives the same samples as a whole-frame
 /// evaluation. Fully transparent sources and empty backdrops pass the other operand through
@@ -27,6 +27,45 @@ nonisolated enum LWFloatBlend {
     static let finiteLimit = Float.greatestFiniteMagnitude
 
     // MARK: Separable modes
+
+    /// The extended-range rule of every mode, in encoded values `b` (backdrop) and `s` (source).
+    /// `lo = min(0, b, s)` and `hi = max(1, b, s)` are the union of the display range and the operands.
+    static let extendedRules: [LayerBlendMode: String] = [
+        .normal: "s.",
+        .darken: "min(b, s), unclamped.",
+        .lighten: "max(b, s), unclamped.",
+        .multiply: "b * s, unclamped.",
+        .screen: "1 - (1 - b)(1 - s) while b <= 1 and s <= 1; otherwise max(b, s). Never below max(b, s) for non-negative operands; continuous at 1.",
+        .overlay: "Hard Light with the operands exchanged: HardLight(s, b).",
+        .hardLight: "s <= 0.5: 2 b s; 0.5 < s <= 1: Screen(b, 2 s - 1) with the extended Screen; s > 1: max(b, s).",
+        .softLight: "b > 1: b (above white the backdrop is kept; the in-range result at b = 1 is 1 for every s); otherwise the W3C formula, with D(b) = sqrt(b) for b > 0.25 and the cubic below.",
+        .colorBurn: "b >= 1: b; s <= 0: lo; otherwise max(lo, 1 - (1 - b) / s).",
+        .colorDodge: "b <= 0: b; s >= 1: hi; otherwise min(hi, b / (1 - s)).",
+        .linearBurn: "max(lo, b + s - 1).",
+        .linearDodge: "min(hi, b + s).",
+        .vividLight: "s <= 0.5: Color Burn(b, 2 s); otherwise Color Dodge(b, 2 s - 1), each with its extended rule.",
+        .linearLight: "clamp(b + 2 s - 1, lo, hi).",
+        .pinLight: "s <= 0.5: min(b, 2 s); otherwise max(b, 2 s - 1), unclamped.",
+        .hardMix: "b + s >= 1: hi; otherwise lo (a threshold, discontinuous by definition).",
+        .difference: "|b - s|, unclamped.",
+        .exclusion: "b + s - 2 b s while both operands are in [0, 1]; otherwise |b - s|. Never negative; continuous at 0 and 1.",
+        .subtract: "max(lo, b - s).",
+        .divide: "s > 0: min(hi, b / s); s <= 0: hi for b > 0, lo for b < 0, 0 for b = 0.",
+        .hue: "W3C SetLum(SetSat(s, Sat(b)), Lum(b)) with ClipColor to [lo, hi] instead of [0, 1].",
+        .saturation: "W3C SetLum(SetSat(b, Sat(s)), Lum(b)) with ClipColor to [lo, hi].",
+        .color: "W3C SetLum(s, Lum(b)) with ClipColor to [lo, hi].",
+        .luminosity: "W3C SetLum(b, Lum(s)) with ClipColor to [lo, hi].",
+    ]
+
+    /// Screen with its extended rule (see `extendedRules`).
+    @inline(__always) static func screen(_ b: Float, _ s: Float) -> Float {
+        b <= 1 && s <= 1 ? 1 - (1 - b) * (1 - s) : max(b, s)
+    }
+    @inline(__always) static func hardLight(_ b: Float, _ s: Float) -> Float {
+        if s <= 0.5 { return b * 2 * s }
+        if s <= 1 { return screen(b, 2 * s - 1) }
+        return max(b, s)
+    }
 
     @inline(__always) static func separable(_ mode: LayerBlendMode, _ b: Float, _ s: Float) -> Float {
         let lo = min(0, b, s), hi = max(1, b, s)
@@ -40,16 +79,12 @@ nonisolated enum LWFloatBlend {
             if s >= 1 { return hi }
             return min(hi, b / (1 - s))
         }
-        @inline(__always) func hardLight(_ b: Float, _ s: Float) -> Float {
-            if s <= 0.5 { return b * 2 * s }
-            let t = 2 * s - 1; return b + t - b * t
-        }
         switch mode {
         case .normal: return s
         case .darken: return min(b, s)
         case .lighten: return max(b, s)
         case .multiply: return b * s
-        case .screen: return b + s - b * s
+        case .screen: return screen(b, s)
         case .colorBurn: return burn(b, s)
         case .colorDodge: return dodge(b, s)
         case .linearBurn: return max(lo, b + s - 1)
@@ -57,6 +92,7 @@ nonisolated enum LWFloatBlend {
         case .hardLight: return hardLight(b, s)
         case .overlay: return hardLight(s, b)
         case .softLight:
+            if b > 1 { return b }
             if s <= 0.5 { return b - (1 - 2 * s) * b * (1 - b) }
             let d = b <= 0.25 ? ((16 * b - 12) * b + 4) * b : b.squareRoot()
             return b + (2 * s - 1) * (d - b)
@@ -65,7 +101,7 @@ nonisolated enum LWFloatBlend {
         case .pinLight: return s <= 0.5 ? min(b, 2 * s) : max(b, 2 * s - 1)
         case .hardMix: return b + s >= 1 ? hi : lo
         case .difference: return abs(b - s)
-        case .exclusion: return b + s - 2 * b * s
+        case .exclusion: return (0...1).contains(b) && (0...1).contains(s) ? b + s - 2 * b * s : abs(b - s)
         case .subtract: return max(lo, b - s)
         case .divide:
             if s > 0 { return min(hi, b / s) }
@@ -80,9 +116,12 @@ nonisolated enum LWFloatBlend {
     @inline(__always) private static func clip(_ c: SIMD3<Float>, lo: Float, hi: Float) -> SIMD3<Float> {
         let l = lum(c), n = c.min(), x = c.max(), lv = SIMD3(repeating: l)
         var r = c
-        if n < lo, l > lo { r = lv + (r - lv) * ((l - lo) / (l - n)) }
-        if x > hi, l < hi { r = lv + (r - lv) * ((hi - l) / (x - l)) }
-        return r
+        // W3C ClipColor with [lo, hi] for [0, 1]. A luminosity at the bound itself collapses to gray,
+        // as the specification's L / (L - n) factor does at L = 0.
+        if n < lo { r = l > lo && l > n ? lv + (r - lv) * ((l - lo) / (l - n)) : lv }
+        if x > hi { r = l < hi && x > l ? lv + (r - lv) * ((hi - l) / (x - l)) : lv }
+        // Mathematically inside [lo, hi] already; the clamp only absorbs float rounding of the scaling.
+        return r.clamped(lowerBound: SIMD3(repeating: lo), upperBound: SIMD3(repeating: hi))
     }
     @inline(__always) private static func setLum(_ c: SIMD3<Float>, _ l: Float, lo: Float, hi: Float) -> SIMD3<Float> {
         clip(c + SIMD3(repeating: l - lum(c)), lo: lo, hi: hi)
@@ -132,7 +171,7 @@ nonisolated enum LWFloatBlend {
 
     /// Whole buffers, for range-aligned pairs of tiles. Transfer functions run through vForce;
     /// the result equals `pixel` applied to every index.
-    static func blend(_ top: UnsafeBufferPointer<SIMD4<Float>>, over bottom: UnsafeBufferPointer<SIMD4<Float>>,
+    @_optimize(speed) static func blend(_ top: UnsafeBufferPointer<SIMD4<Float>>, over bottom: UnsafeBufferPointer<SIMD4<Float>>,
         mode: LayerBlendMode, into output: UnsafeMutableBufferPointer<SIMD4<Float>>) {
         precondition(top.count == bottom.count && output.count == top.count)
         var pending = [Int](); pending.reserveCapacity(top.count)

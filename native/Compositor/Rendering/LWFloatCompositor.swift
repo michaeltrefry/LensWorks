@@ -365,23 +365,41 @@ nonisolated extension LWFloatCompositor {
         try provider.check()
         return result
     }
+    /// A pixel copy is drawn by Core Graphics from the crop of the image under each tile. Any other transform
+    /// (rotation, scaling, flips, fractional origins) is resampled by `resampled`, whose samples depend only on
+    /// document coordinates: Core Graphics' resampling depends on the extent of the image it draws, so neither
+    /// cropping nor tiling could otherwise reproduce a whole-frame evaluation. Either way a tile reads only
+    /// the part of the layer that reaches it, charged to the working set.
     static func place(_ image: CGImage, transform: LayerTransform, width: Int, height: Int,
         workspace: LWFloatWorkspace) throws -> LWFloatPlane {
         let builder = try workspace.makeBuilder(width: width, height: height)
+        let copy = placesAsPixelCopy(image, transform: transform)
         while let range = builder.nextRange {
             try Task.checkCancellation()
             try autoreleasepool {
                 let bytes = try range.validate(frameWidth: width, frameHeight: height)
                 let lease = try workspace.workingSet.reserve(bytes * 8)
+                if !copy {
+                    try builder.append(resampled(image, transform: transform, range: range, workingSet: workspace.workingSet), at: range)
+                    withExtendedLifetime(lease) {}
+                    return
+                }
                 let context = try LWLinearSurface.context(width: range.width, height: range.height, maximumBytes: bytes)
                 context.translateBy(x: -CGFloat(range.x), y: CGFloat(range.y + range.height))
                 context.scaleBy(x: 1, y: -1)
                 context.translateBy(x: transform.center.x, y: transform.center.y)
-                context.rotate(by: transform.radians)
-                context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? 1 : -1)
+                context.scaleBy(x: 1, y: -1)
                 context.interpolationQuality = transform.sampling.quality
-                if let part = visiblePart(of: image, transform: transform, range: range) {
-                    context.draw(part.image, in: part.rect)
+                if let crop = sourceCrop(of: image, transform: transform, range: range, margin: 1) {
+                    // The decoded source the draw reads: the crop's samples at the image's own depth.
+                    let decoded = try workspace.workingSet.reserve(Int(crop.width * crop.height) * max(1, image.bitsPerPixel / 8))
+                    let part = crop.size == CGSize(width: image.width, height: image.height) ? image : image.cropping(to: crop) ?? image
+                    let w = transform.size.width, h = transform.size.height
+                    // Local space runs up from the layer's centre: the image's top row is at the rectangle's maxY.
+                    let rect = part === image ? CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+                        : CGRect(x: -w / 2 + crop.minX, y: h / 2 - crop.maxY, width: crop.width, height: crop.height)
+                    context.draw(part, in: rect)
+                    withExtendedLifetime(decoded) {}
                 }
                 guard let made = context.makeImage() else { throw ExportError.render }
                 try builder.append(LWLinearSurface.read(made, maximumBytes: bytes), at: range)
@@ -391,28 +409,109 @@ nonisolated extension LWFloatCompositor {
         return try builder.finish()
     }
 
-    /// The part of `image` that can reach `range` when `transform` places it at its own pixel size on whole-pixel
-    /// coordinates, and where that part is drawn in the layer's local space. Core Graphics reads every row of an
-    /// image it draws; cropping keeps such a tile's placement proportional to the tile rather than to the layer.
-    /// Placement is then a pixel copy, so the cropped draw is identical to the uncropped one. Any other transform
-    /// (rotation, scaling, flips, fractional origins) resamples, and Core Graphics' resampling depends on the
-    /// drawn image's extent, so those draw the whole image as before. Nil when the layer does not reach the range.
-    static func visiblePart(of image: CGImage, transform: LayerTransform, range: LWFloatRange) -> (image: CGImage, rect: CGRect)? {
+    /// Document pixels (y down) → continuous image pixel coordinates (origin at the image's top-left corner,
+    /// sample centres at +0.5): the inverse of placement.
+    static func documentToImage(_ image: CGImage, transform: LayerTransform) -> CGAffineTransform {
         let w = transform.size.width, h = transform.size.height
-        let full = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
-        guard transform.radians == 0, !transform.flipX, !transform.flipY, w == CGFloat(image.width), h == CGFloat(image.height),
-              transform.origin.x == transform.origin.x.rounded(), transform.origin.y == transform.origin.y.rounded() else { return (image, full) }
-        // Image pixels, top row first, in document pixels relative to the layer's origin; one pixel of margin.
-        let crop = CGRect(x: CGFloat(range.x) - transform.origin.x, y: CGFloat(range.y) - transform.origin.y,
-                          width: CGFloat(range.width), height: CGFloat(range.height))
-            .insetBy(dx: -1, dy: -1).intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard !crop.isNull, crop.width >= 1, crop.height >= 1 else { return nil }
-        if crop.width >= CGFloat(image.width) && crop.height >= CGFloat(image.height) { return (image, full) }
-        guard let part = image.cropping(to: crop) else { return (image, full) }
-        // Local space runs up from the layer's centre: the image's top row is at the rectangle's maxY.
-        return (part, CGRect(x: full.minX + crop.minX, y: full.maxY - crop.maxY, width: crop.width, height: crop.height))
+        let place = CGAffineTransform(translationX: transform.center.x, y: transform.center.y)
+            .rotated(by: transform.radians).scaledBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? 1 : -1)
+        let sx = CGFloat(image.width) / w, sy = CGFloat(image.height) / h
+        return place.inverted().concatenating(CGAffineTransform(a: sx, b: 0, c: 0, d: -sy, tx: w * sx / 2, ty: h * sy / 2))
     }
 
+    /// The rectangle of image pixels whose samples can reach `range` under `transform`: the range inverse-mapped
+    /// into the image, widened by `margin` pixels and clipped to it. Nil when the layer does not reach the range.
+    static func sourceCrop(of image: CGImage, transform: LayerTransform, range: LWFloatRange, margin: CGFloat) -> CGRect? {
+        guard transform.size.width > 0, transform.size.height > 0, image.width > 0, image.height > 0 else { return nil }
+        let toImage = documentToImage(image, transform: transform)
+        let corners = [CGPoint(x: range.x, y: range.y), CGPoint(x: range.x + range.width, y: range.y),
+                       CGPoint(x: range.x, y: range.y + range.height), CGPoint(x: range.x + range.width, y: range.y + range.height)]
+            .map { $0.applying(toImage) }
+        let xs = corners.map(\.x), ys = corners.map(\.y)
+        let reach = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+            .insetBy(dx: -margin, dy: -margin)
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        guard [reach.minX, reach.minY, reach.maxX, reach.maxY].allSatisfy(\.isFinite) else { return bounds }
+        let crop = reach.integral.intersection(bounds)
+        guard !crop.isNull, crop.width >= 1, crop.height >= 1 else { return nil }
+        return crop
+    }
+
+    /// The part of `image` one tile's resampling reads (see `sourceCrop`).
+    static func visiblePart(of image: CGImage, transform: LayerTransform, range: LWFloatRange) -> CGImage? {
+        guard let crop = sourceCrop(of: image, transform: transform, range: range, margin: 2) else { return nil }
+        return crop.size == CGSize(width: image.width, height: image.height) ? image : image.cropping(to: crop)
+    }
+
+    /// `range` of the layer `image` placed by `transform`, resampled from premultiplied float samples. Each output
+    /// pixel is computed from its document coordinates alone (Nearest: the sample under its centre; Smooth: bilinear
+    /// at its centre; High quality: the mean of n×n bilinear taps spread over its footprint in the image, n the
+    /// reduction factor rounded up, so reductions are filtered rather than aliased). Samples outside the image are
+    /// transparent. Only the crop under the range is decoded, so any tiling gives the same samples as a whole frame.
+    @_optimize(speed) static func resampled(_ image: CGImage, transform: LayerTransform, range: LWFloatRange, workingSet: LWFloatWorkingSet) throws -> LWLinearSurface {
+        let bytes = try range.validate(frameWidth: range.x + range.width, frameHeight: range.y + range.height)
+        var output = [SIMD4<Float>](repeating: .zero, count: range.width * range.height)
+        guard let crop = sourceCrop(of: image, transform: transform, range: range, margin: 2) else {
+            return try LWLinearSurface(width: range.width, height: range.height, pixels: output, maximumBytes: bytes)
+        }
+        let cw = Int(crop.width), ch = Int(crop.height), cx = Int(crop.minX), cy = Int(crop.minY)
+        // The crop decoded at its own depth, and its premultiplied float samples.
+        let decoded = try workingSet.reserve(cw * ch * (16 + max(1, image.bitsPerPixel / 8)))
+        let part = crop.size == CGSize(width: image.width, height: image.height) ? image : image.cropping(to: crop) ?? image
+        let context = try LWLinearSurface.context(width: cw, height: ch, maximumBytes: cw * ch * 16)
+        context.interpolationQuality = .none
+        context.draw(part, in: CGRect(x: 0, y: 0, width: cw, height: ch))
+        guard let data = context.data else { throw ExportError.render }
+        let samples = UnsafeBufferPointer(start: data.bindMemory(to: SIMD4<Float>.self, capacity: cw * ch), count: cw * ch)
+        let m = documentToImage(image, transform: transform)
+        let a = Double(m.a), b = Double(m.b), c = Double(m.c), d = Double(m.d), tx = Double(m.tx), ty = Double(m.ty)
+        let iw = image.width, ih = image.height
+        @inline(__always) func at(_ i: Int, _ j: Int) -> SIMD4<Float> {
+            guard i >= 0, j >= 0, i < iw, j < ih else { return .zero }
+            let li = i - cx, lj = j - cy
+            guard li >= 0, lj >= 0, li < cw, lj < ch else { return .zero } // Never reached: the crop covers every tap.
+            return samples[lj * cw + li]
+        }
+        @inline(__always) func bilinear(_ u: Double, _ v: Double) -> SIMD4<Float> {
+            let fu = u - 0.5, fv = v - 0.5, i = Int(fu.rounded(.down)), j = Int(fv.rounded(.down))
+            let wx = Float(fu - Double(i)), wy = Float(fv - Double(j))
+            let top = at(i, j) * (1 - wx) + at(i + 1, j) * wx, bottom = at(i, j + 1) * (1 - wx) + at(i + 1, j + 1) * wx
+            return top * (1 - wy) + bottom * wy
+        }
+        let n: Int
+        switch transform.sampling {
+        case .high: n = max(1, min(16, Int((max((a * a + b * b).squareRoot(), (c * c + d * d).squareRoot()) - 1e-9).rounded(.up))))
+        default: n = 1
+        }
+        try Task.checkCancellation()
+        for y in 0..<range.height {
+            for x in 0..<range.width {
+                var sum = SIMD4<Float>.zero
+                for sj in 0..<n { for si in 0..<n {
+                    // Absolute document coordinates: the same position whatever range or crop is evaluated.
+                    let px = Double(range.x + x) + (Double(si) + 0.5) / Double(n), py = Double(range.y + y) + (Double(sj) + 0.5) / Double(n)
+                    let u = a * px + c * py + tx, v = b * px + d * py + ty
+                    if transform.sampling == .nearest {
+                        sum += at(Int(u.rounded(.down)), Int(v.rounded(.down)))
+                    } else {
+                        sum += bilinear(u, v)
+                    }
+                } }
+                let p = n == 1 ? sum : sum / Float(n * n), alpha = min(1, max(0, p.w))
+                output[y * range.width + x] = alpha > 0 ? SIMD4(p.x / p.w, p.y / p.w, p.z / p.w, alpha) : .zero
+            }
+        }
+        withExtendedLifetime(decoded) {}
+        withExtendedLifetime(context) {}
+        return try LWLinearSurface(width: range.width, height: range.height, pixels: output, maximumBytes: bytes)
+    }
+
+    /// Native size on whole-pixel coordinates without rotation or flip: placement copies samples.
+    static func placesAsPixelCopy(_ image: CGImage, transform: LayerTransform) -> Bool {
+        transform.radians == 0 && !transform.flipX && !transform.flipY
+            && transform.size.width == CGFloat(image.width) && transform.size.height == CGFloat(image.height)
+            && transform.origin.x == transform.origin.x.rounded() && transform.origin.y == transform.origin.y.rounded()
+    }
     /// Full document graph, with immutable range-backed intermediates. Preview and
     /// export share this path; output size changes are downstream of development.
     ///
@@ -425,6 +524,7 @@ nonisolated extension LWFloatCompositor {
         try LayerHierarchy.validate(snapshot.manifest.layers); try LiveMaskGraph.validate(snapshot.manifest.layers)
         try LWFloatPlane.validateExtent(width: snapshot.manifest.width, height: snapshot.manifest.height)
         var snapshot = snapshot, documentOrigin = CGPoint.zero
+        let documentHeight = snapshot.manifest.height
         // A folder or adjustment mask without its own placement covers the whole document.
         var documentMaskFrame = LayerTransform(origin: .zero, size: CGSize(width: snapshot.manifest.width, height: snapshot.manifest.height))
         if let region {
@@ -468,6 +568,8 @@ nonisolated extension LWFloatCompositor {
             }
             // A plain raster places its image once; converting it to a whole local plane first
             // would materialize the full layer even when only one region of it is evaluated.
+            // Placement converts the samples it reads to premultiplied extended-linear float before any resampling,
+            // exactly as converting the image to a plane first would, so the result is the same.
             if asset.linearPlane == nil, snapshot.mask(for: record)?.isEnabled != true, record.effects?.visible.isEmpty ?? true {
                 return try place(asset.image, transform: record.transform, width: width, height: height, workspace: workspace)
             }
@@ -508,7 +610,8 @@ nonisolated extension LWFloatCompositor {
         func adjusted(_ old: LWFloatPlane, layer: ProjectLayerRecord, clipping: LWFloatPlane?, keepAlpha: Bool) throws -> LWFloatPlane {
             guard let adjustment = layer.adjustment else { throw ProjectError.invalid }
             var made = try adjustment.apply(old, region: CGRect(x: documentOrigin.x, y: documentOrigin.y, width: CGFloat(width), height: CGFloat(height)), scale: 1,
-                makeBuilder: { try workspace.makeBuilder(width: $0, height: $1) }, makeScratchDirectory: { try workspace.makeScratchDirectory() }, fileOwner: workspace)
+                makeBuilder: { try workspace.makeBuilder(width: $0, height: $1) }, makeScratchDirectory: { try workspace.makeScratchDirectory() }, fileOwner: workspace,
+                documentHeight: documentHeight)
             if (layer.blendMode ?? .normal) != .normal { made = try blend(made, over: old, mode: layer.blendMode ?? .normal, workspace: workspace) }
             let newPixels = made.sampler(), clip = clipping?.sampler()
             let mask = try checkedMask(layer)?.sampler(), folder = try folderCoverage(layer)?.sampler()

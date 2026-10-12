@@ -31,9 +31,14 @@ nonisolated struct LWLinearSurface: Sendable {
     }
     func validate(maximumBytes: Int) throws {
         guard pixels.count == (try Self.extent(width:width, height:height, maximumBytes:maximumBytes)),
-            pixels.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite && $0.w.isFinite && (0...1).contains($0.w) }) else {
+            pixels.withUnsafeBufferPointer(Self.admissible) else {
             throw ProjectError.invalid
         }
+    }
+    /// Every sample finite with alpha in [0, 1].
+    @_optimize(speed) private static func admissible(_ pixels: UnsafeBufferPointer<SIMD4<Float>>) -> Bool {
+        for p in pixels where !(p.x.isFinite && p.y.isFinite && p.z.isFinite && p.w.isFinite && p.w >= 0 && p.w <= 1) { return false }
+        return true
     }
     /// Premultiplied float transport for Core Image operators. CIMotionBlur does not premultiply a
     /// straight-alpha float CGImage: it blurs the stored RGB, so hidden RGB under zero alpha leaks
@@ -62,6 +67,7 @@ nonisolated struct LWLinearSurface: Sendable {
                 provider:provider, decode:nil, shouldInterpolate:false, intent:.relativeColorimetric) else { throw ProjectError.encode }
         return image
     }
+    static let negligibleAlpha: Float = 1e-6
     static func render(_ image: CIImage, width: Int, height: Int, maximumBytes: Int) throws -> Self {
         let count = try extent(width:width, height:height, maximumBytes:maximumBytes)
         guard let color = CGColorSpace(name:CGColorSpace.extendedLinearSRGB) else { throw ProjectError.invalid }
@@ -75,9 +81,13 @@ nonisolated struct LWLinearSurface: Sendable {
         // Core Image returns premultiplied RGBA. Only this explicit boundary unpremultiplies.
         // Convolutions (motion/Gaussian blur over opaque input) sum many weighted alphas in float
         // and can land a few ulps above one; that rounding is clamped, a real excess still refuses.
+        // Coverage below `negligibleAlpha` is convolution residue (a kernel's tail, float rounding of
+        // weights summing to zero): its color is premultiplied rounding error, and dividing by it can
+        // overflow. Such a pixel contributes less than 1e-6 of its color to any composite, below float
+        // precision of the result, so it is made transparent.
         for index in pixels.indices {
             let alpha = pixels[index].w
-            if alpha > 0 {
+            if alpha >= Self.negligibleAlpha {
                 pixels[index].x /= alpha; pixels[index].y /= alpha; pixels[index].z /= alpha
                 if alpha > 1, alpha <= 1 + 1e-4 { pixels[index].w = 1 }
             }
@@ -223,13 +233,13 @@ nonisolated extension LWLinearSurface {
 /// Every collection value and Slice retains the actual private allocation owner.
 nonisolated struct LWSourceOwnedLinearSurface: Sendable {
     fileprivate final class Storage: @unchecked Sendable {
-        private let buffer:UnsafeMutablePointer<SIMD4<Float>>
+        fileprivate let buffer:UnsafeMutablePointer<SIMD4<Float>>
         let count:Int
         let charge:LWFloatWorkingSet.Lease
         private init(buffer:UnsafeMutablePointer<SIMD4<Float>>,count:Int,charge:LWFloatWorkingSet.Lease) {
             self.buffer=buffer;self.count=count;self.charge=charge
         }
-        static func make(count:Int,charge:LWFloatWorkingSet.Lease,pixel:(Int)throws->SIMD4<Float>) throws -> Storage {
+        @_optimize(speed) static func make(count:Int,charge:LWFloatWorkingSet.Lease,pixel:(Int)throws->SIMD4<Float>) throws -> Storage {
             let buffer=UnsafeMutablePointer<SIMD4<Float>>.allocate(capacity:count)
             var initialized=0
             do {
@@ -260,6 +270,10 @@ nonisolated struct LWSourceOwnedLinearSurface: Sendable {
         func index(after index:Int)->Int { index+1 }
         func index(before index:Int)->Int { index-1 }
         subscript(index:Int)->SIMD4<Float> { storage[index] }
+        /// The immutable samples in place, so copies are one memcpy rather than an element walk.
+        func withContiguousStorageIfAvailable<R>(_ body:(UnsafeBufferPointer<SIMD4<Float>>) throws -> R) rethrows -> R? {
+            try body(UnsafeBufferPointer(start:storage.buffer,count:storage.count))
+        }
         static func ==(lhs:Self,rhs:Self)->Bool { lhs.elementsEqual(rhs) }
         static func ==(lhs:Self,rhs:[SIMD4<Float>])->Bool { lhs.elementsEqual(rhs) }
         static func ==(lhs:[SIMD4<Float>],rhs:Self)->Bool { lhs.elementsEqual(rhs) }

@@ -324,9 +324,13 @@ nonisolated extension LayerAdjustment {
 nonisolated extension LayerAdjustment {
     /// All retained adjustment-layer kinds, operating on full float samples. Display conversion
     /// happens only after the graph, never between persisted adjustment nodes.
+    ///
+    /// `documentHeight`: the height of the document `region` is cut from, at `scale` 1. Spatial
+    /// operators then filter the region at its document position (see `LWFloatCoreImage.render`).
     func apply(_ plane: LWFloatPlane, region: CGRect? = nil, scale: CGFloat = 1,
                makeBuilder: @escaping (Int, Int) throws -> LWFloatPlane.Builder,
-               makeScratchDirectory: @escaping () throws -> URL, fileOwner: LWFloatWorkspace? = nil) throws -> LWFloatPlane {
+               makeScratchDirectory: @escaping () throws -> URL, fileOwner: LWFloatWorkspace? = nil,
+               documentHeight: Int? = nil) throws -> LWFloatPlane {
         typealias K = FloatImageAdjustmentPixels
         try LWFloatPlane.validateExtent(width: plane.width, height: plane.height)
         try Task.checkCancellation()
@@ -352,7 +356,8 @@ nonisolated extension LayerAdjustment {
         case .gaussianBlur, .motionBlur:
             return try workspace.coreImage(plane, gaussianSigma: kind == .gaussianBlur ? gaussianRadius * Double(scale) : nil,
                 motionRadius: resolvedMotionDistance * Double(scale) * PixelFilter.motionRadiusPerPixel,
-                motionAngle: resolvedMotionAngle * .pi / 180)
+                motionAngle: resolvedMotionAngle * .pi / 180,
+                origin: documentHeight.map { scale == 1 ? CGPoint(x: region.minX, y: CGFloat($0) - region.maxY) : .zero } ?? .zero)
         default: break
         }
         return try workspace.rgb(plane) { linear, x, y in
