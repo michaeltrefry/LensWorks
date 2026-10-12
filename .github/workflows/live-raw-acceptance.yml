@@ -35,12 +35,16 @@ jobs:
         # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
         # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
         timeout-minutes: 60
+        env:
+          # HDRMergeCatalogTests drives a real catalog; development uses the app's installed helpers.
+          TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
+          TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
         run: |
           suites=(FloatCameraRawTests TiledFloatCameraRawTests TiledFloatAdmissionTests FloatCoreImageProviderTests
             FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
             LiveRawSampleAllAdmissionTests LiveRawAcceptanceTests
             FloatRendererPrecisionTests FloatTileResidencyTests
-            LayerGraphPixelTests LayerGraphOperationTests HDRMergeTests)
+            LayerGraphPixelTests LayerGraphOperationTests HDRMergeTests HDRMergeCatalogTests)
           only=(); for suite in "${suites[@]}"; do only+=("-only-testing:CompositorTests/$suite"); done
           ./scripts/ci/xcodebuild_test.sh LiveRawAcceptance.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app -parallel-testing-enabled NO \
             "${only[@]}"
@@ -50,7 +54,7 @@ jobs:
         # many argument cases it runs (verified against a local result bundle: 14 functions, 107 argument cases).
         # Raise S08_EXPECTED_TESTS when test functions are added; a filter typo, a skipped suite or an empty
         # bundle executes fewer and fails here.
-        env: {S08_EXPECTED_TESTS: "291"}
+        env: {S08_EXPECTED_TESTS: "292"}
         run: |
           test -d LiveRawAcceptance.xcresult
           xcrun xcresulttool get test-results summary --path LiveRawAcceptance.xcresult --format json > s08-summary.json
