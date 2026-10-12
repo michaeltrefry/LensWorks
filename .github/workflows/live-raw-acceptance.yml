@@ -25,12 +25,12 @@ jobs:
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-app CODE_SIGN_IDENTITY=-
           test -x .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/LensWorksDecodeWorker
       - name: Run every S08 live RAW suite
-        # LiveRawSourceMatrixTests skips itself unless LW_S08_RAW_MATRIX names the licensed,
-        # hash-bound camera matrix, which cannot be checked in; every other suite always runs.
+        # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
+        # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
         timeout-minutes: 60
         run: |
           suites=(FloatCameraRawTests TiledFloatCameraRawTests TiledFloatAdmissionTests FloatCoreImageProviderTests
-            FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests LiveRawSourceMatrixTests
+            FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
             LiveRawSampleAllAdmissionTests LiveRawAcceptanceTests)
           only=(); for suite in "${suites[@]}"; do only+=("-only-testing:CompositorTests/$suite"); done
           ./scripts/ci/xcodebuild_test.sh LiveRawAcceptance.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app -parallel-testing-enabled NO \
