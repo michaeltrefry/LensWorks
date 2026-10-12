@@ -330,7 +330,7 @@ struct LWModelDownloadSheet: View {
                     Button((plan?.remainingBytes ?? 0) < (plan?.totalBytes ?? 0) ? "Resume" : "Download") {
                         center.startDownload(modelID)
                     }
-                    .keyboardShortcut(.defaultAction)
+                    .registeredCommandShortcut(.apply, role: .defaultAction)
                     .disabled(!accepted || plan == nil)
                     .accessibilityIdentifier("LensWorks.download.start")
                 }
