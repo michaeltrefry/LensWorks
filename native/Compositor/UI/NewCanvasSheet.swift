@@ -22,14 +22,13 @@ struct NewCanvasSheet: View {
                     Spacer()
                     // Preset sizes, tucked into a More button; the size in use is checked.
                     Menu {
-                        Picker("Size", selection: preset) {
-                            Text("Custom").tag(CanvasPreset?.none)
-                            ForEach(CanvasPreset.groups.indices, id: \.self) { group in
-                                Divider()
-                                ForEach(CanvasPreset.groups[group]) { Text($0.title).tag(CanvasPreset?.some($0)) }
+                        LensWorksCommandToggle(.canvasPreset, argument: "custom", title: "Custom", isOn: presetChoice(nil))
+                        ForEach(CanvasPreset.groups.indices, id: \.self) { group in
+                            Divider()
+                            ForEach(CanvasPreset.groups[group]) { choice in
+                                LensWorksCommandToggle(.canvasPreset, argument: choice.id, title: choice.title, isOn: presetChoice(choice))
                             }
                         }
-                        .pickerStyle(.inline).labelsHidden()
                     } label: {
                         // Three dots drawn exactly (a rotated symbol keeps its sideways width), flush with the fields'
                         // right edge; the frame keeps it easy to click.
@@ -63,7 +62,7 @@ struct NewCanvasSheet: View {
                     if let onCreate { onCreate(w, h) }
                     else { session.createDocument(width: w, height: h, emptyLayer: true) }
                 }
-                .configuredNativeShortcut(.return).buttonStyle(.borderedProminent)
+                .registeredCommandShortcut(.apply).buttonStyle(.borderedProminent)
                 .disabled(!valid).accessibilityIdentifier("createCanvas")
             }
         }
@@ -86,6 +85,11 @@ struct NewCanvasSheet: View {
     private var preset: Binding<CanvasPreset?> {
         Binding(get: { CanvasPreset.all.first { String($0.width) == width && String($0.height) == height } },
                 set: { if let chosen = $0 { width = String(chosen.width); height = String(chosen.height) } })
+    }
+
+    /// One preset size's checkable menu item: checked while it is the size in use; choosing it fills the fields in.
+    private func presetChoice(_ choice: CanvasPreset?) -> Binding<Bool> {
+        Binding(get: { preset.wrappedValue == choice }, set: { if $0 { preset.wrappedValue = choice } })
     }
 
     static func clipboardDimensions(_ pasteboard: NSPasteboard = .general) -> (width: Int, height: Int)? {

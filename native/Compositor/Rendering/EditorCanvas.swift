@@ -785,38 +785,35 @@ final class CanvasView: NSView {
             guard let self, let window = self.window, event.windowNumber == window.windowNumber,
                   !(window.firstResponder is NSText) else { return originalEvent }
             if self.handleKeyboardZoom(event) { return nil }
-            guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
-                  let key = event.charactersIgnoringModifiers else { return originalEvent }
+            guard let command = LensWorksCommandDispatcher.resolveKey(ShortcutChord(event), in: [.canvas], effective: false) else { return originalEvent }
+            switch command.id {
             // Shift-+ / Shift-− step the active layer's blend mode, in every tool.
-            if event.modifierFlags.contains(.shift), key == "+" || key == "_" || event.keyCode == 24 || event.keyCode == 27 {
-                self.session.cycleBlendMode(forward: key == "+" || event.keyCode == 24)
+            case .blendMode:
+                self.session.cycleBlendMode(forward: command.argument == "next")
                 return nil
-            }
             // Brush size ([ ]) and hardness (Shift-[ ]); with focus on the canvas its own keyDown handles them.
-            guard (self.session.tool.isBrushTool), self.session.levels == nil, window.firstResponder !== self,
-                  ["[", "]", "{", "}"].contains(key) else { return originalEvent }
-            if key == "[" || key == "]" { self.session.changeBrushSize(increase: key == "]") }
-            else { self.session.changeBrushHardness(increase: key == "}") }
-            return nil
+            case .brushSize, .brushHardness:
+                guard self.session.tool.isBrushTool, self.session.levels == nil, window.firstResponder !== self else { return originalEvent }
+                if command.id == .brushSize { self.session.changeBrushSize(increase: command.argument == "increase") }
+                else { self.session.changeBrushHardness(increase: command.argument == "increase") }
+                return nil
+            default: return originalEvent
+            }
         }
     }
 
-    /// Handle default zoom shortcuts on keyDown, including key repeat, without waiting for a menu command.
+    /// Handle the zoom shortcuts on keyDown, including key repeat, without waiting for a menu command. ⌘+ (Shift-=)
+    /// zooms in as ⌘= does; the keypad's + and − arrive as = and −.
     private func handleKeyboardZoom(_ event: NSEvent) -> Bool {
-        guard session.document != nil, event.modifierFlags.contains(.command),
-              event.modifierFlags.intersection([.control, .option]).isEmpty else { return false }
-
-        let zoomInIsDefault = ShortcutDefinition.all.first(where: { $0.isMenu && $0.title == "Zoom In" })
-            .map { ShortcutSettings.shared.chord($0) == $0.original } ?? true
-        let zoomOutIsDefault = ShortcutDefinition.all.first(where: { $0.isMenu && $0.title == "Zoom Out" })
-            .map { ShortcutSettings.shared.chord($0) == $0.original } ?? true
-
-        // '+' is '=' with Shift on a Mac keyboard; the keypad has its own key codes.
-        let isZoomIn = [24, 69].contains(event.keyCode)
-        let isZoomOut = [27, 78].contains(event.keyCode) && !event.modifierFlags.contains(.shift)
-        guard (isZoomIn && zoomInIsDefault) || (isZoomOut && zoomOutIsDefault) else { return false }
-
-        session.zoomKeyboard(by: isZoomIn ? 1 : -1)
+        guard session.document != nil else { return false }
+        let chord = ShortcutChord(event)
+        var command = LensWorksCommandDispatcher.resolveKey(chord, in: [.menu], effective: true)?.id
+        if command != .zoomIn, command != .zoomOut, chord.modifiers & 8 != 0, chord.key == "=" {
+            command = LensWorksCommandRegistry.resolve(ShortcutChord(chord.key, chord.modifiers & ~8), in: [.menu], effective: true)?.id
+            if command != .zoomIn { command = nil }
+        }
+        guard command == .zoomIn || command == .zoomOut else { return false }
+        session.zoomKeyboard(by: command == .zoomIn ? 1 : -1)
         synchronizeDisplay()
         return true
     }
@@ -2166,130 +2163,134 @@ final class CanvasView: NSView {
                      anchor: convert(event.locationInWindow, from: nil))
     }
     override func keyDown(with event: NSEvent) {
-        let physicalKey = event.keyCode
+        let physicalKey = event.keyCode // command-audit: allow the held Temporary Hand key's release is matched by physical key
         guard let event = ShortcutSettings.shared.canvasEvent(event) else { return }
         if handleKeyboardZoom(event) { return }
-        if event.keyCode == 53, textBoxAnchor != nil { textBoxAnchor = nil; textBoxRect = nil; needsDisplay = true; return }
-        if event.keyCode == 53, session.textDraft != nil { session.cancelText(); return }
+        let chord = ShortcutChord(event)
+        // Every canvas key is a registered command; the press is resolved against the default bindings because
+        // canvasEvent has already translated a custom chord back to its default.
+        let command = LensWorksCommandDispatcher.resolveKey(chord, in: [.canvas], effective: false)
+        let id = command?.id
+        if id == .cancel, textBoxAnchor != nil { textBoxAnchor = nil; textBoxRect = nil; needsDisplay = true; return }
+        if id == .cancel, session.textDraft != nil { session.cancelText(); return }
         // A drag session swallows the flagsChanged that says Option was let go, which left the canvas thinking it
         // was still held — and with it the Eyedropper standing in for the Brush. Every key press re-reads it.
         optionHeld = event.modifierFlags.contains(.option)
-        if [51, 117].contains(event.keyCode), event.modifierFlags.intersection([.command, .control, .option, .shift]) == .shift {
+        if LensWorksCommandRegistry.resolve(chord, in: [.menu], effective: false)?.id == .contentAwareFill {
             if session.canContentAwareFill { session.beginFilter(.contentAwareFill) }
             return
         }
         if let edit = session.levels {
-            if event.keyCode == 53 { session.cancelLevels(); return }
-            if [36, 76].contains(event.keyCode) { Task { await session.commitLevels() }; return }
-            if event.charactersIgnoringModifiers?.lowercased() == "p", event.modifierFlags.contains(.option) {
-                session.updateLevels(edit.settings, preview: !edit.preview); return
-            }
-            if event.keyCode != 49 { super.keyDown(with: event); return }
+            if id == .cancel { session.cancelLevels(); return }
+            if id == .apply { Task { await session.commitLevels() }; return }
+            if id == .levelsPreview { session.updateLevels(edit.settings, preview: !edit.preview); return }
+            if id != .temporaryHand { super.keyDown(with: event); return }
         }
         if session.brushStroke != nil || session.warpStroke != nil {
-            if event.keyCode == 53 && !session.isProjectBusy { session.cancelBrush(); synchronizeDisplay() }
+            if id == .cancel && !session.isProjectBusy { session.cancelBrush(); synchronizeDisplay() }
             return
         }
-        if session.lassoDraft != nil, [53, 36, 76, 51, 117].contains(event.keyCode) {
-            if event.keyCode == 53 { session.cancelLasso() }
-            else if [36, 76].contains(event.keyCode) { session.finishLasso() }
+        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        let step = Self.step(command?.argument)
+        if session.lassoDraft != nil, id == .cancel || id == .apply || id == .canvasDelete {
+            if id == .cancel { session.cancelLasso() }
+            else if id == .apply { session.finishLasso() }
             else { session.removeLastLassoPoint() }
             synchronizeDisplay()
             refreshLassoCursor()
-        } else if session.shapeDraft != nil, event.keyCode == 53 {
+        } else if session.shapeDraft != nil, id == .cancel {
             session.cancelShape()
             synchronizeDisplay()
-        } else if session.gradientEdit != nil, event.keyCode == 53 {
+        } else if session.gradientEdit != nil, id == .cancel {
             gradientDrag = nil
             session.cancelGradient()
-        } else if session.gradientEdit != nil, [36, 76].contains(event.keyCode) {
+        } else if session.gradientEdit != nil, id == .apply {
             gradientDrag = nil
             Task { await session.commitGradient() }
-        } else if session.tool == .crop, event.keyCode == 53 {
+        } else if session.tool == .crop, id == .cancel {
             cropDrag = nil
             session.cancelCrop()
-        } else if session.tool == .crop, [36, 76].contains(event.keyCode) {
+        } else if session.tool == .crop, id == .apply {
             cropDrag = nil
             Task { await session.commitCrop() }
-        } else if event.keyCode == 53, session.guideDrag != nil {
+        } else if id == .cancel, session.guideDrag != nil {
             session.cancelGuideDrag()
             guideDragging = false
-        } else if event.keyCode == 53, session.transformEdit != nil {
+        } else if id == .cancel, session.transformEdit != nil {
             transformDrag = nil
             session.cancelTransform()
-        } else if [36, 76].contains(event.keyCode), session.transformEdit != nil {
+        } else if id == .apply, session.transformEdit != nil {
             transformDrag = nil
             session.commitTransform()
-        } else if session.selection?.isEmpty == false, session.lassoDraft == nil, [123, 124, 125, 126].contains(event.keyCode),
-                  event.modifierFlags.contains(.command), event.modifierFlags.intersection([.control, .option]).isEmpty {
+        } else if session.selection?.isEmpty == false, session.lassoDraft == nil, id == .movePixels, let step {
             // Cmd-arrow moves the selected pixels in any tool; Shift for 10 px.
-            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            let dx: CGFloat = event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0
-            let dy: CGFloat = event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0
-            Task { await session.nudgePixels(dx: dx, dy: dy); synchronizeDisplay() }
-        } else if session.tool.isSelectionTool, session.lassoDraft == nil, session.selection?.isEmpty == false,
-                  [123, 124, 125, 126].contains(event.keyCode),
-                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            session.nudgeSelection(dx: event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0,
-                                   dy: event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0)
-        } else if session.tool == .move, [123, 124, 125, 126].contains(event.keyCode),
-                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-            let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            session.nudgeLayer(dx: event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0,
-                               dy: event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0)
-        } else if (event.keyCode == 51 || event.keyCode == 117),
-           event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            Task { await session.nudgePixels(dx: step.dx, dy: step.dy); synchronizeDisplay() }
+        } else if session.tool.isSelectionTool, session.lassoDraft == nil, session.selection?.isEmpty == false, id == .nudge, let step {
+            session.nudgeSelection(dx: step.dx, dy: step.dy)
+        } else if session.tool == .move, id == .nudge, let step {
+            session.nudgeLayer(dx: step.dx, dy: step.dy)
+        } else if id == .canvasDelete, plain {
             session.deleteKeyPressed()
-        } else if event.keyCode == 48, session.textDraft == nil, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
+        } else if id == .cycleToolMode, session.textDraft == nil {
             // Tab switches the current tool's mode (Rectangle/Ellipse, Paint/Erase, and so on).
             session.cycleToolMode()
             refreshLassoCursor()
             updateBrushCursor()
-        } else if event.keyCode == 49 {
+        } else if id == .temporaryHand {
             panPhysicalKey = physicalKey
             spaceHeld = true
             updateBrushCursor()
             window?.invalidateCursorRects(for: self)
-        } else if event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "x": session.swapPaletteColors()
-            case "d": session.resetPaletteColors()
-            case "b": session.selectTool(.brush); session.brushMode = .paint
-            case "e": session.selectTool(.brush); session.brushMode = .erase
-            case "j": session.selectTool(.spotHealing)
-            case "s": session.selectTool(.cloneStamp)
-            case "t": session.selectTool(.type)
-            case "g": session.selectTool(.gradient)
-            case "u":
-                if event.modifierFlags.contains(.shift), session.tool == .shape { session.toggleShapeKind() }
-                else { session.selectTool(.shape) }
-            case "i": session.selectTool(.eyedropper)
+        } else if plain, let command {
+            switch command.id {
+            case .swapColors: session.swapPaletteColors()
+            case .resetColors: session.resetPaletteColors()
+            case .brushTool: session.selectTool(.brush); session.brushMode = .paint
+            case .eraserTool: session.selectTool(.brush); session.brushMode = .erase
+            case .spotHealingTool: session.selectTool(.spotHealing)
+            case .cloneStampTool: session.selectTool(.cloneStamp)
+            case .typeTool: session.selectTool(.type)
+            case .gradientTool: session.selectTool(.gradient)
+            case .shapeTool: session.selectTool(.shape)
+            case .cycleShapeKind:
+                if session.tool == .shape { session.toggleShapeKind() } else { session.selectTool(.shape) }
+            case .eyedropperTool: session.selectTool(.eyedropper)
             // M chooses the Marquee in whichever shape it was last set to; the shape is switched in the tool
             // bar. Ignoring a repeat keeps holding the key from doing anything odd.
-            case "m": if !event.isARepeat { session.pressMarqueeKey(); refreshLassoCursor() }
-            case "w": if !event.isARepeat { session.pressWandKey(); refreshLassoCursor() }
+            case .marqueeTool: if !event.isARepeat { session.pressMarqueeKey(); refreshLassoCursor() }
+            case .magicTool: if !event.isARepeat { session.pressWandKey(); refreshLassoCursor() }
             // L chooses the Lasso the same way; Freehand/Polygonal is switched in the tool bar.
-            case "l": if !event.isARepeat { session.pressLassoKey(); refreshLassoCursor() }
-            case let key? where Int(key) != nil && session.usesOpacityKeys:
-                session.typeOpacityDigit(Int(key) ?? 0)
-            case "[" where session.tool.isBrushTool: session.changeBrushSize(increase: false)
-            case "]" where session.tool.isBrushTool: session.changeBrushSize(increase: true)
-            // Shift turns [ and ] into { and }.
-            case "{" where session.tool.isBrushTool: session.changeBrushHardness(increase: false)
-            case "}" where session.tool.isBrushTool: session.changeBrushHardness(increase: true)
-            case "a": session.selectTool(.idle)
-            case "r": session.selectTool(.blur)
-            case "c": session.selectTool(.crop)
-            case "v": session.selectTool(.move)
-            case "h": session.selectTool(.hand)
-            case "z": session.selectTool(.zoom)
+            case .lassoTool: if !event.isARepeat { session.pressLassoKey(); refreshLassoCursor() }
+            case .opacityDigit where session.usesOpacityKeys: session.typeOpacityDigit(Int(command.argument ?? "") ?? 0)
+            case .brushSize where session.tool.isBrushTool: session.changeBrushSize(increase: command.argument == "increase")
+            case .brushHardness where session.tool.isBrushTool: session.changeBrushHardness(increase: command.argument == "increase")
+            case .selectTool: session.selectTool(.idle)
+            case .blurTool: session.selectTool(.blur)
+            case .cropTool: session.selectTool(.crop)
+            case .moveTool: session.selectTool(.move)
+            case .handTool: session.selectTool(.hand)
+            case .zoomTool: session.selectTool(.zoom)
             default: super.keyDown(with: event)
             }
         } else { super.keyDown(with: event) }
     }
+    /// A registered nudge or pixel-move step ("left.10") as an offset.
+    static func step(_ argument: String?) -> (dx: CGFloat, dy: CGFloat)? {
+        guard let parts = argument?.split(separator: "."), parts.count == 2, let value = Double(parts[1]) else { return nil }
+        let amount = CGFloat(value)
+        switch parts[0] {
+        case "left": return (-amount, 0)
+        case "right": return (amount, 0)
+        case "up": return (0, -amount)
+        case "down": return (0, amount)
+        default: return nil
+        }
+    }
     override func keyUp(with event: NSEvent) {
-        if event.keyCode == panPhysicalKey || (panPhysicalKey == nil && event.keyCode == 49) {
+        // Releasing the key that started the held Temporary Hand command (whatever it is now bound to) ends it.
+        let releasesHand = panPhysicalKey.map { $0 == event.keyCode } // command-audit: allow matches the physical key recorded at the registered press
+            ?? (LensWorksCommandRegistry.resolve(ShortcutChord(event), in: [.canvas], effective: false)?.id == .temporaryHand)
+        if releasesHand {
             panPhysicalKey = nil
             spaceHeld = false
             updateBrushCursor()

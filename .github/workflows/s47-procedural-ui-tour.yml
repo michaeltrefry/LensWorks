@@ -27,6 +27,12 @@ jobs:
           # The three S38 UI tests and the S05 organization UI test each need their own empty private working folder.
           python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s38-fixtures" --seed 25316
           mkdir -m 700 "$RUNNER_TEMP/s38-fixtures/WorkingVersions-3" "$RUNNER_TEMP/s38-fixtures/WorkingVersions-4"
+      - name: Audit menu items and shortcuts against the command registry (source)
+        # Fails naming any keyboard shortcut, key handler or menu, context-menu or pull-down item that bypasses
+        # native/Compositor/Commands. The live-menu half runs after the build.
+        run: |
+          python3 -m unittest scripts.tests.test_command_registry_audit
+          python3 scripts/ci/command_registry_audit.py native/Compositor
       - name: Build source-bound owned helpers and UI-test scheme
         run: |
           # The embedded inference runtime builds incrementally in the persistent runner cache.
@@ -35,6 +41,11 @@ jobs:
           test -x .build/rust-catalog/release/lensworks-decode-worker
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
+      - name: Audit the live menus and shortcut table against the command registry
+        timeout-minutes: 10
+        run: |
+          ./scripts/ci/xcodebuild_test.sh CommandAudit.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO \
+            -only-testing:CompositorTests/CommandAuditTests
       - name: Run the 100k-photo, organization, offline relink, command registry and S38 native tests
         timeout-minutes: 30
         env:
@@ -101,3 +112,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with: {name: native-tests, path: NativeTests.xcresult, if-no-files-found: ignore, retention-days: 7}
+      - name: Upload command audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: command-audit, path: CommandAudit.xcresult, if-no-files-found: ignore, retention-days: 7}

@@ -53,9 +53,9 @@ struct TransformInspector: View {
           // which they never are. Left in place unseen, so Escape and Return still reach a drag in progress.
           let pending = session.transformEdit?.persistent == true
           HStack(spacing: 12) {
-              Button("Cancel") { session.cancelTransform() }.configuredNativeShortcut(.escape)
+              Button("Cancel") { session.cancelTransform() }.registeredCommandShortcut(.cancel)
                   .disabled(session.transformEdit == nil)
-              Button("Apply") { session.commitTransform() }.configuredNativeShortcut(.return)
+              Button("Apply") { session.commitTransform() }.registeredCommandShortcut(.apply)
                   .disabled(session.transformEdit == nil).accessibilityIdentifier("applyTransform")
           }
           .opacity(pending ? 1 : 0).allowsHitTesting(pending).accessibilityHidden(!pending)

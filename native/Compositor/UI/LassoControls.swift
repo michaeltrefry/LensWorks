@@ -225,12 +225,12 @@ struct SelectionAmountSheet: View {
             Divider()
             HStack {
                 Button("Cancel") { session.selectionAmountOperation = nil }
-                    .configuredNativeShortcut(.escape)
+                    .registeredCommandShortcut(.cancel)
                 Spacer()
                 Button("OK") {
                     if let amount { session.confirmSelectionAmount(amount) }
                 }
-                .configuredNativeShortcut(.return).buttonStyle(.borderedProminent)
+                .registeredCommandShortcut(.apply).buttonStyle(.borderedProminent)
                 .disabled(amount == nil)
             }
         }

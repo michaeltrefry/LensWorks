@@ -17,7 +17,7 @@ struct NavigationToolHeader: View {
                     .multilineTextAlignment(.trailing)
                     .focused($editingZoom)
                     .onSubmit { releaseFocus() }
-                    .onExitCommand { releaseFocus() }
+                    .registeredExitCommand { releaseFocus() }
                     .onChange(of: editingZoom) { _, focused in if !focused { applyZoom() } }
                     .arrowSteps(editing: editingZoom, stepper: stepper,
                                 value: { Double(zoomText.filter { $0.isNumber || $0 == "." }) ?? Double(session.viewport.zoom * 100) },

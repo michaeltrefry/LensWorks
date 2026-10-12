@@ -283,7 +283,7 @@ private struct OverflowTabsPill: View {
 }
 
 /// Clicking the overflow pill opens its menu just below it, as a pop-up button does.
-private struct OverflowMenuAnchor: NSViewRepresentable {
+struct OverflowMenuAnchor: NSViewRepresentable {
     let label: String
     let items: () -> [(title: String, action: () -> Void)]
     func makeNSView(context: Context) -> AnchorView { AnchorView() }
@@ -302,18 +302,22 @@ private struct OverflowMenuAnchor: NSViewRepresentable {
         private func showMenu() {
             let entries = items()
             guard !entries.isEmpty else { return }
+            makeMenu(entries).popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.maxY + 4 : -4), in: self)
+        }
+        /// The overflow pull-down: one registered Show Project Tab item per hidden tab.
+        func makeMenu(_ entries: [(title: String, action: () -> Void)]) -> NSMenu {
             actions = entries.map(\.action)
             let menu = NSMenu()
             for (index, entry) in entries.enumerated() {
-                let item = NSMenuItem(title: entry.title, action: #selector(choose(_:)), keyEquivalent: "")
-                item.target = self
+                let item = LensWorksCommandRegistry.menuItem(.selectProjectTab, argument: String(index), title: entry.title, target: self, action: #selector(choose(_:)))
                 item.tag = index
                 menu.addItem(item)
             }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.maxY + 4 : -4), in: self)
+            return menu
         }
-        @objc private func choose(_ item: NSMenuItem) {
-            if actions.indices.contains(item.tag) { actions[item.tag]() }
+        @objc func choose(_ item: NSMenuItem) {
+            guard actions.indices.contains(item.tag) else { return }
+            LensWorksCommandDispatcher.perform(.init(.selectProjectTab, String(item.tag))) { actions[item.tag]() }
         }
     }
 }

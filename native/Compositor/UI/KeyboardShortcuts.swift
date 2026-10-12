@@ -5,26 +5,6 @@ struct ShortcutChord: Codable, Equatable, Hashable {
     var key: String
     var modifiers: Int
     init(_ key: String, _ modifiers: Int = 0) { self.key = key; self.modifiers = modifiers }
-    // Stable stored bits: Command, Option, Control, Shift.
-    init(_ event: NSEvent) {
-        let flags = event.modifierFlags
-        modifiers = (flags.contains(.command) ? 1 : 0) | (flags.contains(.option) ? 2 : 0)
-            | (flags.contains(.control) ? 4 : 0) | (flags.contains(.shift) ? 8 : 0)
-        switch event.keyCode {
-        case 51, 117: key = "\u{7f}"
-        case 36, 76: key = "\r"
-        case 53: key = "\u{1b}"
-        case 48: key = "\t"
-        case 49: key = " "
-        case 123: key = "\u{f702}"
-        case 124: key = "\u{f703}"
-        case 125: key = "\u{f701}"
-        case 126: key = "\u{f700}"
-        default:
-            let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
-            key = ["{": "[", "}": "]", "+": "=", "_": "-" ][typed] ?? typed
-        }
-    }
     var eventModifiers: EventModifiers {
         var flags: EventModifiers = []
         if modifiers & 1 != 0 { flags.insert(.command) }
@@ -60,100 +40,68 @@ struct ShortcutChord: Codable, Equatable, Hashable {
     }
 }
 
+/// One key binding from the command registry: every shortcut the app answers is a registered command's binding.
 struct ShortcutDefinition: Identifiable {
-    let title: String
-    let group: String
-    let original: ShortcutChord
-    var commandID: LensWorksCommandID? = nil
-    var id: String { commandID?.rawValue ?? "\(group):\(title)" }
-    var isMenu: Bool { group == "Menus" }
+    let commandID: LensWorksCommandID
+    let binding: LensWorksCommandBinding
+    var title: String { binding.title }
+    var scope: LensWorksShortcutScope { binding.scope }
+    var group: String { scope.rawValue }
+    var argument: String? { binding.argument }
+    var original: ShortcutChord { ShortcutChord(binding.chord.key, binding.chord.modifiers) }
+    var id: String { LensWorksCommandInvocation(commandID, argument).identifier }
+    /// The key saved custom shortcuts used before every binding became a registered command.
+    var legacyID: String { group + ":" + title }
+    var isMenu: Bool { scope == .menu }
 
-    static let all: [ShortcutDefinition] = {
-        func entry(_ title: String, _ key: String, _ modifiers: Int = 0, menu: Bool = false, commandID: LensWorksCommandID? = nil) -> ShortcutDefinition {
-            .init(title: title, group: menu ? "Menus" : "Canvas & Layers", original: ShortcutChord(key, modifiers), commandID: commandID)
-        }
-        var result: [ShortcutDefinition] = [
-            entry("Hide/Show Layer", "h", 9, menu: true, commandID: .visibility),
-            entry("Undo", "z", 1, menu: true), entry("Redo", "z", 9, menu: true),
-            entry("New Canvas", "n", 1, menu: true), entry("Open Project", "o", 1, menu: true),
-            entry("Save", "s", 1, menu: true), entry("Save As", "s", 9, menu: true),
-            entry("Export PNG", "e", 9, menu: true), entry("Export JPEG", "s", 11, menu: true),
-            entry("Close Project", "w", 1, menu: true), entry("Fit Canvas", "0", 1, menu: true),
-            entry("Actual Pixels", "1", 1, menu: true), entry("Zoom In", "=", 1, menu: true),
-            entry("Zoom Out", "-", 1, menu: true), entry("Show Transform Controls", "h", 1, menu: true),
-            entry("Hide Compositor", "h", 3, menu: true), entry("Cut", "x", 1, menu: true),
-            entry("Copy", "c", 1, menu: true), entry("Copy Merged", "c", 9, menu: true),
-            entry("Paste", "v", 1, menu: true), entry("Fill with Foreground", "\u{7f}", 2, menu: true),
-            entry("Fill with Background", "\u{7f}", 1, menu: true), entry("Content-Aware Fill", "\u{7f}", 8, menu: true),
-            entry("Select All", "a", 1, menu: true), entry("Deselect", "d", 1, menu: true),
-            entry("Inverse Selection", "i", 9, menu: true), entry("Select Subject", "a", 3, menu: true),
-            entry("Curves", "m", 1, menu: true), entry("Levels", "l", 1, menu: true),
-            entry("Hue/Saturation", "u", 1, menu: true), entry("Invert Pixels / Mask", "i", 1, menu: true),
-            entry("Canvas Size", "c", 3, menu: true), entry("Image Size", "i", 3, menu: true),
-            entry("Transform Layer / Selection", "t", 1, menu: true), entry("Duplicate / Layer via Copy", "j", 1, menu: true),
-            entry("Toggle Clipping Mask", "g", 3, menu: true), entry("Group Layers", "g", 1, menu: true),
-            entry("Ungroup Layers", "g", 9, menu: true),
-            entry("New Blank Layer", "n", 9, menu: true), entry("Move Layer Up", "]", 1, menu: true),
-            entry("Move Layer Down", "[", 1, menu: true), entry("Merge Layers", "e", 1, menu: true),
-            entry("Show Grid", "'", 1, menu: true), entry("Show Guides", ";", 1, menu: true),
-            entry("Show Rulers", "r", 1, menu: true), entry("Snap", ";", 9, menu: true),
-            entry("Lock Guides", ";", 3, menu: true)
-        ]
-        for (title, key) in [("Select tool", "a"), ("Move / Transform tool", "v"), ("Hand tool", "h"),
-            ("Zoom tool", "z"), ("Brush tool", "b"), ("Eraser", "e"), ("Spot Healing", "j"),
-            ("Clone Stamp", "s"), ("Type tool", "t"), ("Gradient tool", "g"), ("Shape tool", "u"),
-            ("Eyedropper tool", "i"), ("Marquee / cycle shape", "m"), ("Magic", "w"),
-            ("Lasso / cycle mode", "l"), ("Blur / Smudge / Liquify", "r"), ("Crop tool", "c"),
-            ("Swap foreground/background", "x"), ("Reset colors", "d"), ("Cycle tool mode", "\t"),
-            ("Temporary Hand tool (hold)", " "), ("Delete selection / layer / effect / lasso point", "\u{7f}"),
-            ("Apply current canvas operation", "\r"), ("Cancel current canvas operation", "\u{1b}"),
-            ("Decrease brush size", "["), ("Increase brush size", "]")] {
-            result.append(entry(title, key))
-        }
-        result += [entry("Decrease brush hardness", "[", 8), entry("Increase brush hardness", "]", 8),
-                   entry("Previous blend mode", "-", 8), entry("Next blend mode", "=", 8),
-                   entry("Cycle shape kind", "u", 8)]
-        for digit in 0...9 { result.append(entry("Opacity digit \(digit) (type two for exact %)", String(digit))) }
-        for (direction, key) in [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")] {
-            result += [entry("Nudge \(direction) 1 px", key), entry("Nudge \(direction) 10 px", key, 8),
-                       entry("Move selected pixels \(direction) 1 px", key, 1), entry("Move selected pixels \(direction) 10 px", key, 9)]
-        }
-        result.append(.init(title: "Finish editing text", group: "Text Editing", original: ShortcutChord("\r", 1)))
-        for (title, key) in [("Decrease tracking", "\u{f702}"), ("Increase tracking", "\u{f703}"),
-                             ("Decrease leading", "\u{f700}"), ("Increase leading", "\u{f701}")] {
-            result.append(.init(title: title, group: "Text Editing", original: ShortcutChord(key, 2)))
-            result.append(.init(title: title + " by 10", group: "Text Editing", original: ShortcutChord(key, 10)))
-        }
-        result.append(entry("Toggle Levels preview", "p", 2))
-        return result
-    }()
+    static let all: [ShortcutDefinition] = LensWorksCommandRegistry.descriptors.flatMap { descriptor in
+        descriptor.bindings.map { ShortcutDefinition(commandID: descriptor.id, binding: $0) }
+    }
 }
 
 @MainActor @Observable
 final class ShortcutSettings {
     static let shared = ShortcutSettings()
     private(set) var overrides: [String: ShortcutChord] = [:]
+    /// Saved custom shortcuts not applied at launch because they now clash with another binding, as "title (chord)".
+    private(set) var droppedOverrides: [String] = []
     @ObservationIgnored private let panel = FloatingPanelController(name: "keyboardShortcuts")
     private static let storageKey = "keyboardShortcuts.v1"
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
-           let saved = try? JSONDecoder().decode([String: ShortcutChord].self, from: data),
-           Self.problem(in: saved) == nil { overrides = saved }
+           let stored = try? JSONDecoder().decode([String: ShortcutChord].self, from: data) {
+            (overrides, droppedOverrides) = Self.applicable(Self.migrated(stored))
+            if !droppedOverrides.isEmpty { NSLog("Keyboard shortcuts: custom shortcuts not applied: %@", droppedOverrides.joined(separator: ", ")) }
+        }
+    }
+    /// The saved custom shortcuts that can still apply: each one is kept unless it clashes with the defaults or the
+    /// ones already kept (a binding added since it was saved, say), so one clash drops only that shortcut. Returns the
+    /// dropped ones as "title (chord)".
+    static func applicable(_ saved: [String: ShortcutChord]) -> (overrides: [String: ShortcutChord], dropped: [String]) {
+        var kept: [String: ShortcutChord] = [:]
+        var pending = ShortcutDefinition.all.filter { saved[$0.id] != nil }
+        // Repeat until nothing more fits, so a swap (A takes B's key, B moves on) survives in either order.
+        var progressed = true
+        while progressed {
+            progressed = false
+            pending.removeAll { definition in
+                var candidate = kept
+                candidate[definition.id] = saved[definition.id]
+                guard problem(in: candidate) == nil else { return false }
+                kept = candidate; progressed = true
+                return true
+            }
+        }
+        return (kept, pending.map { "\($0.title) (\(saved[$0.id]!.label))" })
     }
     func chord(_ definition: ShortcutDefinition) -> ShortcutChord { overrides[definition.id] ?? definition.original }
-    func menu(_ key: KeyEquivalent, modifiers: EventModifiers) -> ShortcutChord {
-        let bits = (modifiers.contains(.command) ? 1 : 0) | (modifiers.contains(.option) ? 2 : 0)
-            | (modifiers.contains(.control) ? 4 : 0) | (modifiers.contains(.shift) ? 8 : 0)
-        let original = ShortcutChord(String(key.character), bits)
-        guard let definition = ShortcutDefinition.all.first(where: { $0.isMenu && $0.original == original }) else { return original }
-        return chord(definition)
-    }
-    func native(_ key: KeyEquivalent, modifiers: EventModifiers = []) -> ShortcutChord {
-        let bits = (modifiers.contains(.command) ? 1 : 0) | (modifiers.contains(.option) ? 2 : 0)
-            | (modifiers.contains(.control) ? 4 : 0) | (modifiers.contains(.shift) ? 8 : 0)
-        let original = ShortcutChord(String(key.character), bits)
-        guard let definition = ShortcutDefinition.all.first(where: { !$0.isMenu && $0.original == original }) else { return original }
-        return chord(definition)
+    /// Saved chords keyed by the pre-registry "Group:Title" identities move to their registered command identities.
+    static func migrated(_ stored: [String: ShortcutChord]) -> [String: ShortcutChord] {
+        var result: [String: ShortcutChord] = [:]
+        for definition in ShortcutDefinition.all where definition.binding.configurable {
+            if let chord = stored[definition.id] ?? stored[definition.legacyID] { result[definition.id] = chord }
+        }
+        return result
     }
     func show() {
         panel.show(title: "Keyboard Shortcuts", content: KeyboardShortcutsSheet(settings: self))
@@ -166,8 +114,8 @@ final class ShortcutSettings {
         close()
     }
     static func problem(in values: [String: ShortcutChord]) -> String? {
-        var assigned: [ShortcutChord: String] = [:]
-        for definition in ShortcutDefinition.all {
+        var assigned: [ShortcutChord: [(scope: LensWorksShortcutScope, title: String)]] = [:]
+        for definition in ShortcutDefinition.all where definition.binding.configurable {
             let chord = values[definition.id] ?? definition.original
             guard chord.key.count == 1, (0...15).contains(chord.modifiers) else { return "Choose a single key with optional modifiers." }
             if definition.group == "Text Editing", chord.modifiers & 7 == 0 {
@@ -176,8 +124,10 @@ final class ShortcutSettings {
             if [ShortcutChord("q", 1), ShortcutChord(",", 1), ShortcutChord("m", 3)].contains(chord) {
                 return "\(chord.label) is reserved by macOS."
             }
-            if let other = assigned[chord] { return "\(chord.label) is assigned to both \(other) and \(definition.title)." }
-            assigned[chord] = definition.title
+            if let other = assigned[chord]?.first(where: { $0.scope.overlaps(definition.scope) }) {
+                return "\(chord.label) is assigned to both \(other.title) and \(definition.title)."
+            }
+            assigned[chord, default: []].append((definition.scope, definition.title))
         }
         return nil
     }
@@ -187,44 +137,31 @@ final class ShortcutSettings {
     func canvasEvent(_ event: NSEvent) -> NSEvent? {
         guard !overrides.isEmpty else { return event }
         let input = ShortcutChord(event)
-        if let definition = ShortcutDefinition.all.first(where: { $0.group == "Canvas & Layers" && chord($0) == input }) {
+        if let definition = ShortcutDefinition.all.first(where: { $0.scope == .canvas && chord($0) == input }) {
             return definition.original == input ? event : definition.original.event(like: event)
         }
-        if ShortcutDefinition.all.contains(where: { $0.group != "Text Editing" && $0.original == input && chord($0) != input }) { return nil }
+        if ShortcutDefinition.all.contains(where: { ($0.scope == .menu || $0.scope == .canvas) && $0.original == input && chord($0) != input }) { return nil }
         // Letter tool shortcuts traditionally also accept Shift. Follow the base
         // assignment unless Shift has its own explicit command (e.g. cycle shape).
         if input.modifiers == 8 {
             let plain = ShortcutChord(input.key)
-            if let definition = ShortcutDefinition.all.first(where: { !$0.isMenu && $0.original.modifiers == 0 && chord($0) == plain }) {
+            if let definition = ShortcutDefinition.all.first(where: { $0.scope == .canvas && $0.original.modifiers == 0 && chord($0) == plain }) {
                 return ShortcutChord(definition.original.key, 8).event(like: event)
             }
-            if ShortcutDefinition.all.contains(where: { !$0.isMenu && $0.original == plain && chord($0) != plain }) { return nil }
+            if ShortcutDefinition.all.contains(where: { $0.scope == .canvas && $0.original == plain && chord($0) != plain }) { return nil }
         }
         return event
     }
 
     func textEvent(_ event: NSEvent) -> NSEvent? {
         guard !overrides.isEmpty else { return event }
-        let definitions = ShortcutDefinition.all.filter { $0.group == "Text Editing" || $0.original == ShortcutChord("\u{1b}") }
+        let definitions = ShortcutDefinition.all.filter { $0.scope == .text || ($0.scope == .canvas && $0.original == ShortcutChord("\u{1b}")) }
         let input = ShortcutChord(event)
         if let definition = definitions.first(where: { chord($0) == input }) {
             return definition.original == input ? event : definition.original.event(like: event)
         }
         if definitions.contains(where: { $0.original == input && chord($0) != input }) { return nil }
         return event
-    }
-}
-
-extension View {
-    func configuredNativeShortcut(_ key: KeyEquivalent, modifiers: EventModifiers = []) -> some View {
-        let chord = ShortcutSettings.shared.native(key, modifiers: modifiers)
-        guard let first = chord.key.first else { return keyboardShortcut(key, modifiers: modifiers) }
-        return keyboardShortcut(KeyEquivalent(first), modifiers: chord.eventModifiers)
-    }
-    func configuredKeyboardShortcut(_ key: KeyEquivalent, modifiers: EventModifiers = .command) -> some View {
-        let chord = ShortcutSettings.shared.menu(key, modifiers: modifiers)
-        guard let first = chord.key.first else { return keyboardShortcut(key, modifiers: modifiers) }
-        return keyboardShortcut(KeyEquivalent(first), modifiers: chord.eventModifiers)
     }
 }
 
@@ -238,10 +175,14 @@ private struct KeyboardShortcutsSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Click a shortcut, then press its new key combination. Changes apply when you save.")
                 .foregroundStyle(.secondary)
+            if !settings.droppedOverrides.isEmpty {
+                Text("These saved shortcuts clash with newer ones and were reset to their defaults: " + settings.droppedOverrides.joined(separator: ", ") + ".")
+                    .foregroundStyle(.orange)
+            }
             TextField("Search shortcuts", text: $search).textFieldStyle(.roundedBorder)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
-                    ForEach(["Menus", "Canvas & Layers", "Text Editing"], id: \.self) { group in
+                    ForEach(["Menus", "Canvas & Layers", "Text Editing", "Catalog"], id: \.self) { group in
                         Text(group).font(.headline).padding(.top, 8)
                         ForEach(ShortcutDefinition.all.filter { $0.group == group && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }) { definition in
                             HStack {
@@ -274,8 +215,10 @@ private struct KeyboardShortcutsSheet: View {
             HStack {
                 Button("Restore Defaults") { recording = nil; draft = [:] }
                 Spacer()
-                Button("Cancel") { settings.close() }.keyboardShortcut(.cancelAction)
-                Button("Save") { settings.save(draft) }.keyboardShortcut(.defaultAction)
+                Button("Cancel") { LensWorksCommandDispatcher.perform(.init(.cancelShortcuts)) { settings.close() } }
+                    .registeredCommandShortcut(.cancelShortcuts, role: .cancelAction)
+                Button("Save") { LensWorksCommandDispatcher.perform(.init(.saveShortcuts)) { settings.save(draft) } }
+                    .registeredCommandShortcut(.saveShortcuts, role: .defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(recording != nil || ShortcutSettings.problem(in: draft) != nil)
             }

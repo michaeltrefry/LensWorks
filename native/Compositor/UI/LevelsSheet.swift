@@ -68,7 +68,7 @@ struct LevelsSheet: View {
             HStack {
                 Toggle("Preview", isOn: Binding(get: { edit?.preview ?? true }, set: {
                     session.updateLevels(settings, preview: $0)
-                })).configuredNativeShortcut("p", modifiers: .option)
+                })).registeredCommandShortcut(.levelsPreview)
                 Spacer()
                 Button("Reset") { edit?.sampleMode = nil; update { $0 = LevelsSettings() } }
             }
@@ -76,11 +76,11 @@ struct LevelsSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
             HStack {
-                Button("Cancel") { session.cancelLevels() }.configuredNativeShortcut(.escape)
+                Button("Cancel") { session.cancelLevels() }.registeredCommandShortcut(.cancel)
                 Spacer()
                 if edit?.committing == true { ProgressView().controlSize(.small) }
                 Button("OK") { Task { await session.commitLevels() } }
-                    .configuredNativeShortcut(.return).buttonStyle(.borderedProminent)
+                    .registeredCommandShortcut(.apply).buttonStyle(.borderedProminent)
             }
         }
         .padding(24).frame(width: 440).fixedSize()

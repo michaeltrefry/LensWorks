@@ -28,7 +28,7 @@ struct LayerAppearanceControls: View {
                     TextField("Opacity percent", text: $percentage)
                         .textFieldStyle(.roundedBorder).frame(width: 44).focused($focused)
                         .onSubmit { releaseFocus() }
-                        .onExitCommand { cancellingPercentage = true; cancelInteraction(); focused = false; sync() }
+                        .registeredExitCommand { cancellingPercentage = true; cancelInteraction(); focused = false; sync() }
                         .onChange(of: focused) { _, isFocused in
                             if isFocused { beginInteraction() }
                             else if cancellingPercentage { cancellingPercentage = false; sync() }
@@ -44,7 +44,7 @@ struct LayerAppearanceControls: View {
             .onAppear { sync() }
             .onChange(of: session.activeLayer?.opacity) { _, _ in if !focused { sync() } }
             .onDisappear { finishInteraction() }
-            .onExitCommand { cancelInteraction(); sync() }
+            .registeredExitCommand { cancelInteraction(); sync() }
     }
     private func beginInteraction() { interaction.begin(session: session, layerID: layerID) }
     private func finishInteraction() { interaction.finish(session: session) }

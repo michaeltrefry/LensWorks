@@ -18,9 +18,9 @@ struct EffectsSheet: View {
             HStack(spacing: 10) {
                 Spacer()
                 Button("Cancel") { session.finishEffectsEditing(commit: false) }
-                    .configuredNativeShortcut(.escape)
+                    .registeredCommandShortcut(.cancel)
                 Button("OK") { session.finishEffectsEditing(commit: true) }
-                    .configuredNativeShortcut(.return)
+                    .registeredCommandShortcut(.apply)
             }
         }
         .padding(20).frame(width: 340).fixedSize()

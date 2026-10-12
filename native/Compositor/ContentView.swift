@@ -381,7 +381,7 @@ extension View {
     /// works straight away instead of typing into the field.
     func releasesFocusOnCommit(_ session: EditorSession) -> some View {
         onSubmit { session.canvasFocusRequest += 1 }
-            .onExitCommand { session.canvasFocusRequest += 1 }
+            .registeredExitCommand { session.canvasFocusRequest += 1 }
     }
 }
 
@@ -399,10 +399,11 @@ extension View {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // Only while a field really is being edited: a field left behind (its tool bar swapped out, say) must not
             // keep taking Up and Down from the canvas, where they nudge the layer.
-            guard let self, self.editing, event.keyCode == 126 || event.keyCode == 125,
-                  NSApp.keyWindow?.firstResponder is NSTextView else { return event }
-            let amount = step * (event.modifierFlags.contains(.shift) ? 10 : 1)
-            self.change(self.value() + (event.keyCode == 126 ? amount : -amount))
+            guard let self, self.editing, NSApp.keyWindow?.firstResponder is NSTextView,
+                  let command = LensWorksCommandDispatcher.resolveKey(ShortcutChord(event), in: [.field], effective: false),
+                  command.id == .stepField, let argument = command.argument else { return event }
+            let amount = step * (argument.hasSuffix(".10") ? 10 : 1)
+            self.change(self.value() + (argument.hasPrefix("up") ? amount : -amount))
             return nil
         }
     }

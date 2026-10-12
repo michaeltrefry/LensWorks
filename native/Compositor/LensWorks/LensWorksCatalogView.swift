@@ -247,7 +247,7 @@ struct LensWorksCatalogWorkspace: View {
                             Button { Task { await catalog.enterFolder(folder) } } label: {
                                 Label(folder.name, systemImage: "folder").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(.plain).padding(.vertical, 3)
-                                .contextMenu { Button("Locate Moved Folder…") { locate(.folder(folder)) } }
+                                .contextMenu { LensWorksCommandButton(.locateFolder, argument: "\(folder.id)") { locate(.folder(folder)) } }
                         }
                         if catalog.folderNext != nil { Button("More Folders") { Task { await catalog.nextFolders() } } }
                         Toggle("Include Subfolders", isOn: Binding(get: { catalog.recursive }, set: { value in
@@ -269,11 +269,11 @@ struct LensWorksCatalogWorkspace: View {
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(.plain).padding(.vertical, 3)
                                 .contextMenu {
-                                    Button("Add Selected Photos") { Task { await action { try await catalog.setSelectedMembership(group) } } }
-                                    Button("Remove Selected Photos") { Task { await action { try await catalog.setSelectedMembership(group, remove: true) } } }
-                                    Button("Rename…") { editingGroup = group; groupName = group.name; groupPrompt = true }
-                                    Button("Move Into…") { movingGroup = group }
-                                    Button("Delete Empty Folder", role: .destructive) { Task { await action { try await catalog.deleteGroup(group) } } }
+                                    LensWorksCommandButton(.addToVirtualFolder, argument: "\(group.id)") { Task { await action { try await catalog.setSelectedMembership(group) } } }
+                                    LensWorksCommandButton(.removeFromVirtualFolder, argument: "\(group.id)") { Task { await action { try await catalog.setSelectedMembership(group, remove: true) } } }
+                                    LensWorksCommandButton(.renameVirtualFolder, argument: "\(group.id)") { editingGroup = group; groupName = group.name; groupPrompt = true }
+                                    LensWorksCommandButton(.moveVirtualFolder, argument: "\(group.id)") { movingGroup = group }
+                                    LensWorksCommandButton(.deleteVirtualFolder, argument: "\(group.id)", role: .destructive) { Task { await action { try await catalog.deleteGroup(group) } } }
                                 }
                         }
                         if catalog.groupNext != nil { Button("More Virtual Folders") { Task { await catalog.nextGroups() } } }
@@ -303,18 +303,19 @@ struct LensWorksCatalogWorkspace: View {
                             }.buttonStyle(.plain).padding(.vertical, 3)
                                 .accessibilityIdentifier("LensWorks.keyword." + keyword.path.joined(separator: "/"))
                                 .contextMenu {
+                                    let keywordID = keyword.path.joined(separator: "/")
                                     if keyword.kind == .Hierarchical {
-                                        Button("Show Nested Keywords") { Task { await action { try await catalog.enterKeyword(keyword) } } }
+                                        LensWorksCommandButton(.showNestedKeywords, argument: keywordID) { Task { await action { try await catalog.enterKeyword(keyword) } } }
                                     }
-                                    Button("Add to Selected Photos") { Task { await action { try await catalog.organize(.addKeyword(keyword.path, kind: keyword.kind)) } } }
-                                    Button("Remove from Selected Photos") { Task { await action { try await catalog.organize(.removeKeyword(keyword.path, kind: keyword.kind)) } } }
+                                    LensWorksCommandButton(.addKeyword, argument: keywordID) { Task { await action { try await catalog.organize(.addKeyword(keyword.path, kind: keyword.kind)) } } }
+                                    LensWorksCommandButton(.removeKeyword, argument: keywordID) { Task { await action { try await catalog.organize(.removeKeyword(keyword.path, kind: keyword.kind)) } } }
                                     Divider()
-                                    Button("Rename…") { editingKeyword = keyword; keywordName = keyword.name; keywordEdit = .rename }
+                                    LensWorksCommandButton(.renameKeyword, argument: keywordID) { editingKeyword = keyword; keywordName = keyword.name; keywordEdit = .rename }
                                     if keyword.kind == .Hierarchical {
-                                        Button("Move…") { editingKeyword = keyword; keywordName = keyword.path.dropLast().joined(separator: "/"); keywordEdit = .move }
+                                        LensWorksCommandButton(.moveKeyword, argument: keywordID) { editingKeyword = keyword; keywordName = keyword.path.dropLast().joined(separator: "/"); keywordEdit = .move }
                                     }
-                                    Button("Add Synonym…") { editingKeyword = keyword; keywordName = ""; keywordEdit = .synonym }
-                                    Button("Delete Keyword", role: .destructive) { Task { await action { try await catalog.deleteKeyword(keyword) } } }
+                                    LensWorksCommandButton(.addSynonym, argument: keywordID) { editingKeyword = keyword; keywordName = ""; keywordEdit = .synonym }
+                                    LensWorksCommandButton(.deleteKeyword, argument: keywordID, role: .destructive) { Task { await action { try await catalog.deleteKeyword(keyword) } } }
                                 }
                         }
                         if catalog.keywordNext != nil { Button("More Keywords") { Task { await action { try await catalog.nextKeywords() } } } }
@@ -376,13 +377,13 @@ struct LensWorksCatalogWorkspace: View {
                     .onSubmit { Task { await action { try await catalog.browse(folder: catalog.activeFolder, collection: catalog.browseOptions.collection, recursive: catalog.recursive, text: catalog.searchText) } } }
                 Text("\(catalog.selectionCount) selected").font(.caption).foregroundStyle(.secondary)
                 Menu("Sort") {
-                    Button("Sequence") { Task { await catalog.setBrowseOrder(sort: .Sequence, direction: catalog.browseOptions.direction) } }
-                    Button("Capture Time") { Task { await catalog.setBrowseOrder(sort: .Capture, direction: catalog.browseOptions.direction) } }
-                    Button("Filename") { Task { await catalog.setBrowseOrder(sort: .Filename, direction: catalog.browseOptions.direction) } }
-                    Button("Rating") { Task { await catalog.setBrowseOrder(sort: .Rating, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "sequence", title: "Sequence") { Task { await catalog.setBrowseOrder(sort: .Sequence, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "capture", title: "Capture Time") { Task { await catalog.setBrowseOrder(sort: .Capture, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "filename", title: "Filename") { Task { await catalog.setBrowseOrder(sort: .Filename, direction: catalog.browseOptions.direction) } }
+                    LensWorksCommandButton(.sortBy, argument: "rating", title: "Rating") { Task { await catalog.setBrowseOrder(sort: .Rating, direction: catalog.browseOptions.direction) } }
                     Divider()
-                    Button("Ascending") { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Ascending) } }
-                    Button("Descending") { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Descending) } }
+                    LensWorksCommandButton(.sortDirection, argument: "ascending", title: "Ascending") { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Ascending) } }
+                    LensWorksCommandButton(.sortDirection, argument: "descending", title: "Descending") { Task { await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: .Descending) } }
                 }
                 Button("Select Page") { Task { await catalog.selectCurrentPage() } }
                 Button("Clear") { Task { await catalog.clearSelection() } }
@@ -398,36 +399,42 @@ struct LensWorksCatalogWorkspace: View {
             // On the scroll view only, so toolbar controls keep their own identifiers.
             .accessibilityIdentifier("LensWorks.catalogGrid")
         }.focusable()
-            .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in Task { await catalog.moveSelection(1, range: press.modifiers.contains(.shift)) }; return .handled }
-            .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in Task { await catalog.moveSelection(-1, range: press.modifiers.contains(.shift)) }; return .handled }
-            // Lightroom-style culling keys: 0–5 rate, P/X/U flag, 6–9 label.
-            .onKeyPress(characters: CharacterSet(charactersIn: "0123456789pxuPXU"), phases: .down) { press in
-                guard press.modifiers.isEmpty || press.modifiers == .shift, !catalog.isBusy else { return .ignored }
-                switch press.characters.lowercased() {
-                case let digit where Int(digit).map({ (0...5).contains($0) }) == true: organize(.rating(UInt8(digit)!))
-                case let digit where Int(digit).map({ (6...9).contains($0) }) == true: organize(.label(Self.labels[Int(digit)! - 6]))
-                case "p": organize(.flag(.Pick))
-                case "x": organize(.flag(.Reject))
-                case "u": organize(.flag(.Unflagged))
+            // Lightroom-style culling keys: 0–5 rate, P/X/U flag, 6–9 label; the arrows move the selection.
+            .registeredCommandKeys([.catalog]) { command, press in
+                if command.id == .moveCatalogSelection {
+                    let range = command.argument?.hasPrefix("extend") == true
+                    let forward = command.argument == "next" || command.argument == "extendNext"
+                    Task { await catalog.moveSelection(forward ? 1 : -1, range: range) }
+                    return .handled
+                }
+                guard press.phase == .down, press.modifiers.isEmpty || press.modifiers == .shift, !catalog.isBusy,
+                      let argument = command.argument else { return .ignored }
+                switch command.id {
+                case .ratePhotos: organize(.rating(UInt8(argument) ?? 0))
+                case .labelPhotos: organize(.label(argument))
+                case .flagPhotos: organize(.flag(Self.flags[argument] ?? .Unflagged))
                 default: return .ignored
                 }
                 return .handled
             }
     }
+    private static let flags: [String: LWOrganizationFlag] = ["pick": .Pick, "reject": .Reject, "unflagged": .Unflagged]
     private func organize(_ change: LensWorksOrganizationChange) { Task { await action { try await catalog.organize(change) } } }
     private var organizeBar: some View {
         HStack {
             Menu("Rate") {
-                ForEach(0...5, id: \.self) { value in Button(value == 0 ? "Unrated" : String(repeating: "★", count: value)) { organize(.rating(UInt8(value))) } }
+                ForEach(0...5, id: \.self) { value in
+                    LensWorksCommandButton(.ratePhotos, argument: String(value), title: value == 0 ? "Unrated" : String(repeating: "★", count: value)) { organize(.rating(UInt8(value))) }
+                }
             }.fixedSize().accessibilityIdentifier("LensWorks.rateMenu")
             Menu("Flag") {
-                Button("Pick") { organize(.flag(.Pick)) }
-                Button("Reject") { organize(.flag(.Reject)) }
-                Button("Unflagged") { organize(.flag(.Unflagged)) }
+                LensWorksCommandButton(.flagPhotos, argument: "pick", title: "Pick") { organize(.flag(.Pick)) }
+                LensWorksCommandButton(.flagPhotos, argument: "reject", title: "Reject") { organize(.flag(.Reject)) }
+                LensWorksCommandButton(.flagPhotos, argument: "unflagged", title: "Unflagged") { organize(.flag(.Unflagged)) }
             }.fixedSize().accessibilityIdentifier("LensWorks.flagMenu")
             Menu("Label") {
-                ForEach(Self.labels, id: \.self) { label in Button(label) { organize(.label(label)) } }
-                Button("None") { organize(.label("")) }
+                ForEach(Self.labels, id: \.self) { label in LensWorksCommandButton(.labelPhotos, argument: label, title: label) { organize(.label(label)) } }
+                LensWorksCommandButton(.labelPhotos, argument: "None", title: "None") { organize(.label("")) }
             }.fixedSize().accessibilityIdentifier("LensWorks.labelMenu")
             Button("Undo", systemImage: "arrow.uturn.backward") { Task { await action { try await catalog.undoOrganization() } } }
                 .disabled(catalog.organizationUndo.isEmpty || catalog.isBusy)
@@ -440,22 +447,26 @@ struct LensWorksCatalogWorkspace: View {
             Divider().frame(height: 16)
             Menu("Filter") {
                 Menu("Rating") {
-                    Button("Any") { Task { await action { try await catalog.setFilters(rating: .some(nil)) } } }
-                    ForEach(0...5, id: \.self) { value in Button(value == 0 ? "Unrated (0)" : String(repeating: "★", count: value)) { Task { await action { try await catalog.setFilters(rating: .some(UInt8(value))) } } } }
+                    LensWorksCommandButton(.filterRating, argument: "any", title: "Any") { Task { await action { try await catalog.setFilters(rating: .some(nil)) } } }
+                    ForEach(0...5, id: \.self) { value in
+                        LensWorksCommandButton(.filterRating, argument: String(value), title: value == 0 ? "Unrated (0)" : String(repeating: "★", count: value)) { Task { await action { try await catalog.setFilters(rating: .some(UInt8(value))) } } }
+                    }
                 }
                 Menu("Flag") {
-                    Button("Any") { Task { await action { try await catalog.setFilters(flag: .some(nil)) } } }
-                    Button("Pick") { Task { await action { try await catalog.setFilters(flag: .some(.Pick)) } } }
-                    Button("Reject") { Task { await action { try await catalog.setFilters(flag: .some(.Reject)) } } }
-                    Button("Unflagged") { Task { await action { try await catalog.setFilters(flag: .some(.Unflagged)) } } }
+                    LensWorksCommandButton(.filterFlag, argument: "any", title: "Any") { Task { await action { try await catalog.setFilters(flag: .some(nil)) } } }
+                    LensWorksCommandButton(.filterFlag, argument: "pick", title: "Pick") { Task { await action { try await catalog.setFilters(flag: .some(.Pick)) } } }
+                    LensWorksCommandButton(.filterFlag, argument: "reject", title: "Reject") { Task { await action { try await catalog.setFilters(flag: .some(.Reject)) } } }
+                    LensWorksCommandButton(.filterFlag, argument: "unflagged", title: "Unflagged") { Task { await action { try await catalog.setFilters(flag: .some(.Unflagged)) } } }
                 }
                 Menu("Label") {
-                    Button("Any") { Task { await action { try await catalog.setFilters(label: .some(nil)) } } }
-                    ForEach(Self.labels, id: \.self) { label in Button(label) { Task { await action { try await catalog.setFilters(label: .some(label)) } } } }
+                    LensWorksCommandButton(.filterLabel, argument: "any", title: "Any") { Task { await action { try await catalog.setFilters(label: .some(nil)) } } }
+                    ForEach(Self.labels, id: \.self) { label in
+                        LensWorksCommandButton(.filterLabel, argument: label, title: label) { Task { await action { try await catalog.setFilters(label: .some(label)) } } }
+                    }
                 }
-                Button("Any Keyword") { Task { await action { try await catalog.setFilters(keyword: .some(nil)) } } }
+                LensWorksCommandButton(.filterAnyKeyword) { Task { await action { try await catalog.setFilters(keyword: .some(nil)) } } }
                 Divider()
-                Button("Clear Filters") { Task { await action { try await catalog.clearFilters() } } }
+                LensWorksCommandButton(.clearFilters) { Task { await action { try await catalog.clearFilters() } } }
             }.fixedSize().accessibilityIdentifier("LensWorks.filterMenu")
             Text(catalog.filterSummary.isEmpty ? "No metadata filters" : catalog.filterSummary.joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -507,7 +518,7 @@ private struct LensWorksGridCell: View {
             .background(background, in: RoundedRectangle(cornerRadius: 8))
             .onTapGesture(count: 2, perform: openEditor)
             .onTapGesture(perform: selectPhoto)
-            .contextMenu { Button("Open in Editor", action: openEditor) }
+            .contextMenu { LensWorksCommandButton(.openInEditor, argument: asset.filename, action: openEditor) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(asset.filename)
             .accessibilityValue(asset.organizationAccessibility)
@@ -642,7 +653,9 @@ private struct LensWorksCatalogRecipeControls: View {
                 }
                 Text("Catalog Rating · " + (catalog.selectedAsset?.rating.map { String($0) } ?? "Unrated")).font(.caption)
                 Menu("Catalog Rating") {
-                    ForEach(0...5, id: \.self) { value in Button(value == 0 ? "Unrated" : String(value)) { act(.rating(UInt8(value)), expected: variant) } }
+                    ForEach(0...5, id: \.self) { value in
+                        LensWorksCommandButton(.rating, argument: String(value), title: value == 0 ? "Unrated" : String(value)) { act(.rating(UInt8(value)), expected: variant) }
+                    }
                 }
             } else { Text("Loading current catalog recipe…").font(.caption) }
         }.disabled(catalog.isBusy || catalog.closingRequested)
