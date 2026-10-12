@@ -1,0 +1,76 @@
+name: Inference adapter and Swift runtime tests
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions: {contents: read}
+jobs:
+  inference:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 4
+      MACOSX_DEPLOYMENT_TARGET: "26.2"
+      # Repository variable: set to 1 once the runner service can read the model volume, so a
+      # missing or unreadable weight set fails the run instead of skipping the real-weight tests.
+      LW_REQUIRE_REAL: ${{ vars.LW_REQUIRE_REAL }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - name: Select the provisioned Python 3.12.13 interpreter
+        run: |
+          test -x /opt/homebrew/opt/python@3.12/bin/python3.12
+          echo /opt/homebrew/opt/python@3.12/libexec/bin >> "$GITHUB_PATH"
+      - name: Use the persistent runner cache for the inference build
+        # Outside the workspace (which checkout cleans) so the MLX runtime builds incrementally.
+        run: |
+          echo "LW_INFERENCE_TARGET_DIR=$HOME/.cache/lensworks-ci/inference-target" >> "$GITHUB_ENV"
+          python3 scripts/verify-dependencies.py
+      - name: Weights-free adapter tests
+        timeout-minutes: 45
+        run: CARGO_TARGET_DIR="$LW_INFERENCE_TARGET_DIR" cargo test --manifest-path adapters/inference/Cargo.toml --locked
+      - name: Locate local SceneWorks model files
+        # Real-weight runs reuse the SceneWorks Hugging Face cache on this runner; nothing is downloaded.
+        # The cache may live on another volume that macOS privacy consent keeps from the runner
+        # service; a read there blocks instead of failing, so the probe has a deadline.
+        timeout-minutes: 2
+        run: |
+          sana=$(./scripts/ci/probe_sana_weights.sh 30)
+          if [[ -n "$sana" ]]; then
+            echo "LW_INFERENCE_REAL=1" >> "$GITHUB_ENV"
+            echo "LW_INFERENCE_SANA_SPRINT_DIR=$sana" >> "$GITHUB_ENV"
+          elif [[ "$LW_REQUIRE_REAL" == 1 ]]; then
+            echo "::error::LW_REQUIRE_REAL=1 but the Sana Sprint q4 weights are not readable by this runner (missing, or the model volume needs macOS access for the runner service)."
+            exit 1
+          else
+            echo "::warning::Sana Sprint q4 weights are not readable by this runner (missing, or the model volume needs macOS access for the runner service); real-weight tests are skipped."
+          fi
+      - name: Real-weight adapter tests (serial)
+        if: env.LW_INFERENCE_REAL == '1'
+        timeout-minutes: 30
+        run: |
+          # Optional routes (CLIP, SAM2, SAM3) run when their weights exist and skip otherwise;
+          # the image job itself is required once its weights are present.
+          CARGO_TARGET_DIR="$LW_INFERENCE_TARGET_DIR" cargo test --manifest-path adapters/inference/Cargo.toml --locked \
+            --test real_weights -- --ignored --test-threads=1
+      - name: Build the app with the embedded inference runtime
+        run: |
+          ./scripts/build-native.sh
+          app=.build/xcode-app/Build/Products/Debug/LensWorks.app
+          test -f "$app/Contents/Helpers/liblensworks_inference.dylib" && test -f "$app/Contents/Resources/mlx.metallib"
+          xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' \
+            -configuration Debug -derivedDataPath .build/xcode-inference CODE_SIGN_IDENTITY=-
+      - name: GPU self-test against the signed app bundle
+        # Always runs: a steel GEMM and a Q4 quantized_matmul on the adapter's executor thread,
+        # loaded from Contents/Helpers and required to use the metallib sealed in Resources.
+        timeout-minutes: 5
+        run: python3 scripts/ci/inference_self_test.py .build/xcode-app/Build/Products/Debug/LensWorks.app
+      - name: Swift inference boundary tests
+        timeout-minutes: 30
+        # Resolves the weights outside the test host (see the script) and reports the
+        # real-weight suite as skipped when they are not readable from this runner.
+        run: ./scripts/run-inference-swift-tests.sh InferenceTests.xcresult
+      - name: Upload Swift inference test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: inference-tests, path: InferenceTests.xcresult, if-no-files-found: ignore, retention-days: 7}

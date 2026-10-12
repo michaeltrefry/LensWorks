@@ -26,3 +26,5 @@ SOFTWARE.
 
 
 LensWorks owns the copied catalog sources in engines/catalog and has no build or runtime dependency on the PhotoCatalog repository. The upstream revision in DEPENDENCIES.json records the original copy's provenance. The copied catalog and its transitive native/Rust dependency licenses remain with their sources. The Adobe DNG SDK license is included by the dependency acquisition script. Sparkle is recorded as a frozen baseline reference and is not linked; LensWorks distribution and updates require sc-24690 acceptance.
+
+The inference adapter (adapters/inference) links the SceneWorks inference macOS runtime (Apache-2.0) at the exact revision in DEPENDENCIES.json, unmodified, together with its MLX fork and transitive Rust crates; their licenses remain with their sources. Model weights are not distributed: LensWorks reads model files the user already has, under each model's own license.

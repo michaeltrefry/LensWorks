@@ -16,6 +16,16 @@ for name in ('Compositor',):
     if subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True).strip():
         raise SystemExit(f'{name}: frozen source has local changes')
 catalog_source.verify()
+# The retained inference runtime: Cargo.toml and Cargo.lock must name exactly the pinned revision.
+inference = manifest['inference']
+cargo = (root / 'adapters/inference/Cargo.toml').read_text()
+lock = (root / 'adapters/inference/Cargo.lock').read_text()
+for name, revision in (('inference', inference['revision']), ('mlx-rs', inference['mlx_rs_revision'])):
+    if f'rev = "{revision}"' not in cargo:
+        raise SystemExit(f'{name}: adapters/inference/Cargo.toml does not pin {revision}')
+pinned = [line for line in lock.splitlines() if line.startswith('source = "git+https://github.com/SceneWorks/inference')]
+if not pinned or any(not line.endswith(f'#{inference["revision"]}"') for line in pinned):
+    raise SystemExit('inference: Cargo.lock resolves a revision other than the pin')
 resolved = json.loads((root / 'native/Compositor.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved').read_text())
 sparkle = next(pin for pin in resolved['pins'] if pin['identity'] == 'sparkle')
 if sparkle['state']['revision'] != manifest['Sparkle']['revision']:
@@ -28,4 +38,4 @@ for name, expected in manifest.get('native_formulae', {}).items():
     actual = pathlib.Path('/opt/homebrew/opt', name).resolve().name
     if actual != expected:
         raise SystemExit(f'{name}: expected installed formula {expected}, found {actual}')
-print('Compositor pin, owned catalog source digest and native library revisions verified; Sparkle is a baseline reference only.')
+print('Compositor pin, inference pin, owned catalog source digest and native library revisions verified; Sparkle is a baseline reference only.')

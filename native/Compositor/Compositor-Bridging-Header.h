@@ -9,3 +9,4 @@
 #import "Rendering/DitherPixels.h"
 
 #import "../../adapters/catalog/include/LensWorksCatalog.h"
+#import "../../adapters/inference/include/LensWorksInference.h"

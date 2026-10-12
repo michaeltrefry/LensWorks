@@ -17,6 +17,10 @@ export CARGO_BUILD_JOBS=4
 export MACOSX_DEPLOYMENT_TARGET=26.2
 cargo build --manifest-path adapters/catalog/Cargo.toml --locked --release
 cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin photocatalog
+# The inference adapter is a runtime-loaded dylib (the app never links MLX). Its own target
+# directory may live outside the workspace (LW_INFERENCE_TARGET_DIR) so CI reuses the build.
+inference_target="${LW_INFERENCE_TARGET_DIR:-$PWD/.build/rust-inference}"
+CARGO_TARGET_DIR="$inference_target" cargo build --manifest-path adapters/inference/Cargo.toml --locked --release
 python3 scripts/audit-native-floor.py
 xcodebuild -project native/Compositor.xcodeproj -scheme Compositor \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app \
@@ -28,6 +32,21 @@ helpers="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpe
 mkdir -p "$helpers"
 cp "$CARGO_TARGET_DIR/release/photocatalog" "$helpers/PhotoCatalogWorker"
 cp "$CARGO_TARGET_DIR/release/lensworks-decode-worker" "$helpers/LensWorksDecodeWorker"
+# The inference runtime sits beside the helpers; its mlx.metallib is a resource, sealed by the
+# app's own signature. The adapter pins Contents/Resources/mlx.metallib strictly before any
+# Metal work, so the build machine's compiled-in metallib path is never used.
+app="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app"
+cp "$inference_target/release/liblensworks_inference.dylib" "$helpers/liblensworks_inference.dylib"
+# Exactly the metallib this library was compiled against (its embedded MLX build path).
+metallib=$(strings -a "$inference_target/release/liblensworks_inference.dylib" | awk '/^\/.*\/mlx\.metallib$/ && !found { print; found = 1 }')
+test -f "$metallib"
+rm -f "$helpers/mlx.metallib"
+cp "$metallib" "$app/Contents/Resources/mlx.metallib"
+install_name_tool -id @rpath/liblensworks_inference.dylib "$helpers/liblensworks_inference.dylib"
+codesign --force --sign - --timestamp=none "$helpers/liblensworks_inference.dylib"
 codesign --force --sign - --timestamp=none "$helpers/PhotoCatalogWorker"
 codesign --force --sign - --timestamp=none "$helpers/LensWorksDecodeWorker"
-codesign --force --sign - --timestamp=none "$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app"
+# Re-seal the app over the added helpers and resource, keeping the entitlements and code
+# signing flags (including the hardened runtime, when enabled) that Xcode signed it with.
+codesign --force --sign - --timestamp=none --preserve-metadata=entitlements,flags,runtime "$app"
+codesign --verify --strict --deep "$app"

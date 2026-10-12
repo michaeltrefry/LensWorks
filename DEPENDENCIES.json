@@ -25,8 +25,13 @@
     "status": "Frozen baseline reference only; not linked. LensWorks update integration belongs to sc-24690."
   },
   "inference": {
-    "revision": null,
-    "status": "Not integrated; sc-24678 owns qualification and pin"
+    "repository": "https://github.com/SceneWorks/inference",
+    "revision": "25bd55cdb6a56c78b07584a12150c9f5d46be439",
+    "bundle": "runtime-macos (default-features off, feature media)",
+    "mlx_rs_revision": "48ff5e78a49e0a513f1976b0b1af70f9a5305f00",
+    "adapter": "adapters/inference",
+    "ownership": "Retained SceneWorks runtime, unmodified; LensWorks owns only the adapter",
+    "selection": "The revision SceneWorks main pins for its macOS worker (runtime-macos) at qualification time"
   },
   "AdobeDNGSDK": {
     "version": "1.7.1.2724",
