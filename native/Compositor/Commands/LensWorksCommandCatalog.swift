@@ -84,6 +84,11 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case moveCatalogSelection = "catalog.selection.move", filterRating = "catalog.filter.rating"
     case filterFlag = "catalog.filter.flag", filterLabel = "catalog.filter.label"
     case filterAnyKeyword = "catalog.filter.anyKeyword", clearFilters = "catalog.filter.clear"
+    // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
+    case automationEnabled = "automation.enabled", automationShowSecret = "automation.secret.show"
+    case automationCopySecret = "automation.secret.copy", automationRegenerateSecret = "automation.secret.regenerate"
+    case automationRevokeSecret = "automation.secret.revoke", automationCopyConfiguration = "automation.configuration.copy"
+    case automationAllow = "automation.confirmation.allow", automationDecline = "automation.confirmation.decline"
 }
 nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
@@ -188,7 +193,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
         return groups.flatMap { $0 }
     }()
 
@@ -413,6 +418,17 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .filterLabel, label: "Filter by Label", menu: "Catalog Filter/Label", titles: ["Any"] + catalogLabels, parameters: choice("label", ["any"] + catalogLabels)),
         .init(id: .filterAnyKeyword, label: "Any Keyword", menu: "Catalog Filter"),
         .init(id: .clearFilters, label: "Clear Filters", menu: "Catalog Filter")
+    ]
+
+    private static let automation: [LensWorksCommandDescriptor] = [
+        .init(id: .automationEnabled, label: "Allow AI Agents to Control LensWorks", menu: "Settings/Automation"),
+        .init(id: .automationShowSecret, label: "Show Secret", menu: "Settings/Automation"),
+        .init(id: .automationCopySecret, label: "Copy Secret", menu: "Settings/Automation"),
+        .init(id: .automationRegenerateSecret, label: "Regenerate Secret", menu: "Settings/Automation"),
+        .init(id: .automationRevokeSecret, label: "Revoke Secret", menu: "Settings/Automation"),
+        .init(id: .automationCopyConfiguration, label: "Copy Client Configuration", menu: "Settings/Automation"),
+        .init(id: .automationAllow, label: "Allow", menu: "Agent Confirmation"),
+        .init(id: .automationDecline, label: "Don’t Allow", menu: "Agent Confirmation")
     ]
 
     static func menuLabel(_ label: String, reason: String?) -> String { label + (reason.map { " — " + $0 } ?? "") }

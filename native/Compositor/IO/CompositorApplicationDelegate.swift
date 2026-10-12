@@ -11,6 +11,8 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     var projects: ProjectController { workspace.current.controller }
     var showEditor: (() -> Void)?
     let catalog = LensWorksCatalog(defaults: CompositorApplicationDelegate.catalogDefaults())
+    /// Settings › Automation (MCP). Agents act on the current project tab and the open catalog.
+    lazy var automation = LensWorksAutomation(session: { [unowned self] in self.session }, catalog: { [unowned self] in self.catalog })
     /// Automation (for example a CI fixture import) can keep catalog preferences out of the
     /// app's own domain with `--lensworks-defaults-suite <name>`.
     static func catalogDefaults(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> UserDefaults {
@@ -94,6 +96,8 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     private var pinnedWindowBackdrop: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A unit-test host never serves the person's automation socket or reads their Keychain item.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil { automation.startIfEnabled() }
         LensWorksLaunchTrace.record("delegate.didFinishLaunching", details: ["windows": String(NSApp.windows.count), "visibleWindows": String(NSApp.windows.filter(\.isVisible).count)])
         // A fresh installed launch can finish with no admitted SwiftUI window.
         // Reuse the Finder-open fallback after scene registration gets its next turn.
@@ -103,6 +107,8 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
             Self.reopen()
         }
     }
+
+    func applicationWillTerminate(_ notification: Notification) { automation.stop() }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         LensWorksLaunchTrace.record("delegate.reopen", details: ["hasVisibleWindows": String(flag), "showEditorInstalled": String(showEditor != nil)])

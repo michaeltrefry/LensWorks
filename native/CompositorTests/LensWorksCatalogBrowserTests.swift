@@ -2215,12 +2215,12 @@ struct LensWorksCatalogBrowserTests {
         window.reset(); #expect(window.previous.isEmpty && window.current == nil && window.next == nil)
     }
 
-    nonisolated private struct PreviewExperimentOutcome: Codable, Sendable {
+    nonisolated struct PreviewExperimentOutcome: Codable, Sendable {
         let imageID: String
         let outcome: String
         let encodedSHA256: String?
     }
-    @MainActor private final class Fixture {
+    @MainActor final class Fixture {
         let root: URL, photos: URL, catalog: URL
         let config: LWManagedSessionConfig
         let defaults: UserDefaults

@@ -39,6 +39,7 @@ jobs:
           LW_INFERENCE_TARGET_DIR="$HOME/.cache/lensworks-ci/inference-target" ./scripts/build-native.sh
           test -x .build/rust-catalog/release/photocatalog
           test -x .build/rust-catalog/release/lensworks-decode-worker
+          test -x .build/rust-catalog/release/lensworks-mcp
           shasum -a 256 .build/rust-catalog/release/photocatalog .build/rust-catalog/release/lensworks-decode-worker
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-s47 CODE_SIGN_IDENTITY=-
       - name: Audit the live menus and shortcut table against the command registry
@@ -46,7 +47,7 @@ jobs:
         run: |
           ./scripts/ci/xcodebuild_test.sh CommandAudit.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO \
             -only-testing:CompositorTests/CommandAuditTests
-      - name: Run the 100k-photo, organization, offline relink, command registry and S38 native tests
+      - name: Run the 100k-photo, organization, offline relink, command registry, S38 and S40 automation native tests
         timeout-minutes: 30
         env:
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
@@ -54,6 +55,8 @@ jobs:
           TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE: ${{ github.workspace }}/.build/rust-catalog/release/organization_probe
           TEST_RUNNER_LW_S38_FIXTURE_ROOT: ${{ runner.temp }}/s38-fixtures
           TEST_RUNNER_LW_INFERENCE_LIBRARY: ${{ github.workspace }}/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/liblensworks_inference.dylib
+          # S40: the stdio MCP bridge the automation tests launch as an MCP client would.
+          TEST_RUNNER_LW_MCP_BRIDGE: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-mcp
         run: |
           # The 100k test seeds its catalog with the engine's organization_probe,
           # which build-native.sh does not build; use the same target and SDK.
@@ -85,6 +88,7 @@ jobs:
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/keywordRenameMoveDeleteAndSynonymsFollowNestedKeywordsAndUndo()' \
             '-only-testing:CompositorTests/LensWorksCatalogBrowserTests/offlineSourceBrowsesOrganizesAndRelinksWithoutChangingIdentity()' \
             -only-testing:CompositorTests/CommandRegistryTests \
+            -only-testing:CompositorTests/LensWorksAutomationTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
             -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \

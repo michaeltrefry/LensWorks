@@ -11,6 +11,9 @@ struct CompositorApp: App {
                     if let reason = session.commandRefusal { Text(reason).padding(8).background(.regularMaterial).accessibilityIdentifier("LensWorks.commandRefusal") }
                 }
                 .onAppear { LensWorksLaunchTrace.record("window.editor.onAppear") }
+                .sheet(item: Binding(get: { applicationDelegate.automation.pendingConfirmation }, set: { if $0 == nil { applicationDelegate.automation.resolveConfirmation(false) } })) { confirmation in
+                    LensWorksAgentConfirmationSheet(automation: applicationDelegate.automation, confirmation: confirmation)
+                }
         }
             .defaultSize(width: 1180, height: 780)
             // Files opened from Finder or dropped on the Dock icon go to the app delegate, which imports them into
@@ -285,6 +288,7 @@ struct CompositorApp: App {
                     }
                 }
             }
+        Settings { LensWorksAutomationSettingsView(automation: applicationDelegate.automation) }
     }
     private var startReason: String? {
         LensWorksCommandRegistry.unavailable(!applicationDelegate.projects.canStart, "Finish the current project operation first.")

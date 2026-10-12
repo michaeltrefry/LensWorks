@@ -42,10 +42,10 @@ info = plistlib.loads((source / 'Contents/Info.plist').read_bytes())
 executable = source / 'Contents/MacOS' / info['CFBundleExecutable']
 helpers_root = source / 'Contents/Helpers'
 helpers = sorted(helpers_root.iterdir()) if helpers_root.exists() else []
-required_helpers = {'PhotoCatalogWorker', 'LensWorksDecodeWorker'}
+required_helpers = {'PhotoCatalogWorker', 'LensWorksDecodeWorker', 'LensWorksMCP'}
 inference_library = 'liblensworks_inference.dylib'
 if {path.name for path in helpers} - {inference_library} != required_helpers or any(not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK) for path in helpers):
-    raise SystemExit('Require both regular executable PhotoCatalogWorker and LensWorksDecodeWorker helpers')
+    raise SystemExit('Require regular executable PhotoCatalogWorker, LensWorksDecodeWorker and LensWorksMCP helpers')
 # The inference runtime pins the metallib sealed in Contents/Resources (scripts/build-native.sh).
 if (helpers_root / inference_library).exists() and not (source / 'Contents/Resources/mlx.metallib').is_file():
     raise SystemExit('The inference runtime requires Contents/Resources/mlx.metallib')

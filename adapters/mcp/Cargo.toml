@@ -1,0 +1,19 @@
+[package]
+name = "lensworks-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "Stdio MCP bridge from an AI agent's MCP client to the running LensWorks app's automation socket."
+
+[lib]
+name = "lensworks_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lensworks-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to the identity adapters/catalog already ships (and its notices cover).
+serde_json = "=1.0.151"
