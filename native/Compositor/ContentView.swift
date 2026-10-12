@@ -381,7 +381,7 @@ extension View {
     /// works straight away instead of typing into the field.
     func releasesFocusOnCommit(_ session: EditorSession) -> some View {
         onSubmit { session.canvasFocusRequest += 1 }
-            .onExitCommand { session.canvasFocusRequest += 1 }
+            .registeredExitCommand { session.canvasFocusRequest += 1 }
     }
 }
 

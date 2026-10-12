@@ -60,6 +60,8 @@ struct CommandAuditTests {
         #expect(LensWorksCommandAudit.audit(menu: menu, path: "Layers Panel") == [])
         func leaves(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { $0.submenu.map(leaves) ?? ($0.isSeparatorItem ? [] : [$0]) } }
         #expect(leaves(menu).allSatisfy { $0.identifier.flatMap { LensWorksCommandInvocation(identifier: $0.rawValue) } != nil })
+        // Context menus show no key equivalents, as before the registry: Duplicate Layer is not ⌘J's Layer via Copy.
+        #expect(leaves(menu).allSatisfy { $0.keyEquivalent.isEmpty }, "\(leaves(menu).filter { !$0.keyEquivalent.isEmpty }.map(\.title))")
         let hide = try #require(leaves(menu).first { $0.identifier?.rawValue == LensWorksCommandID.visibility.rawValue })
         _ = (hide.target as? NSObject)?.perform(hide.action, with: hide)
         #expect(LensWorksCommandDispatcher.lastInvocation?.id == .visibility)
@@ -90,6 +92,13 @@ struct CommandAuditTests {
         #expect(resolve("\r", 9, [.text]) == "text.finish")
         #expect(resolve("\u{f700}", 9, [.field]) == "field.step#up.10")
         #expect(resolve("p", 2, [.canvas]) == "levels.togglePreview")
+        // ⌥P toggles the Levels preview with extra modifiers too, as it always has (⌘⌥P, ⌃⌥P, ⇧⌥P); P alone does not.
+        #expect(resolve("p", 3, [.canvas]) == "levels.togglePreview")
+        #expect(resolve("p", 6, [.canvas]) == "levels.togglePreview")
+        #expect(resolve("p", 10, [.canvas]) == "levels.togglePreview")
+        #expect(resolve("p", 0, [.canvas]) == nil)
+        #expect(resolve("\u{1b}", 0, [.field]) == "field.cancel")
+        #expect(resolve(".", 1, [.field]) == "field.cancel#commandPeriod")
         #expect(resolve("q", 0, [.canvas]) == nil)
     }
 
@@ -105,6 +114,69 @@ struct CommandAuditTests {
         #expect(session.tool == .brush && session.brushMode == .erase && LensWorksCommandDispatcher.lastInvocation == .init(.eraserTool))
         try press("V", .shift)
         #expect(session.tool == .move && LensWorksCommandDispatcher.lastInvocation == .init(.moveTool))
+    }
+
+    @Test func layersPanelShiftTabCyclesTheToolModeLikeTab() throws {
+        let session = EditorSession(); session.createDocument(width: 8, height: 8)
+        let table = LayerTableView(); table.session = session
+        func press(_ flags: NSEvent.ModifierFlags) throws {
+            table.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: 0, context: nil, characters: "\t", charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48)))
+        }
+        session.selectTool(.brush); session.brushMode = .paint
+        try press([])
+        #expect(session.brushMode == .erase && LensWorksCommandDispatcher.lastInvocation == .init(.cycleToolMode))
+        try press(.shift)
+        #expect(session.brushMode == .paint && LensWorksCommandDispatcher.lastInvocation == .init(.cycleToolMode))
+    }
+
+    @Test func fieldExitCommandsResolveToTheRegisteredCancelFieldCommand() {
+        #expect(LensWorksCommandDispatcher.resolveFieldCancel()?.id == .cancelField)
+        #expect(LensWorksCommandDispatcher.lastInvocation?.id == .cancelField)
+    }
+
+    @Test func hiddenItemsThatKeepTheirKeyEquivalentAndUnidentifiedItemsInFileMenusAreAudited() async throws {
+        let menu = try await mainMenu()
+        let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+        let hidden = NSMenuItem(title: "Rogue Hidden", action: Selector(("rogueHidden:")), keyEquivalent: "k")
+        hidden.keyEquivalentModifierMask = [.command, .option, .control]
+        hidden.isHidden = true; hidden.allowsKeyEquivalentWhenHidden = true
+        let inert = NSMenuItem(title: "Hidden Placeholder", action: Selector(("rogueInert:")), keyEquivalent: "")
+        inert.isHidden = true
+        edit.addItem(hidden); edit.addItem(inert)
+        defer { edit.removeItem(hidden); edit.removeItem(inert) }
+        let recent = try #require(item("Open Recent", in: menu)?.submenu)
+        let rogueRecent = NSMenuItem(title: "Rogue Recent Project", action: Selector(("rogueRecent:")), keyEquivalent: "")
+        recent.insertItem(rogueRecent, at: 0)
+        defer { recent.removeItem(rogueRecent) }
+        let violations = LensWorksCommandAudit.audit(mainMenu: menu)
+        #expect(violations.map(\.title).sorted() == ["Rogue Hidden", "Rogue Recent Project"], "\(violations)")
+        #expect(violations.first { $0.title == "Rogue Recent Project" }?.path == "File/Open Recent")
+        #expect(violations.first { $0.title == "Rogue Hidden" }?.problem.contains("⌃⌥⌘K") == true)
+    }
+
+    @Test func projectTabOverflowPullDownItemsAreRegisteredCommands() throws {
+        let anchor = OverflowMenuAnchor.AnchorView()
+        var chosen: Int?
+        let menu = anchor.makeMenu([("One", { chosen = 0 }), ("Two", { chosen = 1 })])
+        #expect(LensWorksCommandAudit.audit(menu: menu, path: "Project Tabs") == [])
+        anchor.choose(menu.items[1])
+        #expect(chosen == 1 && LensWorksCommandDispatcher.lastInvocation == .init(.selectProjectTab, "1"))
+        // A tab-named item without the command's identifier is a bypass even though the menu accepts any title.
+        menu.addItem(NSMenuItem(title: "Rogue Tab", action: Selector(("rogueTab:")), keyEquivalent: ""))
+        #expect(LensWorksCommandAudit.audit(menu: menu, path: "Project Tabs").map(\.title) == ["Rogue Tab"])
+    }
+
+    @Test func aSavedShortcutThatNowClashesIsDroppedAloneAndNamed() {
+        // A menu command saved on plain P before the catalog culling keys took P: only that one is dropped.
+        let saved = ["file.save": ShortcutChord("p"), "tool.brush": ShortcutChord("y"), "file.newCanvas": ShortcutChord("n", 3)]
+        #expect(ShortcutSettings.problem(in: saved) != nil)
+        let loaded = ShortcutSettings.applicable(saved)
+        #expect(loaded.overrides == ["tool.brush": ShortcutChord("y"), "file.newCanvas": ShortcutChord("n", 3)])
+        #expect(loaded.dropped == ["Save (P)"])
+        // A swap survives whichever entry comes first.
+        let swapped = ShortcutSettings.applicable(["tool.brush": ShortcutChord("v"), "tool.move": ShortcutChord("y")])
+        #expect(swapped.overrides.count == 2 && swapped.dropped.isEmpty)
     }
 
     @Test func dispatcherRefusesAnUnavailableCommandWithItsReason() {

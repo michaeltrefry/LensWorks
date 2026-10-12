@@ -116,13 +116,13 @@ struct NativeLayerList: NSViewRepresentable {
             let menu = NSMenu()
 
             // 1. Duplicate Layer
-            let duplicateItem = LensWorksCommandRegistry.menuItem(.duplicateLayer, title: "Duplicate Layer", target: self, action: #selector(duplicateLayerAction))
+            let duplicateItem = LensWorksCommandRegistry.menuItem(.duplicateLayer, title: "Duplicate Layer", target: self, action: #selector(duplicateLayerAction), showsKeyEquivalent: false)
             duplicateItem.target = self
             duplicateItem.isEnabled = validateMenuItem(duplicateItem)
             menu.addItem(duplicateItem)
 
             // 2. Rename…
-            let renameItem = LensWorksCommandRegistry.menuItem(.beginRename, title: "Rename…", target: self, action: #selector(renameLayerAction))
+            let renameItem = LensWorksCommandRegistry.menuItem(.beginRename, title: "Rename…", target: self, action: #selector(renameLayerAction), showsKeyEquivalent: false)
             renameItem.target = self
             renameItem.isEnabled = validateMenuItem(renameItem)
             menu.addItem(renameItem)
@@ -136,7 +136,7 @@ struct NativeLayerList: NSViewRepresentable {
             } else {
                 deleteTitle = "Delete Layer"
             }
-            let deleteItem = LensWorksCommandRegistry.menuItem(.deleteLayer, title: deleteTitle, target: self, action: #selector(deleteLayerAction))
+            let deleteItem = LensWorksCommandRegistry.menuItem(.deleteLayer, title: deleteTitle, target: self, action: #selector(deleteLayerAction), showsKeyEquivalent: false)
             deleteItem.target = self
             deleteItem.isEnabled = validateMenuItem(deleteItem)
             menu.addItem(deleteItem)
@@ -145,33 +145,33 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 4. Create Clipping Mask / Release Clipping Mask
             let clippingTitle = session.activeLayer?.maskSourceID != nil ? "Release Clipping Mask" : "Create Clipping Mask"
-            let clippingItem = LensWorksCommandRegistry.menuItem(.clippingMask, title: clippingTitle, target: self, action: #selector(toggleClippingMaskAction))
+            let clippingItem = LensWorksCommandRegistry.menuItem(.clippingMask, title: clippingTitle, target: self, action: #selector(toggleClippingMaskAction), showsKeyEquivalent: false)
             clippingItem.target = self
             clippingItem.isEnabled = validateMenuItem(clippingItem)
             menu.addItem(clippingItem)
 
             // 5. Group Selected Layers
-            let groupItem = LensWorksCommandRegistry.menuItem(.groupLayers, title: "Group Selected Layers", target: self, action: #selector(groupSelectedLayersAction))
+            let groupItem = LensWorksCommandRegistry.menuItem(.groupLayers, title: "Group Selected Layers", target: self, action: #selector(groupSelectedLayersAction), showsKeyEquivalent: false)
             groupItem.target = self
             groupItem.isEnabled = validateMenuItem(groupItem)
             menu.addItem(groupItem)
 
             // A folder right-clicked can be ungrouped: its layers stay where they are, and the folder goes.
             if rows[row].isGroup {
-                let ungroupItem = LensWorksCommandRegistry.menuItem(.ungroupLayers, title: "Ungroup Layers", target: self, action: #selector(ungroupLayersAction))
+                let ungroupItem = LensWorksCommandRegistry.menuItem(.ungroupLayers, title: "Ungroup Layers", target: self, action: #selector(ungroupLayersAction), showsKeyEquivalent: false)
                 ungroupItem.target = self
                 ungroupItem.isEnabled = validateMenuItem(ungroupItem)
                 menu.addItem(ungroupItem)
             }
 
             // 6. Move Out of Folder
-            let moveOutItem = LensWorksCommandRegistry.menuItem(.moveOutOfFolder, title: "Move Out of Folder", target: self, action: #selector(moveOutOfFolderAction))
+            let moveOutItem = LensWorksCommandRegistry.menuItem(.moveOutOfFolder, title: "Move Out of Folder", target: self, action: #selector(moveOutOfFolderAction), showsKeyEquivalent: false)
             moveOutItem.target = self
             moveOutItem.isEnabled = validateMenuItem(moveOutItem)
             menu.addItem(moveOutItem)
 
             // 7. Merge Down / Merge Layers / Merge Group
-            let mergeItem = LensWorksCommandRegistry.menuItem(.mergeLayers, title: session.mergeTitle, target: self, action: #selector(mergeLayersAction))
+            let mergeItem = LensWorksCommandRegistry.menuItem(.mergeLayers, title: session.mergeTitle, target: self, action: #selector(mergeLayersAction), showsKeyEquivalent: false)
             mergeItem.target = self
             mergeItem.isEnabled = validateMenuItem(mergeItem)
             menu.addItem(mergeItem)
@@ -182,11 +182,11 @@ struct NativeLayerList: NSViewRepresentable {
             // The submenu holder runs nothing itself; its items are the registered Add Mask commands.
             let addMaskItem = NSMenuItem(title: "Add Mask", action: nil, keyEquivalent: "")
             let addMaskSubmenu = NSMenu(title: "Add Mask")
-            let revealAllItem = LensWorksCommandRegistry.menuItem(.addMask, argument: "white", title: "Reveal All (White)", target: self, action: #selector(addWhiteMaskAction))
+            let revealAllItem = LensWorksCommandRegistry.menuItem(.addMask, argument: "white", title: "Reveal All (White)", target: self, action: #selector(addWhiteMaskAction), showsKeyEquivalent: false)
             revealAllItem.target = self
             revealAllItem.isEnabled = validateMenuItem(revealAllItem)
             addMaskSubmenu.addItem(revealAllItem)
-            let hideAllItem = LensWorksCommandRegistry.menuItem(.addMask, argument: "black", title: "Hide All (Black)", target: self, action: #selector(addBlackMaskAction))
+            let hideAllItem = LensWorksCommandRegistry.menuItem(.addMask, argument: "black", title: "Hide All (Black)", target: self, action: #selector(addBlackMaskAction), showsKeyEquivalent: false)
             hideAllItem.target = self
             hideAllItem.isEnabled = validateMenuItem(hideAllItem)
             addMaskSubmenu.addItem(hideAllItem)
@@ -196,20 +196,20 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 9. Enable Mask / Disable Mask
             let toggleMaskTitle = session.activeLayer?.mask?.isEnabled == false ? "Enable Mask" : "Disable Mask"
-            let toggleMaskItem = LensWorksCommandRegistry.menuItem(.toggleMask, title: toggleMaskTitle, target: self, action: #selector(toggleMaskAction))
+            let toggleMaskItem = LensWorksCommandRegistry.menuItem(.toggleMask, title: toggleMaskTitle, target: self, action: #selector(toggleMaskAction), showsKeyEquivalent: false)
             toggleMaskItem.target = self
             toggleMaskItem.isEnabled = validateMenuItem(toggleMaskItem)
             menu.addItem(toggleMaskItem)
 
             // 10. Delete Mask
-            let deleteMaskItem = LensWorksCommandRegistry.menuItem(.deleteMask, title: "Delete Mask", target: self, action: #selector(deleteMaskAction))
+            let deleteMaskItem = LensWorksCommandRegistry.menuItem(.deleteMask, title: "Delete Mask", target: self, action: #selector(deleteMaskAction), showsKeyEquivalent: false)
             deleteMaskItem.target = self
             deleteMaskItem.isEnabled = validateMenuItem(deleteMaskItem)
             menu.addItem(deleteMaskItem)
 
             // 11. Link Mask / Unlink Mask
             let linkMaskTitle = session.activeLayer?.mask?.isLinked == false ? "Link Mask" : "Unlink Mask"
-            let linkMaskItem = LensWorksCommandRegistry.menuItem(.linkMask, title: linkMaskTitle, target: self, action: #selector(toggleMaskLinkAction))
+            let linkMaskItem = LensWorksCommandRegistry.menuItem(.linkMask, title: linkMaskTitle, target: self, action: #selector(toggleMaskLinkAction), showsKeyEquivalent: false)
             linkMaskItem.target = self
             linkMaskItem.isEnabled = validateMenuItem(linkMaskItem)
             menu.addItem(linkMaskItem)
@@ -218,7 +218,7 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 12. Hide Layer / Show Layer
             let visibilityTitle = session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer"
-            let visibilityItem = LensWorksCommandRegistry.menuItem(.visibility, title: visibilityTitle, target: self, action: #selector(toggleVisibilityAction))
+            let visibilityItem = LensWorksCommandRegistry.menuItem(.visibility, title: visibilityTitle, target: self, action: #selector(toggleVisibilityAction), showsKeyEquivalent: false)
             visibilityItem.target = self
             visibilityItem.isEnabled = validateMenuItem(visibilityItem)
             menu.addItem(visibilityItem)
@@ -758,7 +758,11 @@ final class LayerTableView: NSTableView {
         guard let event = ShortcutSettings.shared.canvasEvent(event) else { return }
         let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         // The canvas keys the Layers panel answers, resolved through the registry like the canvas's own.
-        let command = LensWorksCommandDispatcher.resolveKey(ShortcutChord(event), in: [.canvas], effective: false)
+        let chord = ShortcutChord(event)
+        // Shift-Tab cycles the tool mode here as plain Tab does, as the Layers panel always has; the canvas keeps the
+        // registered chord exact.
+        let command = LensWorksCommandDispatcher.resolveKey(chord, in: [.canvas], effective: false)
+            ?? (chord == ShortcutChord("\t", 8) ? LensWorksCommandDispatcher.resolveKey(ShortcutChord("\t"), in: [.canvas], effective: false) : nil)
         let tools: [LensWorksCommandID: NavigationTool] = [.selectTool: .idle, .eyedropperTool: .eyedropper, .cropTool: .crop, .blurTool: .blur,
             .gradientTool: .gradient, .spotHealingTool: .spotHealing, .cloneStampTool: .cloneStamp, .shapeTool: .shape,
             .moveTool: .move, .handTool: .hand, .zoomTool: .zoom]
@@ -1091,8 +1095,8 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
     }
     func controlTextDidEndEditing(_ notification: Notification) { endRenaming(keeping: true) }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
-        endRenaming(keeping: false)
+        guard selector == #selector(NSResponder.cancelOperation(_:)), let invocation = LensWorksCommandDispatcher.resolveFieldCancel() else { return false }
+        LensWorksCommandDispatcher.perform(invocation) { endRenaming(keeping: false) }
         return true
     }
     @objc private func selectImage() { if let layerID { session?.selectLayerTarget(layerID, mask: false) } }

@@ -19,6 +19,9 @@ final class RecentProjects {
         }
     }
 
+    /// A project's title in File › Open Recent.
+    nonisolated static func menuTitle(_ url: URL) -> String { url.deletingPathExtension().lastPathComponent }
+
     func note(_ url: URL) {
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
         refresh()

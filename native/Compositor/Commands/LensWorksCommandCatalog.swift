@@ -70,6 +70,7 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case finishText = "text.finish", tracking = "text.tracking", leading = "text.leading"
     case stepField = "field.step", saveShortcuts = "shortcuts.save", cancelShortcuts = "shortcuts.cancel"
     case cameraRawScope = "cameraRaw.scope", selectProjectTab = "project.tab.select"
+    case cancelField = "field.cancel", canvasPreset = "file.newCanvas.preset"
     // Catalog browser.
     case locateFolder = "catalog.folder.locate", addToVirtualFolder = "catalog.virtualFolder.addSelected"
     case removeFromVirtualFolder = "catalog.virtualFolder.removeSelected"
@@ -354,11 +355,15 @@ nonisolated enum LensWorksCommandRegistry {
             ], parameters: choice("step", ["decrease.1", "decrease.10", "increase.1", "increase.10"]), undoable: true, historyOwner: .document))
         }
         rows += [
-            .init(id: .levelsPreview, label: "Toggle Levels Preview", menu: "Canvas", bindings: [bind("Toggle Levels preview", .canvas, "p", 2)]),
+            .init(id: .levelsPreview, label: "Toggle Levels Preview", menu: "Canvas", bindings: [bind("Toggle Levels preview", .canvas, "p", 2, match: .atLeast)]),
             .init(id: .stepField, label: "Step Numeric Field", menu: "Fields", bindings: [
                 bind("Step field up", .field, "\u{f700}", argument: "up.1", match: .atLeast), bind("Step field up by 10", .field, "\u{f700}", 8, argument: "up.10", match: .atLeast),
                 bind("Step field down", .field, "\u{f701}", argument: "down.1", match: .atLeast), bind("Step field down by 10", .field, "\u{f701}", 8, argument: "down.10", match: .atLeast)
             ], parameters: choice("step", ["up.1", "up.10", "down.1", "down.10"])),
+            // Escape (or ⌘.) in a focused field gives up the edit: SwiftUI's exit command and AppKit's cancelOperation.
+            .init(id: .cancelField, label: "Cancel Field Editing", menu: "Fields", bindings: [
+                bind("Cancel field editing", .field, "\u{1b}", match: .any), bind("Cancel field editing with Command-period", .field, ".", 1, argument: "commandPeriod")
+            ]),
             .init(id: .saveShortcuts, label: "Save Keyboard Shortcuts", menu: "Shortcut Editor", bindings: [bind("Save keyboard shortcuts", .dialog, "\r")]),
             .init(id: .cancelShortcuts, label: "Cancel Keyboard Shortcuts", menu: "Shortcut Editor", bindings: [bind("Cancel keyboard shortcuts", .dialog, "\u{1b}")])
         ]
@@ -366,7 +371,8 @@ nonisolated enum LensWorksCommandRegistry {
     }()
     private static let panels: [LensWorksCommandDescriptor] = [
         .init(id: .cameraRawScope, label: "Camera Raw Scope", menu: "Camera Raw Scope", titles: ["Histogram", "Vectorscope"], parameters: choice("mode", ["histogram", "vectorscope"])),
-        .init(id: .selectProjectTab, label: "Show Project Tab", menu: "Project Tabs", titleMatch: .any, parameters: reference("tab", "A project tab hidden in the tab strip's overflow menu."))
+        .init(id: .selectProjectTab, label: "Show Project Tab", menu: "Project Tabs", titleMatch: .any, parameters: reference("tab", "A project tab hidden in the tab strip's overflow menu.")),
+        .init(id: .canvasPreset, label: "New Canvas Preset Size", menu: "New Canvas/Size", titleMatch: .any, parameters: reference("preset", "A preset size in the New Canvas sheet's size menu, or Custom."))
     ]
     private static func rateBindingTitle(_ value: Int) -> String {
         switch value { case 0: "Rate Unrated"; case 1: "Rate 1 star"; default: "Rate \(value) stars" }

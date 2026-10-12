@@ -65,7 +65,7 @@ struct CompositorApp: App {
                     }
                     Menu("Open Recent") {
                         ForEach(RecentProjects.shared.urls, id: \.self) { url in
-                            LensWorksCommandButton(.openRecent, argument: url.path, title: url.deletingPathExtension().lastPathComponent) {
+                            LensWorksCommandButton(.openRecent, argument: url.path, title: RecentProjects.menuTitle(url)) {
                                 applicationDelegate.showEditor?()
                                 Task { await applicationDelegate.projects.open(url) }
                             }

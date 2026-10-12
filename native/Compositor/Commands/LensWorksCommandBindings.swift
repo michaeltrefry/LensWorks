@@ -16,6 +16,42 @@ nonisolated struct LensWorksCommandInvocation: Equatable, Sendable, CustomString
     }
 }
 
+extension ShortcutChord {
+    /// A key press in registry terms (stable bits: Command, Option, Control, Shift). The registry's binding helpers
+    /// are the one place a physical key is read; every handler resolves the resulting chord through the dispatcher.
+    init(_ event: NSEvent) {
+        let flags = event.modifierFlags
+        let modifiers = (flags.contains(.command) ? 1 : 0) | (flags.contains(.option) ? 2 : 0)
+            | (flags.contains(.control) ? 4 : 0) | (flags.contains(.shift) ? 8 : 0)
+        let key: String
+        switch event.keyCode {
+        case 51, 117: key = "\u{7f}"
+        case 36, 76: key = "\r"
+        case 53: key = "\u{1b}"
+        case 48: key = "\t"
+        case 49: key = " "
+        case 123: key = "\u{f702}"
+        case 124: key = "\u{f703}"
+        case 125: key = "\u{f701}"
+        case 126: key = "\u{f700}"
+        default:
+            let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            key = ["{": "[", "}": "]", "+": "=", "_": "-" ][typed] ?? typed
+        }
+        self.init(key, modifiers)
+    }
+}
+
+extension LensWorksCommandDispatcher {
+    /// The Cancel Field Editing command for the key press that raised an exit command or `cancelOperation(_:)`, or
+    /// nil when that press is not one of its registered keys. With no key event (an accessibility action), Escape.
+    static func resolveFieldCancel() -> LensWorksCommandInvocation? {
+        let chord = NSApp.currentEvent.flatMap { $0.type == .keyDown ? ShortcutChord($0) : nil } ?? ShortcutChord("\u{1b}")
+        guard let invocation = resolveKey(chord, in: [.field], effective: false), invocation.id == .cancelField else { return nil }
+        return invocation
+    }
+}
+
 extension LensWorksCommandRegistry {
     /// The command a key press means in these scopes. `effective` compares with the user's chords; false compares with
     /// the defaults, for handlers that already translated the press back to its default (ShortcutSettings.canvasEvent).
@@ -38,13 +74,15 @@ extension LensWorksCommandRegistry {
         return nil
     }
     /// An AppKit menu item for a registered command: its identifier names the command, and a menu binding supplies its
-    /// key equivalent, so the command audit can map every item back to the registry.
-    @MainActor static func menuItem(_ id: LensWorksCommandID, argument: String? = nil, title: String? = nil, target: AnyObject?, action: Selector?) -> NSMenuItem {
+    /// key equivalent, so the command audit can map every item back to the registry. Context menus pass
+    /// `showsKeyEquivalent: false`: their items keep the command identity but show no shortcut, as context menus do.
+    @MainActor static func menuItem(_ id: LensWorksCommandID, argument: String? = nil, title: String? = nil, target: AnyObject?, action: Selector?,
+                                    showsKeyEquivalent: Bool = true) -> NSMenuItem {
         let invocation = LensWorksCommandInvocation(id, argument)
         let item = NSMenuItem(title: title ?? descriptor(id).label, action: action, keyEquivalent: "")
         item.identifier = NSUserInterfaceItemIdentifier(invocation.identifier)
         item.target = target
-        if let definition = ShortcutDefinition.all.first(where: { $0.isMenu && $0.commandID == id && $0.argument == argument }) {
+        if showsKeyEquivalent, let definition = ShortcutDefinition.all.first(where: { $0.isMenu && $0.commandID == id && $0.argument == argument }) {
             let chord = ShortcutSettings.shared.chord(definition)
             item.keyEquivalent = chord.key
             item.keyEquivalentModifierMask = chord.cocoaModifiers
@@ -62,6 +100,13 @@ extension View {
             if let role, chord == definition.original { self.keyboardShortcut(role) }
             else { self.keyboardShortcut(KeyEquivalent(key), modifiers: chord.eventModifiers) }
         } else { self }
+    }
+    /// Escape (or ⌘.) in a focused field, resolved to the registered Cancel Field Editing command before `action` runs.
+    func registeredExitCommand(perform action: @escaping () -> Void) -> some View {
+        onExitCommand {
+            guard let invocation = LensWorksCommandDispatcher.resolveFieldCancel() else { return }
+            LensWorksCommandDispatcher.perform(invocation, action)
+        }
     }
     /// Key presses on a focused SwiftUI view, resolved through the registry before `handler` acts on them.
     func registeredCommandKeys(_ scopes: Set<LensWorksShortcutScope>, handler: @escaping (LensWorksCommandInvocation, KeyPress) -> KeyPress.Result) -> some View {
@@ -104,8 +149,8 @@ struct LensWorksCommandToggle: View {
     var title: String?
     var reason: String?
     let isOn: Binding<Bool>
-    init(_ id: LensWorksCommandID, title: String? = nil, reason: String? = nil, isOn: Binding<Bool>) {
-        invocation = .init(id); self.title = title; self.reason = reason; self.isOn = isOn
+    init(_ id: LensWorksCommandID, argument: String? = nil, title: String? = nil, reason: String? = nil, isOn: Binding<Bool>) {
+        invocation = .init(id, argument); self.title = title; self.reason = reason; self.isOn = isOn
     }
     var body: some View {
         let descriptor = LensWorksCommandRegistry.descriptor(invocation.id)
@@ -114,8 +159,8 @@ struct LensWorksCommandToggle: View {
         }))
             .disabled(reason != nil)
             .help(reason ?? "")
-        if descriptor.bindings.contains(where: { $0.scope == .menu }) {
-            toggle.registeredCommandShortcut(invocation.id)
+        if descriptor.bindings.contains(where: { $0.scope == .menu && $0.argument == invocation.argument }) {
+            toggle.registeredCommandShortcut(invocation.id, argument: invocation.argument)
         } else { toggle }
     }
 }

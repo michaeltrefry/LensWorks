@@ -5,26 +5,6 @@ struct ShortcutChord: Codable, Equatable, Hashable {
     var key: String
     var modifiers: Int
     init(_ key: String, _ modifiers: Int = 0) { self.key = key; self.modifiers = modifiers }
-    // Stable stored bits: Command, Option, Control, Shift.
-    init(_ event: NSEvent) {
-        let flags = event.modifierFlags
-        modifiers = (flags.contains(.command) ? 1 : 0) | (flags.contains(.option) ? 2 : 0)
-            | (flags.contains(.control) ? 4 : 0) | (flags.contains(.shift) ? 8 : 0)
-        switch event.keyCode {
-        case 51, 117: key = "\u{7f}"
-        case 36, 76: key = "\r"
-        case 53: key = "\u{1b}"
-        case 48: key = "\t"
-        case 49: key = " "
-        case 123: key = "\u{f702}"
-        case 124: key = "\u{f703}"
-        case 125: key = "\u{f701}"
-        case 126: key = "\u{f700}"
-        default:
-            let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
-            key = ["{": "[", "}": "]", "+": "=", "_": "-" ][typed] ?? typed
-        }
-    }
     var eventModifiers: EventModifiers {
         var flags: EventModifiers = []
         if modifiers & 1 != 0 { flags.insert(.command) }
@@ -83,14 +63,36 @@ struct ShortcutDefinition: Identifiable {
 final class ShortcutSettings {
     static let shared = ShortcutSettings()
     private(set) var overrides: [String: ShortcutChord] = [:]
+    /// Saved custom shortcuts not applied at launch because they now clash with another binding, as "title (chord)".
+    private(set) var droppedOverrides: [String] = []
     @ObservationIgnored private let panel = FloatingPanelController(name: "keyboardShortcuts")
     private static let storageKey = "keyboardShortcuts.v1"
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
            let stored = try? JSONDecoder().decode([String: ShortcutChord].self, from: data) {
-            let saved = Self.migrated(stored)
-            if Self.problem(in: saved) == nil { overrides = saved }
+            (overrides, droppedOverrides) = Self.applicable(Self.migrated(stored))
+            if !droppedOverrides.isEmpty { NSLog("Keyboard shortcuts: custom shortcuts not applied: %@", droppedOverrides.joined(separator: ", ")) }
         }
+    }
+    /// The saved custom shortcuts that can still apply: each one is kept unless it clashes with the defaults or the
+    /// ones already kept (a binding added since it was saved, say), so one clash drops only that shortcut. Returns the
+    /// dropped ones as "title (chord)".
+    static func applicable(_ saved: [String: ShortcutChord]) -> (overrides: [String: ShortcutChord], dropped: [String]) {
+        var kept: [String: ShortcutChord] = [:]
+        var pending = ShortcutDefinition.all.filter { saved[$0.id] != nil }
+        // Repeat until nothing more fits, so a swap (A takes B's key, B moves on) survives in either order.
+        var progressed = true
+        while progressed {
+            progressed = false
+            pending.removeAll { definition in
+                var candidate = kept
+                candidate[definition.id] = saved[definition.id]
+                guard problem(in: candidate) == nil else { return false }
+                kept = candidate; progressed = true
+                return true
+            }
+        }
+        return (kept, pending.map { "\($0.title) (\(saved[$0.id]!.label))" })
     }
     func chord(_ definition: ShortcutDefinition) -> ShortcutChord { overrides[definition.id] ?? definition.original }
     /// Saved chords keyed by the pre-registry "Group:Title" identities move to their registered command identities.
@@ -173,6 +175,10 @@ private struct KeyboardShortcutsSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Click a shortcut, then press its new key combination. Changes apply when you save.")
                 .foregroundStyle(.secondary)
+            if !settings.droppedOverrides.isEmpty {
+                Text("These saved shortcuts clash with newer ones and were reset to their defaults: " + settings.droppedOverrides.joined(separator: ", ") + ".")
+                    .foregroundStyle(.orange)
+            }
             TextField("Search shortcuts", text: $search).textFieldStyle(.roundedBorder)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {

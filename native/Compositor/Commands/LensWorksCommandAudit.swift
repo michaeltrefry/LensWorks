@@ -63,7 +63,9 @@ import AppKit
 
     private static func audit(menu: NSMenu, path: String, claimed: inout [ShortcutChord: Int]) -> [Violation] {
         var violations: [Violation] = []
-        for item in menu.items where !item.isSeparatorItem && !item.isHidden {
+        for item in menu.items where !item.isSeparatorItem {
+            // A hidden item still answers its key equivalent when it allows that, so it is audited too.
+            if item.isHidden && item.submenu == nil && !(item.allowsKeyEquivalentWhenHidden && !item.keyEquivalent.isEmpty) { continue }
             if let submenu = item.submenu {
                 if submenu === NSApp.servicesMenu { continue }
                 violations += audit(menu: submenu, path: path + "/" + item.title, claimed: &claimed)
@@ -85,6 +87,12 @@ import AppKit
         return violations
     }
 
+    /// The titles a menu of user files lists right now. An item in a menu whose command accepts any title (the
+    /// user's files, tabs) must carry its command identifier or be one of these, so a rogue item there is caught.
+    static func currentTitles(_ path: String) -> [String]? {
+        path == "File/Open Recent" ? RecentProjects.shared.urls.map(RecentProjects.menuTitle) : nil
+    }
+
     /// The registered command a rendered item is: its identifier, else the one command whose menu path and titles
     /// accept it (preferring the one whose shortcut it carries, for same-titled items like View › Snap).
     static func command(for item: NSMenuItem, path: String) -> LensWorksCommandInvocation? {
@@ -92,8 +100,9 @@ import AppKit
            LensWorksCommandRegistry.descriptor(invocation.id).menus.contains(path) {
             return invocation
         }
+        let listed = currentTitles(path)?.contains(item.title) == true
         let candidates = LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch != .any && $0.accepts(title: item.title) }
-            + LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch == .any }
+            + LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch == .any && listed }
         let chord = Self.chord(item)
         let match = candidates.first { descriptor in registeredChords(.init(descriptor.id)).contains { $0 == chord } }
             ?? candidates.first { descriptor in chord == nil && !descriptor.bindings.contains { $0.scope == .menu } }
