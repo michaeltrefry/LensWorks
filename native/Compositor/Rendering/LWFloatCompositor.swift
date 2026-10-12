@@ -29,42 +29,14 @@ nonisolated enum LWFloatCompositor {
         guard let made = context.makeImage() else { throw ExportError.render }
         return try LWLinearSurface.read(made,maximumBytes:maximumBytes).pixels.map(\.w)
     }
+    /// Straight extended-linear float in and out. Core Image's blend kernels clamp operands and
+    /// results to [0, 1]; LWFloatBlend keeps the same in-range definition without that clamp.
     static func blend(_ top:LWLinearSurface, over bottom:LWLinearSurface,mode:LayerBlendMode) throws -> LWLinearSurface {
         guard top.width == bottom.width, top.height == bottom.height else { throw ProjectError.invalid }
-        let name: String = switch mode {
-        case .normal: "CISourceOverCompositing"
-        case .darken: "CIDarkenBlendMode"
-        case .multiply: "CIMultiplyBlendMode"
-        case .lighten: "CILightenBlendMode"
-        case .screen: "CIScreenBlendMode"
-        case .overlay: "CIOverlayBlendMode"
-        case .hardLight: "CIHardLightBlendMode"
-        case .difference: "CIDifferenceBlendMode"
-        case .exclusion: "CIExclusionBlendMode"
-        case .hue: "CIHueBlendMode"
-        case .saturation: "CISaturationBlendMode"
-        case .color: "CIColorBlendMode"
-        case .luminosity: "CILuminosityBlendMode"
-        default: mode.coreImageFilter!
-        }
-        guard let filter = CIFilter(name:name), let encoded = CGColorSpace(name:CGColorSpace.extendedSRGB),
-            let linear = CGColorSpace(name:CGColorSpace.extendedLinearSRGB) else { throw ExportError.render }
-        filter.setValue(CIImage(cgImage:try top.cgImage()),forKey:kCIInputImageKey)
-        filter.setValue(CIImage(cgImage:try bottom.cgImage()),forKey:kCIInputBackgroundImageKey)
-        guard let output = filter.outputImage else { throw ExportError.render }
-        // Retain the editor's encoded-sRGB blend definition with extended floating
-        // components. The transport and resulting document samples are linear float.
-        let context = CIContext(options:[.workingColorSpace:encoded,.outputColorSpace:linear,.workingFormat:CIFormat.RGBAf.rawValue,.cacheIntermediates:false])
         var result = try clear(top.width,top.height)
-        result.pixels.withUnsafeMutableBytes { bytes in
-            context.render(output,toBitmap:bytes.baseAddress!,rowBytes:top.width*16,
-                bounds:CGRect(x:0,y:0,width:top.width,height:top.height),format:.RGBAf,colorSpace:linear)
-        }
-        for i in result.pixels.indices {
-            let alpha = result.pixels[i].w
-            if alpha > 0 { result.pixels[i].x /= alpha; result.pixels[i].y /= alpha; result.pixels[i].z /= alpha }
-            else { result.pixels[i] = .zero }
-        }
+        top.pixels.withUnsafeBufferPointer { t in bottom.pixels.withUnsafeBufferPointer { b in
+            result.pixels.withUnsafeMutableBufferPointer { o in LWFloatBlend.blend(t,over:b,mode:mode,into:o) }
+        } }
         try result.validate(maximumBytes:maximumBytes); return result
     }
     static func render(_ snapshot:ProjectSnapshot) throws -> LWLinearSurface {
@@ -408,8 +380,9 @@ nonisolated extension LWFloatCompositor {
                 context.rotate(by: transform.radians)
                 context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? 1 : -1)
                 context.interpolationQuality = transform.sampling.quality
-                context.draw(image, in: CGRect(x: -transform.size.width / 2, y: -transform.size.height / 2,
-                    width: transform.size.width, height: transform.size.height))
+                if let part = visiblePart(of: image, transform: transform, range: range) {
+                    context.draw(part.image, in: part.rect)
+                }
                 guard let made = context.makeImage() else { throw ExportError.render }
                 try builder.append(LWLinearSurface.read(made, maximumBytes: bytes), at: range)
                 withExtendedLifetime(lease) {}
@@ -418,16 +391,62 @@ nonisolated extension LWFloatCompositor {
         return try builder.finish()
     }
 
+    /// The part of `image` that can reach `range` when `transform` places it at its own pixel size on whole-pixel
+    /// coordinates, and where that part is drawn in the layer's local space. Core Graphics reads every row of an
+    /// image it draws; cropping keeps such a tile's placement proportional to the tile rather than to the layer.
+    /// Placement is then a pixel copy, so the cropped draw is identical to the uncropped one. Any other transform
+    /// (rotation, scaling, flips, fractional origins) resamples, and Core Graphics' resampling depends on the
+    /// drawn image's extent, so those draw the whole image as before. Nil when the layer does not reach the range.
+    static func visiblePart(of image: CGImage, transform: LayerTransform, range: LWFloatRange) -> (image: CGImage, rect: CGRect)? {
+        let w = transform.size.width, h = transform.size.height
+        let full = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        guard transform.radians == 0, !transform.flipX, !transform.flipY, w == CGFloat(image.width), h == CGFloat(image.height),
+              transform.origin.x == transform.origin.x.rounded(), transform.origin.y == transform.origin.y.rounded() else { return (image, full) }
+        // Image pixels, top row first, in document pixels relative to the layer's origin; one pixel of margin.
+        let crop = CGRect(x: CGFloat(range.x) - transform.origin.x, y: CGFloat(range.y) - transform.origin.y,
+                          width: CGFloat(range.width), height: CGFloat(range.height))
+            .insetBy(dx: -1, dy: -1).intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard !crop.isNull, crop.width >= 1, crop.height >= 1 else { return nil }
+        if crop.width >= CGFloat(image.width) && crop.height >= CGFloat(image.height) { return (image, full) }
+        guard let part = image.cropping(to: crop) else { return (image, full) }
+        // Local space runs up from the layer's centre: the image's top row is at the rectangle's maxY.
+        return (part, CGRect(x: full.minX + crop.minX, y: full.maxY - crop.maxY, width: crop.width, height: crop.height))
+    }
+
     /// Full document graph, with immutable range-backed intermediates. Preview and
     /// export share this path; output size changes are downstream of development.
-    static func renderPlane(_ snapshot: ProjectSnapshot, workspace: LWFloatWorkspace) throws -> LWFloatPlane {
+    ///
+    /// `region` evaluates the same full-resolution graph for one rectangle of the document: every
+    /// layer and mask placement is expressed relative to the region and document-anchored
+    /// adjustments (noise, grain) keep their document coordinates. Pointwise stages are therefore
+    /// identical to the whole-frame samples; a caller evaluating a spatial adjustment (blur) widens
+    /// the region by `LWDocumentTileRenderer.halo` and discards the apron.
+    static func renderPlane(_ snapshot: ProjectSnapshot, region: LWFloatRange? = nil, workspace: LWFloatWorkspace) throws -> LWFloatPlane {
         try LayerHierarchy.validate(snapshot.manifest.layers); try LiveMaskGraph.validate(snapshot.manifest.layers)
+        try LWFloatPlane.validateExtent(width: snapshot.manifest.width, height: snapshot.manifest.height)
+        var snapshot = snapshot, documentOrigin = CGPoint.zero
+        // A folder or adjustment mask without its own placement covers the whole document.
+        var documentMaskFrame = LayerTransform(origin: .zero, size: CGSize(width: snapshot.manifest.width, height: snapshot.manifest.height))
+        if let region {
+            _ = try region.validate(frameWidth: snapshot.manifest.width, frameHeight: snapshot.manifest.height)
+            var manifest = snapshot.manifest
+            let dx = CGFloat(region.x), dy = CGFloat(region.y)
+            func shifted(_ t: LayerTransform) -> LayerTransform { var t = t; t.origin.x -= dx; t.origin.y -= dy; return t }
+            for i in manifest.layers.indices {
+                manifest.layers[i].transform = shifted(manifest.layers[i].transform)
+                manifest.layers[i].maskPlacement = manifest.layers[i].maskPlacement.map(shifted)
+            }
+            manifest.width = region.width; manifest.height = region.height
+            snapshot = ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, workingVersion: snapshot.workingVersion)
+            documentOrigin = CGPoint(x: dx, y: dy)
+            documentMaskFrame.origin = CGPoint(x: -dx, y: -dy)
+        }
         let width = snapshot.manifest.width, height = snapshot.manifest.height
-        try LWFloatPlane.validateExtent(width: width, height: height)
         let records = Dictionary(uniqueKeysWithValues: snapshot.manifest.layers.map { ($0.id, $0) })
         var visiting = Set<UUID>()
         func checkedMask(_ layer: ProjectLayerRecord, local: LWFloatPlane? = nil) throws -> LWFloatPlane? {
-            guard let mask = snapshot.mask(for: layer), mask.isEnabled else { return nil }
+            guard var mask = snapshot.mask(for: layer), mask.isEnabled else { return nil }
+            if local == nil, mask.placement == nil { mask.placement = documentMaskFrame }
             let w = local?.width ?? width, h = local?.height ?? height
             let target = local != nil ? layer.transform : LayerTransform(origin:.zero,size:CGSize(width:w,height:h))
             return try LWSourceMaskReconcile.coveragePlane(mask,over:target,width:w,height:h,workspace:workspace)
@@ -446,6 +465,11 @@ nonisolated extension LWFloatCompositor {
             guard let asset = snapshot.images[record.id] else {
                 guard record.imageFile == nil else { throw ProjectError.missingImage }
                 return try clearPlane(width: width, height: height, workspace: workspace)
+            }
+            // A plain raster places its image once; converting it to a whole local plane first
+            // would materialize the full layer even when only one region of it is evaluated.
+            if asset.linearPlane == nil, snapshot.mask(for: record)?.isEnabled != true, record.effects?.visible.isEmpty ?? true {
+                return try place(asset.image, transform: record.transform, width: width, height: height, workspace: workspace)
             }
             var local = try asset.linearPlane ?? from(asset.image, workspace: workspace)
             local = try applyAlpha(local, coverage: checkedMask(record, local: local))
@@ -483,7 +507,7 @@ nonisolated extension LWFloatCompositor {
         }
         func adjusted(_ old: LWFloatPlane, layer: ProjectLayerRecord, clipping: LWFloatPlane?, keepAlpha: Bool) throws -> LWFloatPlane {
             guard let adjustment = layer.adjustment else { throw ProjectError.invalid }
-            var made = try adjustment.apply(old, region: CGRect(x: 0, y: 0, width: width, height: height), scale: 1,
+            var made = try adjustment.apply(old, region: CGRect(x: documentOrigin.x, y: documentOrigin.y, width: CGFloat(width), height: CGFloat(height)), scale: 1,
                 makeBuilder: { try workspace.makeBuilder(width: $0, height: $1) }, makeScratchDirectory: { try workspace.makeScratchDirectory() }, fileOwner: workspace)
             if (layer.blendMode ?? .normal) != .normal { made = try blend(made, over: old, mode: layer.blendMode ?? .normal, workspace: workspace) }
             let newPixels = made.sampler(), clip = clipping?.sampler()

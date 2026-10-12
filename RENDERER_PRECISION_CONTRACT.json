@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "blend_reference_relative": 2e-5,
+  "blend_reference_note": "LWFloatBlend (float32, vForce transfer) against an independent float64 transcription of the same formulas, per straight extended-linear channel, relative to max(1, |expected|). float32 sRGB encode/decode round trips through pow carry ~6e-7 relative error each and Hue/Saturation/Color/Luminosity add a few more operations; 2e-5 bounds them with margin while still failing any formula or clamp difference.",
+  "blend_core_image_in_range_abs": 2e-4,
+  "blend_core_image_in_range_note": "For straight inputs inside [0, 1] LWFloatBlend reproduces the Core Image kernels the float compositor used before (rendered in an RGBAf context with an extended sRGB working space), per straight extended-linear channel. Measured agreement is below 1e-5; GPU float pow/division rounding and unpremultiplying a low-alpha result are allowed up to 2e-4.",
+  "tile_parity_pointwise_abs": 0,
+  "tile_parity_pointwise_note": "Blend modes, opacity, masks and pointwise adjustments are evaluated per pixel; tiled and whole-frame blends must agree bit for bit.",
+  "document_region_parity_relative": 1e-5,
+  "document_region_parity_note": "A document evaluated tile block by tile block (LWDocumentTileRenderer) against LWFloatCompositor.renderPlane of the whole frame, for every blend mode over a rotated, partly transparent layer and for masks, folder masks and opacity, clipping, document-anchored noise and layer effects. Core Graphics resampling depends on the context it draws into, so regions are widened out to the 256 px tile grid: every placement range is then the same document rectangle in both evaluations. Measured 0 (bit identical) on the fixtures; the bound leaves 1e-5 relative to max(1, |expected|) for float rounding.",
+  "document_region_spatial_relative": 3e-2,
+  "document_region_spatial_note": "Gaussian and motion blur adjustment layers are Core Image operators, which are not tile invariant (see CoreImageBlurTolerance in native/CompositorTests/FloatCameraRawTests.swift): a pixel depends on the rectangle Core Image is asked to render even with every dependency supplied. Each region is widened by LWDocumentTileRenderer.halo (4 sigma + 4 for Gaussian, twice the motion radius + 16 for motion) so the dependency is complete; widening the motion halo threefold did not reduce the difference, confirming it is Core Image's own. Measured on the high-contrast HDR fixture (a 0 to 3.2 step every 97 px): Gaussian sigma 6 and 20 at most 0.3%, motion distance 40 at most 2.1% and distance 120 at most 1.0%, relative to max(1, |expected|), in regions only 116 px wide at the document edge. The bound is 3%.",
+  "display_conversion_relative": 2e-3,
+  "display_conversion_note": "Working samples rendered by GPUCanvasRenderer into the canvas drawable format (rgba16Float) for extended sRGB and extended Display P3 targets, against the analytic conversion. Half float keeps 11 significant bits (4.9e-4 relative); Core Image's conversion adds float rounding. Values above 1 and below 0 must survive.",
+  "tile_cache_budget_bytes": 268435456,
+  "tile_cache_budget_note": "LWDocumentTileRenderer.defaultBudgetBytes: 256 MiB of full-resolution float tiles (1024 tiles of 256x256 RGBA32F, a 4096x4096 or 16 MP viewport) for the interactive canvas, half of LWFloatWorkingSet.maximumBytes so evaluation scratch still fits beside it.",
+  "texture_budget_bytes": 536870912,
+  "texture_budget_note": "GPUCanvasRenderer.textureBudgetBytes: 512 MiB of cached layer textures (RGBA8 / R8). Inserting beyond it evicts least-recently-used textures.",
+  "large_document": {
+    "width": 16384,
+    "height": 12160,
+    "cache_budget_bytes": 33554432,
+    "peak_working_set_bytes": 100663296,
+    "texture_budget_bytes": 67108864,
+    "note": "A procedural 16384x12160 document (199 MP, the largest 16384-wide document DocumentLimits.maxSurfacePixels admits; 16384x16384 is refused as too large) (two full-size layers whose pixels are generated on demand, Multiply at 75% opacity, plus an Exposure adjustment) is never allocated whole: its 3 GiB float frame cannot be resident. Tiles are evaluated in blocks of at most 1024x1024 px. The cache is given 32 MiB; peak admitted working-set bytes (cache plus every evaluation lease) must stay at or below 96 MiB: the 32 MiB cache plus one block's evaluation scratch (a 1024x1024 float region is 16 MiB per intermediate plane, held on disk; placement, blending and readback charge up to 8 tile-sized buffers per range in flight). Measured 45 MiB (47220540 bytes) over 159 evaluated tiles with 127 evictions. The texture cache is given 64 MiB while 1 GiB of textures is requested."
+  },
+  "tests": [
+    "native/CompositorTests/FloatRendererPrecisionTests.swift",
+    "native/CompositorTests/FloatTileResidencyTests.swift"
+  ]
+}

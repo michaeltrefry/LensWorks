@@ -76,8 +76,12 @@ nonisolated final class LWFloatWorkingSet: @unchecked Sendable {
     let limit: Int
     private let lock = NSLock()
     private var retained = 0
+    private var peak = 0
     /// Exact admitted-byte accounting only; no process RSS or retirement grant.
     var retainedBytes:Int { lock.withLock { retained } }
+    /// Highest admitted residency since creation or the last `resetPeak`.
+    var peakRetainedBytes:Int { lock.withLock { peak } }
+    func resetPeak() { lock.withLock { peak = retained } }
     init(limit: Int = maximumBytes) throws {
         guard limit > 0, limit <= Self.maximumBytes else { throw ProjectError.tooLarge }
         self.limit = limit
@@ -85,7 +89,7 @@ nonisolated final class LWFloatWorkingSet: @unchecked Sendable {
     func reserve(_ bytes: Int) throws -> Lease {
         try lock.withLock {
             guard bytes >= 0, bytes <= limit - retained else { throw ProjectError.tooLarge }
-            retained += bytes
+            retained += bytes; peak = max(peak, retained)
             return Lease(owner: self, bytes: bytes)
         }
     }
