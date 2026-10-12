@@ -25,6 +25,13 @@ private nonisolated struct FixtureModel {
     var weightsPath = ""
     var routes: [(String, String)] = [("generate", "fixture_provider")]
     var licenses: [(String, String)] = [("fixture_license", "apache-2.0")]
+    var resident: UInt64? = nil
+    var pixels: Int? = 1 << 20
+    /// (name, nonCommercial) as SceneWorks' licence manifest declares it.
+    var sceneWorksLicense: (String, Bool)? = nil
+    var licenseNote: String? = nil
+    /// Further components (repository, files), each its own Hugging Face repository.
+    var extra: [(String, [FixtureFile])] = []
 }
 
 private nonisolated let revisionA = String(repeating: "a", count: 40)
@@ -57,22 +64,32 @@ private nonisolated final class Fixture: @unchecked Sendable {
             "models": models.map { model -> [String: Any] in
                 var memory: [String: Any] = [:]
                 if let peak = model.peak { memory["peakBytes"] = peak }
-                return [
+                if let resident = model.resident { memory["residentBytes"] = resident }
+                if let pixels = model.pixels { memory["pixels"] = pixels }
+                func component(_ repository: String, _ files: [FixtureFile]) -> [String: Any] {
+                    ["repository": repository, "revision": model.revision,
+                     "files": files.map { ["path": $0.path, "size": $0.data.count, "sha256": sha256Hex($0.data)] }]
+                }
+                var entry: [String: Any] = [
                     "id": model.id, "name": model.id.capitalized, "summary": "Fixture model.",
                     "routes": model.routes.map { ["task": $0.0, "provider": $0.1] }, "weights": ["kind": "dir", "path": model.weightsPath],
                     "licenseComponents": model.licenses.map { ["key": $0.0, "declared": $0.1] }, "memory": memory,
-                    "components": [["repository": model.repository, "revision": model.revision,
-                                    "files": model.files.map { ["path": $0.path, "size": $0.data.count, "sha256": sha256Hex($0.data)] }]],
+                    "components": [component(model.repository, model.files)] + model.extra.map { component($0.0, $0.1) },
                 ]
+                if let (name, nonCommercial) = model.sceneWorksLicense {
+                    entry["sceneWorksLicense"] = ["id": model.id, "name": name, "homepage": "https://example.invalid/\(model.id)", "nonCommercial": nonCommercial]
+                }
+                if let note = model.licenseNote { entry["licenseNote"] = note }
+                return entry
             },
         ]
         return try LWModelManifest.decode(JSONSerialization.data(withJSONObject: json))
     }
 
-    func facts(_ models: [FixtureModel], revision: String = revisionA) -> LWModelRuntimeFacts {
+    func facts(_ models: [FixtureModel], revision: String = revisionA, family: String = "Apache License 2.0") -> LWModelRuntimeFacts {
         var licenses: [String: LWModelRuntimeFacts.License] = [:]
         for (key, declared) in models.flatMap(\.licenses) {
-            licenses[key] = .init(key: key, declared: declared, familyName: "Apache License 2.0", spdxID: "Apache-2.0",
+            licenses[key] = .init(key: key, declared: declared, familyName: family, spdxID: "Apache-2.0",
                                   textURL: URL(string: "https://www.apache.org/licenses/LICENSE-2.0"),
                                   sourceURL: URL(string: "https://example.invalid/card"), gated: false, attribution: "Fixture © Example")
         }
@@ -82,12 +99,16 @@ private nonisolated final class Fixture: @unchecked Sendable {
     /// Writes files into the hub the way huggingface_hub does: content in blobs/<sha256>,
     /// snapshots/<revision>/<path> a relative symlink to it.
     func installInHub(_ model: FixtureModel, revision: String? = nil, skip: Set<String> = []) throws {
-        let repo = hub.appendingPathComponent("models--" + model.repository.replacingOccurrences(of: "/", with: "--"))
-        let snapshot = repo.appendingPathComponent("snapshots/\(revision ?? model.revision)")
+        try installInHub(repository: model.repository, files: model.files, revision: revision ?? model.revision, skip: skip)
+    }
+
+    func installInHub(repository: String, files: [FixtureFile], revision: String, skip: Set<String> = []) throws {
+        let repo = hub.appendingPathComponent("models--" + repository.replacingOccurrences(of: "/", with: "--"))
+        let snapshot = repo.appendingPathComponent("snapshots/\(revision)")
         try FileManager.default.createDirectory(at: repo.appendingPathComponent("blobs"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: repo.appendingPathComponent("refs"), withIntermediateDirectories: true)
-        try (revision ?? model.revision).write(to: repo.appendingPathComponent("refs/main"), atomically: true, encoding: .utf8)
-        for file in model.files where !skip.contains(file.path) {
+        try revision.write(to: repo.appendingPathComponent("refs/main"), atomically: true, encoding: .utf8)
+        for file in files where !skip.contains(file.path) {
             let blob = repo.appendingPathComponent("blobs/\(sha256Hex(file.data))")
             try file.data.write(to: blob)
             let link = snapshot.appendingPathComponent(file.path)
@@ -106,6 +127,16 @@ private nonisolated final class Fixture: @unchecked Sendable {
     func configuration(memory: UInt64 = 64 << 30, stall: TimeInterval = 5, base: URL? = nil, libraries: [URL]? = nil) -> LWModelStore.Configuration {
         LWModelStore.Configuration(sceneWorksLibraries: libraries ?? [hub], managedRoot: managed, ledgerURL: ledger, availableMemory: memory,
                                    probeStall: stall, downloadBaseURL: base, requestTimeout: 10)
+    }
+
+    /// Writes a component straight into the managed layout (as a finished download would leave it).
+    func installManaged(repository: String, files: [FixtureFile], revision: String = revisionA) throws {
+        let root = managed.appendingPathComponent(repository.replacingOccurrences(of: "/", with: "--")).appendingPathComponent(revision)
+        for file in files {
+            let url = root.appendingPathComponent(file.path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try file.data.write(to: url)
+        }
     }
 
     /// Every entry under `url` (symlinks not followed) with inode, size, times and content hash.
@@ -172,8 +203,8 @@ private nonisolated final class InstrumentedAccess: LWModelFileAccess, @unchecke
 /// A loopback HTTP/1.1 file server for download tests: Range requests, and one-shot behaviours
 /// that truncate, stall, corrupt or ignore ranges. No network access is involved.
 private nonisolated final class TestHTTPServer: @unchecked Sendable {
-    enum Behavior { case normal, truncateAfter(Int), stallAfter(Int), corrupt, ignoreRange }
-    struct Request: Equatable { let path: String; let range: String? }
+    enum Behavior { case normal, truncateAfter(Int), stallAfter(Int), corrupt, ignoreRange, status(Int) }
+    struct Request: Equatable { let path: String; let range: String?; var authorization: String? = nil }
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "lw.test.http")
@@ -239,13 +270,18 @@ private nonisolated final class TestHTTPServer: @unchecked Sendable {
         let lines = head.components(separatedBy: "\r\n")
         let path = lines.first?.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
         let range = lines.first { $0.lowercased().hasPrefix("range:") }.map { String($0.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+        let authorization = lines.first { $0.lowercased().hasPrefix("authorization:") }.map { String($0.dropFirst(14)).trimmingCharacters(in: .whitespaces) }
         lock.lock()
-        _requests.append(Request(path: path, range: range))
+        _requests.append(Request(path: path, range: range, authorization: authorization))
         let data = files[path]
         let behavior = behaviors[path]?.isEmpty == false ? behaviors[path]!.removeFirst() : .normal
         lock.unlock()
         guard let data else {
             send(connection, Data("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), close: true)
+            return
+        }
+        if case .status(let code) = behavior {
+            send(connection, Data("HTTP/1.1 \(code) Refused\r\nContent-Range: bytes */\(data.count)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), close: true)
             return
         }
         var start = 0
@@ -299,11 +335,49 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
     return condition()
 }
 
+/// A scripted inference runtime: jobs stay running until the test completes them.
+private nonisolated final class ScriptedRuntime: LWInferenceJobStarting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [AsyncStream<LWInferenceEvent>.Continuation] = []
+    private var _requests: [Data] = []
+    private var _released = 0
+
+    var requests: [Data] { lock.lock(); defer { lock.unlock() }; return _requests }
+    var releasedModels: Int { lock.lock(); defer { lock.unlock() }; return _released }
+
+    func startJob(_ request: LWInferenceRequest, inputs: [LWInferenceImage]) async throws -> LWStartedInferenceJob {
+        let (stream, continuation) = AsyncStream.makeStream(of: LWInferenceEvent.self, bufferingPolicy: .unbounded)
+        lock.lock(); continuations.append(continuation); _requests.append(request.json); lock.unlock()
+        continuation.yield(.started(modelReused: false))
+        return LWStartedInferenceJob(events: stream, cancel: { continuation.yield(.cancelled); continuation.finish() }, release: {})
+    }
+
+    func complete(_ index: Int, peak: UInt64) {
+        let json = #"{"task":"generate","provider":"fixture_provider","inference_revision":"\#(revisionA)","model_reused":false,"input_conversions":[],"memory":{"peak_bytes":\#(peak),"active_bytes":\#(peak / 2)}}"#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let result = try! decoder.decode(LWInferenceResult.self, from: Data(json.utf8))
+        lock.lock(); let continuation = continuations[index]; lock.unlock()
+        continuation.yield(.completed(result))
+        continuation.finish()
+    }
+
+    func releaseModels() async -> Int { lock.lock(); _released += 1; lock.unlock(); return 1 }
+}
+
 // MARK: - Tests
 
 @Suite(.serialized) nonisolated struct LensWorksModelStoreTests {
-    @Test func bundledManifestIsValidAndMeasured() throws {
+    @Test func bundledManifestIsValidAndMeasured() async throws {
         let manifest = try LWModelManifest.bundled()
+        let fixture = try Fixture()
+        let store = LWModelStore(manifest: manifest, configuration: fixture.configuration(), facts: nil)
+        let sana = try await store.licenseTerms("sana_sprint_1600m_q4")
+        #expect(sana.sources.map(\.origin) == [.runtime, .runtime, .sceneWorks], "runtime rows and SceneWorks' declaration are all listed")
+        #expect(sana.nonCommercial && sana.conflict != nil, "SANA-Sprint's non-commercial SceneWorks terms govern over the runtime's apache-2.0 row")
+        let clip = try await store.licenseTerms("clip_vit_l14")
+        #expect(!clip.runtimeDeclared && clip.sources.isEmpty && clip.note != nil && !clip.nonCommercial)
+        #expect(try await !store.licenseTerms("sam2_hiera_large").nonCommercial)
         #expect(manifest.schemaVersion == 1 && LWModelManifest.isRevision(manifest.inferenceRevision))
         #expect(Set(manifest.models.map(\.id)) == ["sana_sprint_1600m_q4", "clip_vit_l14", "sam2_hiera_large", "sam3"])
         for model in manifest.models {
@@ -330,7 +404,7 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         lease.release()
         #expect(fixture.tree(fixture.hub) == before, "no byte, inode, time or entry in the SceneWorks library changed")
         #expect(fixture.managedFiles().isEmpty, "nothing was copied into the LensWorks store")
-        await #expect(throws: LWModelStoreError.alreadyAvailable(model.id)) { try await store.download(model.id, licenseAccepted: true) }
+        await #expect(throws: LWModelStoreError.alreadyAvailable(model.id)) { try await store.acceptedDownload(model.id) }
         await #expect(throws: LWModelStoreError.externallyOwned(model.id)) { try await store.deleteManagedCopy(model.id) }
         #expect(fixture.tree(fixture.hub) == before)
     }
@@ -523,12 +597,13 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         let destination = fixture.managed.appendingPathComponent("SceneWorks--fixture-mlx/\(revisionA)", isDirectory: false)
         #expect(plan.remainingBytes == UInt64(model.files.map(\.data.count).reduce(0, +)) && plan.totalBytes == plan.remainingBytes)
         #expect(plan.destination == destination)
-        #expect(plan.licenses.map(\.familyName) == ["Apache License 2.0"] && plan.licenses[0].attribution == "Fixture © Example")
-        await #expect(throws: LWModelStoreError.licenseNotAccepted(model.id)) { try await store.download(model.id, licenseAccepted: false) }
+        #expect(plan.license.sources.map(\.name) == ["Apache License 2.0"] && plan.license.sources[0].attribution == "Fixture © Example")
+        #expect(!plan.licenseAccepted && plan.license.runtimeDeclared && !plan.license.nonCommercial)
+        await #expect(throws: LWModelStoreError.licenseNotAccepted(model.id)) { try await store.download(model.id) }
         #expect(server.requests.isEmpty)
 
         let log = ProgressLog()
-        let status = try await store.download(model.id, licenseAccepted: true) { log.append($0) }
+        let status = try await store.acceptedDownload(model.id) { log.append($0) }
         #expect(status.state == .ready(root: destination, source: .managed))
         let values = log.all
         #expect(values.contains { $0.phase == .downloading && $0.completedBytes > 0 && $0.completedBytes < $0.totalBytes })
@@ -554,7 +629,7 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
                                  configuration: fixture.configuration(), facts: fixture.facts([model]))
         let log = ProgressLog()
         let id = model.id
-        let task = Task { try await store.download(id, licenseAccepted: true) { log.append($0) } }
+        let task = Task { try await store.acceptedDownload(id) { log.append($0) } }
         #expect(await waitUntil { log.all.contains { $0.completedBytes >= 300 * 1024 } })
         task.cancel()
         await #expect(throws: CancellationError.self) { try await task.value }
@@ -565,7 +640,7 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         #expect(fixture.managedFiles().allSatisfy { $0.hasPrefix(".staging") }, "nothing published")
         #expect(try await store.downloadPlan(model.id).remainingBytes == total - done)
 
-        let resumed = try await store.download(model.id, licenseAccepted: true)
+        let resumed = try await store.acceptedDownload(model.id)
         #expect(resumed.state.isReady)
         let bigRequests = server.requests.filter { $0.path.hasSuffix(big.path) }
         #expect(bigRequests.map(\.range) == [nil, "bytes=\(300 * 1024)-"], "the second request resumed from the partial")
@@ -581,7 +656,7 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
                                  configuration: fixture.configuration(), facts: fixture.facts([model]))
         do {
-            try await store.download(model.id, licenseAccepted: true)
+            try await store.acceptedDownload(model.id)
             Issue.record("expected an interruption")
         } catch let error as LWModelStoreError {
             guard case .interrupted(let path, _) = error else { Issue.record("\(error)"); return }
@@ -601,7 +676,7 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         let partial = FileManager.default.contents(atPath: part.path) ?? Data()
         #expect(UInt64(partial.count) == kept && partial == big.data.prefix(partial.count))
         #expect(!FileManager.default.fileExists(atPath: fixture.managed.appendingPathComponent("SceneWorks--fixture-mlx").path), "nothing published")
-        #expect(try await store.download(model.id, licenseAccepted: true).state.isReady)
+        #expect(try await store.acceptedDownload(model.id).state.isReady)
         #expect(server.requests.filter { $0.path.hasSuffix(big.path) }.last?.range == (kept > 0 ? "bytes=\(kept)-" : nil))
     }
 
@@ -614,11 +689,11 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
                                  configuration: fixture.configuration(), facts: fixture.facts([model]))
         await #expect(throws: LWModelStoreError.integrity(path: model.files[0].path, detail: "content hash differs from the qualified file")) {
-            try await store.download(model.id, licenseAccepted: true)
+            try await store.acceptedDownload(model.id)
         }
         #expect(await store.refresh()[0].state == .notInstalled, "the corrupt bytes were discarded, not kept as a partial")
         #expect(!FileManager.default.fileExists(atPath: fixture.managed.appendingPathComponent("SceneWorks--fixture-mlx").path))
-        #expect(try await store.download(model.id, licenseAccepted: true).state.isReady, "a retry fetches clean bytes")
+        #expect(try await store.acceptedDownload(model.id).state.isReady, "a retry fetches clean bytes")
     }
 
     @Test func aServerThatIgnoresRangeRestartsTheFileCleanly() async throws {
@@ -631,8 +706,8 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         let fixture = try Fixture()
         let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
                                  configuration: fixture.configuration(), facts: fixture.facts([model]))
-        _ = try? await store.download(model.id, licenseAccepted: true)
-        let status = try await store.download(model.id, licenseAccepted: true)
+        _ = try? await store.acceptedDownload(model.id)
+        let status = try await store.acceptedDownload(model.id)
         #expect(status.state.isReady)
         guard case .ready(let root, _) = status.state else { return }
         #expect(FileManager.default.contents(atPath: root.appendingPathComponent(big.path).path) == big.data)
@@ -680,8 +755,8 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         let fixture = try Fixture()
         let store = LWModelStore(manifest: try fixture.manifest([first, second], base: server.baseURL.absoluteString),
                                  configuration: fixture.configuration(), facts: fixture.facts([first, second]))
-        try await store.download(first.id, licenseAccepted: true)
-        try await store.download(second.id, licenseAccepted: true)
+        try await store.acceptedDownload(first.id)
+        try await store.acceptedDownload(second.id)
         let firstRoot = fixture.managed.appendingPathComponent("SceneWorks--first/\(revisionA)")
         let secondRoot = fixture.managed.appendingPathComponent("SceneWorks--second/\(revisionA)")
 
@@ -698,11 +773,407 @@ private nonisolated func waitUntil(_ timeout: TimeInterval = 10, _ condition: ()
         #expect(await store.refresh().allSatisfy { $0.state == .notInstalled })
 
         // Least-recently-used goes first.
-        try await store.download(first.id, licenseAccepted: true)
-        try await store.download(second.id, licenseAccepted: true)
+        try await store.acceptedDownload(first.id)
+        try await store.acceptedDownload(second.id)
         try await Task.sleep(nanoseconds: 20_000_000)
         try await store.lease(first.id).release()
         #expect(await store.evictManaged(toFree: 1) == [second.id])
+    }
+
+    // MARK: Review fixes
+
+    @Test func aCorruptManagedCopyCanBeRemovedOrRepairedByDownloading() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel(size: 256 * 1024)
+        server.serve(model)
+        let fixture = try Fixture()
+        let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
+                                 configuration: fixture.configuration(), facts: fixture.facts([model]))
+        guard case .ready(let root, .managed) = try await store.acceptedDownload(model.id).state else { Issue.record("expected a managed copy"); return }
+        let big = root.appendingPathComponent(model.files[0].path)
+        var corrupted = model.files[0].data
+        corrupted[10] ^= 0xFF
+        try corrupted.write(to: big)
+        let broken = await store.refresh()[0]
+        guard case .integrityFailed(let library, let path, _) = broken.state else { Issue.record("expected an integrity failure: \(broken.state)"); return }
+        #expect(library == fixture.managed && path == model.files[0].path && broken.state.canDownload)
+        #expect(broken.hasManagedCopy, "Remove is offered for a managed copy in any state")
+        let repaired = try await store.download(model.id)
+        #expect(repaired.state == .ready(root: root, source: .managed), "an explicit download repairs our own corrupt copy")
+        #expect(FileManager.default.contents(atPath: big.path) == model.files[0].data)
+        #expect(server.requests.filter { $0.path.hasSuffix(model.files[0].path) }.count == 2)
+
+        try corrupted.write(to: big)
+        #expect(await store.refresh()[0].hasManagedCopy)
+        try await store.deleteManagedCopy(model.id)
+        let removed = await store.refresh()[0]
+        #expect(removed.state == .notInstalled && !removed.hasManagedCopy, "a broken copy can be removed too")
+    }
+
+    @Test func aLeaseIsHeldBeforeItsIdentityCheckSoAConcurrentDeleteIsRefused() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel()
+        server.serve(model)
+        let fixture = try Fixture()
+        let access = InstrumentedAccess()
+        let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
+                                 configuration: fixture.configuration(), facts: fixture.facts([model]), fileAccess: access)
+        try await store.acceptedDownload(model.id)
+        #expect(try await store.status(model.id).state.isReady)
+        let root = fixture.managed.appendingPathComponent("SceneWorks--fixture-mlx/\(revisionA)", isDirectory: false)
+        access.blockPrefix = root.path  // the lease's identity check stalls on its first stat
+        let id = model.id
+        let leasing = Task { try await store.lease(id) }
+        #expect(await waitUntil { access.blockedCalls > 0 })
+        await #expect(throws: LWModelStoreError.leased(model.id)) { try await store.deleteManagedCopy(id) }
+        #expect(await store.evictManaged(toFree: .max).isEmpty, "eviction during the check is refused too")
+        access.blockPrefix = nil
+        access.gate.signal()
+        let lease = try await leasing.value
+        #expect(FileManager.default.fileExists(atPath: root.path) && lease.roots.map(\.root) == [root])
+        lease.release()
+    }
+
+    @Test func aMixedSceneWorksAndManagedModelLeasesEveryComponentRoot() async throws {
+        let fixture = try Fixture()
+        var model = smallModel()
+        let encoder = [FixtureFile(path: "encoder.safetensors", data: payload(64 * 1024, seed: 9))]
+        model.extra = [("SceneWorks/fixture-encoder", encoder)]
+        try fixture.installInHub(model)
+        try fixture.installManaged(repository: "SceneWorks/fixture-encoder", files: encoder)
+        let before = fixture.tree(fixture.hub)
+        let store = LWModelStore(manifest: try fixture.manifest([model]), configuration: fixture.configuration(), facts: fixture.facts([model]))
+        let status = try #require(await store.refresh().first)
+        let snapshot = fixture.hub.appendingPathComponent("models--SceneWorks--fixture-mlx/snapshots/\(revisionA)", isDirectory: false)
+        let managed = fixture.managed.appendingPathComponent("SceneWorks--fixture-encoder/\(revisionA)", isDirectory: false)
+        #expect(status.roots == [LWComponentRoot(root: snapshot, source: .sceneWorks(hub: fixture.hub)), LWComponentRoot(root: managed, source: .managed)])
+        let lease = try await store.lease(model.id)
+        #expect(store.leases.isLeased(snapshot.path) && store.leases.isLeased(managed.path), "every component root is leased")
+        await #expect(throws: LWModelStoreError.leased(model.id)) { try await store.deleteManagedCopy(model.id) }
+        #expect(await store.evictManaged(toFree: .max).isEmpty)
+        #expect(await store.ledgerSnapshot.lastUsed.keys.sorted() == [managed.path], "last use is recorded only for LensWorks' own directory")
+        lease.release()
+        #expect(!store.leases.isLeased(snapshot.path) && !store.leases.isLeased(managed.path))
+        try await store.deleteManagedCopy(model.id)
+        #expect(!FileManager.default.fileExists(atPath: managed.path))
+        #expect(fixture.tree(fixture.hub) == before)
+    }
+
+    @Test func conflictingDeclaredLicencesGovernByTheMostRestrictiveAndNeedVersionedAcknowledgement() async throws {
+        let fixture = try Fixture()
+        var model = smallModel()
+        model.licenses = [("fixture_weights", "apache-2.0"), ("fixture_encoder", "gemma")]
+        model.sceneWorksLicense = ("Fixture Open Model License", true)
+        try fixture.installInHub(model)
+        let manifest = try fixture.manifest([model])
+        let store = LWModelStore(manifest: manifest, configuration: fixture.configuration(), facts: fixture.facts([model]))
+        let status = try #require(await store.refresh().first)
+        let terms = status.license
+        #expect(terms.sources.map(\.origin) == [.runtime, .runtime, .sceneWorks] && terms.sources.map(\.key) == ["fixture_weights", "fixture_encoder", model.id])
+        #expect(terms.nonCommercial && terms.governing == "Non-commercial use only.")
+        #expect(terms.conflict?.contains("most restrictive") == true && terms.conflict?.contains("SceneWorks licence manifest") == true)
+        #expect(status.state.isReady && status.needsLicenseAcknowledgement)
+        await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await store.lease(model.id) }
+        await #expect(throws: LWModelStoreError.licenseChanged(model.id)) { try await store.acceptLicense(model.id, version: "stale") }
+        try await store.acceptLicense(model.id)
+        #expect(try await !store.status(model.id).needsLicenseAcknowledgement)
+        try await store.lease(model.id).release()
+
+        // Persisted: the next launch still has the acceptance.
+        let reopened = LWModelStore(manifest: manifest, configuration: fixture.configuration(), facts: fixture.facts([model]))
+        #expect(try await reopened.status(model.id).licenseAccepted)
+        try await reopened.lease(model.id).release()
+
+        // Any changed declared source is a new licence version that needs accepting again.
+        let runtimeChanged = LWModelStore(manifest: manifest, configuration: fixture.configuration(),
+                                          facts: fixture.facts([model], family: "Apache License, Version 2.0"))
+        #expect(try await !runtimeChanged.status(model.id).licenseAccepted)
+        await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await runtimeChanged.lease(model.id) }
+        var revised = model
+        revised.sceneWorksLicense = ("Fixture Open Model License v2", true)
+        let sceneWorksChanged = LWModelStore(manifest: try fixture.manifest([revised]), configuration: fixture.configuration(), facts: fixture.facts([model]))
+        await #expect(throws: LWModelStoreError.licenseNotAcknowledged(model.id)) { try await sceneWorksChanged.lease(model.id) }
+        try await sceneWorksChanged.acceptLicense(model.id)
+        try await sceneWorksChanged.lease(model.id).release()
+    }
+
+    @Test func undeclaredAndPermissiveLicencesAreShownAndNeedNoUseAcknowledgement() async throws {
+        let fixture = try Fixture()
+        var clip = smallModel("clip", repository: "SceneWorks/clip", seed: 3)
+        clip.licenses = []
+        clip.licenseNote = "The model card declares no licence."
+        var sam = smallModel("sam", repository: "SceneWorks/sam", seed: 4)
+        sam.sceneWorksLicense = ("Apache-2.0", false)
+        for model in [clip, sam] { try fixture.installInHub(model) }
+        let store = LWModelStore(manifest: try fixture.manifest([clip, sam]), configuration: fixture.configuration(), facts: fixture.facts([clip, sam]))
+        let statuses = Dictionary(uniqueKeysWithValues: await store.refresh().map { ($0.id, $0) })
+        let clipTerms = try #require(statuses["clip"]?.license)
+        #expect(!clipTerms.runtimeDeclared && clipTerms.governing == "Licence not declared by the AI runtime." && clipTerms.note == clip.licenseNote)
+        let samTerms = try #require(statuses["sam"]?.license)
+        #expect(samTerms.sources.map(\.origin) == [.runtime, .sceneWorks] && samTerms.conflict == nil && !samTerms.nonCommercial)
+        for id in ["clip", "sam"] {
+            #expect(statuses[id]?.needsLicenseAcknowledgement == false)
+            try await store.lease(id).release()
+            await #expect(throws: LWModelStoreError.licenseNotAccepted(id), "downloading still needs the terms accepted") { try await store.download(id) }
+        }
+    }
+
+    @Test func concurrentLeasesAndResidentsPushAModelOutOfAdmission() async throws {
+        let fixture = try Fixture()
+        let models = (1...3).map { index -> FixtureModel in
+            var model = smallModel("m\(index)", repository: "SceneWorks/m\(index)", seed: UInt8(10 + index))
+            model.peak = 4 << 30
+            model.resident = 4 << 30
+            return model
+        }
+        for model in models { try fixture.installInHub(model) }
+        let store = LWModelStore(manifest: try fixture.manifest(models), configuration: fixture.configuration(memory: 12 << 30), facts: fixture.facts(models))
+        #expect(await store.admissibleStatuses().count == 3, "each model fits on its own")
+        let first = try await store.lease("m1")
+        let second = try await store.lease("m2")
+        do {
+            _ = try await store.lease("m3")
+            Issue.record("expected the third model to be refused")
+        } catch LWModelStoreError.memoryBusy(let id, let required, let inUse, let available, let holders) {
+            #expect(id == "m3" && required == 4 << 30 && inUse == 8 << 30 && available == 12 << 30 && holders == ["m1", "m2"])
+        }
+        second.release()
+        try await store.lease("m3").release()
+
+        // A keep_loaded job leaves m2 resident; it still counts, and runJob unloads idle residents
+        // when they are what blocks admission.
+        let runtime = ScriptedRuntime()
+        let job = try await store.runJob("m2", pixels: nil, runtime: runtime) { lease in
+            .generate(provider: "fixture_provider", weights: lease.weights, load: .init(residency: .keepLoaded), LWGenerateParams(prompt: "x", width: 512, height: 512))
+        }
+        runtime.complete(0, peak: 1 << 30)
+        _ = await job.collect()
+        #expect(await store.residentModels == ["m2"])
+        await #expect(throws: LWModelStoreError.self) { try await store.lease("m3") }
+        let third = try await store.runJob("m3", pixels: nil, runtime: runtime) { lease in
+            .generate(provider: "fixture_provider", weights: lease.weights, LWGenerateParams(prompt: "x", width: 512, height: 512))
+        }
+        #expect(runtime.releasedModels == 1, "the idle resident was unloaded to admit m3")
+        #expect(await store.residentModels.isEmpty)
+        third.cancel()
+        _ = await third.collect()
+        first.release()
+    }
+
+    @Test func requestsLargerThanTheMeasuredSizeAreRefused() async throws {
+        let fixture = try Fixture()
+        let model = smallModel()
+        var unmeasured = smallModel("unmeasured", repository: "SceneWorks/unmeasured", seed: 6)
+        unmeasured.pixels = nil
+        for item in [model, unmeasured] { try fixture.installInHub(item) }
+        let store = LWModelStore(manifest: try fixture.manifest([model, unmeasured]), configuration: fixture.configuration(), facts: fixture.facts([model, unmeasured]))
+        await #expect(throws: LWModelStoreError.exceedsMeasuredSize(model.id, requested: 2048 * 1024, measured: 1 << 20)) {
+            try await store.lease(model.id, pixels: 2048 * 1024)
+        }
+        await #expect(throws: LWModelStoreError.exceedsMeasuredSize(model.id, requested: 2048 * 1024, measured: 1 << 20)) {
+            try await store.runJob(model.id, pixels: 2048 * 1024, runtime: ScriptedRuntime()) { lease in
+                .generate(provider: "fixture_provider", weights: lease.weights, LWGenerateParams(prompt: "x", width: 2048, height: 1024))
+            }
+        }
+        try await store.lease(model.id, pixels: 1 << 20).release()
+        try await store.lease(model.id).release()
+        await #expect(throws: LWModelStoreError.exceedsMeasuredSize("unmeasured", requested: 512 * 512, measured: nil)) {
+            try await store.lease("unmeasured", pixels: 512 * 512)
+        }
+    }
+
+    @Test func aJobHoldsItsLeaseRecordsItsMemoryAndKeepLoadedStaysLeasedUntilUnloaded() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel()
+        server.serve(model)
+        let fixture = try Fixture()
+        let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
+                                 configuration: fixture.configuration(), facts: fixture.facts([model]))
+        try await store.acceptedDownload(model.id)
+        let root = fixture.managed.appendingPathComponent("SceneWorks--fixture-mlx/\(revisionA)", isDirectory: false)
+        let runtime = ScriptedRuntime()
+        let job = try await store.runJob(model.id, pixels: 512 * 512, runtime: runtime) { lease in
+            .generate(provider: "fixture_provider", weights: lease.weights, LWGenerateParams(prompt: "x", width: 512, height: 512))
+        }
+        #expect(runtime.requests.count == 1 && job.lease.weights == .dir(root.appendingPathComponent("q4")), "the job reads the leased copy")
+        await #expect(throws: LWModelStoreError.leased(model.id), "a running job blocks deletion") { try await store.deleteManagedCopy(model.id) }
+        #expect(await store.evictManaged(toFree: .max).isEmpty)
+        runtime.complete(0, peak: 3 << 30)
+        let events = await job.collect()
+        guard case .completed? = events.last else { Issue.record("expected completion: \(events)"); return }
+        let measured = try #require(await store.ledgerSnapshot.measured[model.id])
+        #expect(measured.peakBytes == 3 << 30 && measured.pixels == 512 * 512, "the completed result's memory is recorded")
+        try await store.deleteManagedCopy(model.id)
+
+        try await store.acceptedDownload(model.id)
+        let resident = try await store.runJob(model.id, pixels: nil, runtime: runtime) { lease in
+            .generate(provider: "fixture_provider", weights: lease.weights, load: .init(residency: .keepLoaded), LWGenerateParams(prompt: "x", width: 512, height: 512))
+        }
+        runtime.complete(1, peak: 2 << 30)
+        _ = await resident.collect()
+        #expect(await store.residentModels == [model.id])
+        await #expect(throws: LWModelStoreError.leased(model.id), "a resident model stays leased") { try await store.deleteManagedCopy(model.id) }
+        await store.releaseResidents(runtime)
+        #expect(runtime.releasedModels == 1)
+        try await store.deleteManagedCopy(model.id)
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+    }
+
+    @Test func aDownloadShortOfSpaceEvictsTheLeastRecentlyUsedUnleasedCopy() async throws {
+        let server = try TestHTTPServer()
+        let models = ["first", "second", "third"].enumerated().map { smallModel($1, repository: "SceneWorks/\($1)", seed: UInt8(20 + $0)) }
+        for model in models { server.serve(model) }
+        let fixture = try Fixture()
+        let managed = fixture.managed
+        var configuration = fixture.configuration()
+        // The volume has room for one model.
+        configuration.freeSpace = { _ in
+            ["first", "second", "third"].contains { FileManager.default.fileExists(atPath: managed.appendingPathComponent("SceneWorks--\($0)").appendingPathComponent(revisionA).path) } ? 0 : .max
+        }
+        let store = LWModelStore(manifest: try fixture.manifest(models, base: server.baseURL.absoluteString), configuration: configuration, facts: fixture.facts(models))
+        try await store.acceptedDownload("first")
+        try await store.acceptedDownload("second")
+        #expect(!FileManager.default.fileExists(atPath: managed.appendingPathComponent("SceneWorks--first/\(revisionA)").path), "the older copy made room")
+        let lease = try await store.lease("second")
+        await #expect(throws: LWModelStoreError.insufficientSpace(needed: models[2].totalBytesForTest, available: 0), "a leased copy is never evicted") {
+            try await store.acceptedDownload("third")
+        }
+        lease.release()
+        try await store.acceptedDownload("third")
+    }
+
+    @Test func cancellingDuringVerificationReturnsPromptly() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel()
+        server.serve(model)
+        let fixture = try Fixture()
+        let access = InstrumentedAccess()
+        access.blockPrefix = fixture.managed.appendingPathComponent(".staging").path  // the hash read blocks
+        let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
+                                 configuration: fixture.configuration(stall: 30), facts: fixture.facts([model]), fileAccess: access)
+        try await store.acceptLicense(model.id)
+        let log = ProgressLog()
+        let id = model.id
+        let task = Task { try await store.download(id) { log.append($0) } }
+        #expect(await waitUntil { access.blockedCalls > 0 })
+        #expect(log.all.last?.phase == .verifying)
+        let gate = access.gate
+        DispatchQueue.global().asyncAfter(deadline: .now() + 4) { gate.signal() }  // never hang the suite
+        let started = Date()
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(Date().timeIntervalSince(started) < 1, "cancel did not wait for the hash")
+        access.blockPrefix = nil
+        gate.signal()
+        #expect(await store.refresh()[0].state.isReady == false, "nothing was published")
+    }
+
+    @Test func aRefusedResumeRestartsTheFileFromZero() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel(size: 512 * 1024)
+        let big = model.files[0]
+        server.serve(model)
+        server.next(.status(416), for: model, file: big.path)
+        let fixture = try Fixture()
+        let part = fixture.managed.appendingPathComponent(".staging/SceneWorks--fixture-mlx@\(revisionA)/\(big.path).part")
+        try FileManager.default.createDirectory(at: part.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try big.data.prefix(100 * 1024).write(to: part)
+        let store = LWModelStore(manifest: try fixture.manifest([model], base: server.baseURL.absoluteString),
+                                 configuration: fixture.configuration(), facts: fixture.facts([model]))
+        #expect(try await store.acceptedDownload(model.id).state.isReady)
+        #expect(server.requests.filter { $0.path.hasSuffix(big.path) }.map(\.range) == ["bytes=\(100 * 1024)-", nil], "416 truncated the partial and restarted")
+    }
+
+    @Test func storeInitSweepsOrphanedTrashAndStaleStaging() throws {
+        let fixture = try Fixture()
+        let model = smallModel()
+        let published = smallModel("published", repository: "SceneWorks/published", seed: 2)
+        let staging = fixture.managed.appendingPathComponent(".staging")
+        func write(_ url: URL) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: url)
+        }
+        let trash = fixture.managed.appendingPathComponent(".trash/\(UUID().uuidString)/model.safetensors")
+        let superseded = staging.appendingPathComponent("SceneWorks--fixture-mlx@\(revisionB)/q4/tokenizer.json.part")
+        let unknown = staging.appendingPathComponent("Other--repo@\(revisionA)/x.part")
+        let leftover = staging.appendingPathComponent("SceneWorks--published@\(revisionA)/q4/tokenizer.json.part")
+        let resumable = staging.appendingPathComponent("SceneWorks--fixture-mlx@\(revisionA)/q4/transformer/model.safetensors.part")
+        for url in [trash, superseded, unknown, leftover, resumable] { try write(url) }
+        try fixture.installManaged(repository: published.repository, files: published.files)
+        _ = LWModelStore(manifest: try fixture.manifest([model, published]), configuration: fixture.configuration(), facts: fixture.facts([model, published]))
+        #expect((try FileManager.default.contentsOfDirectory(atPath: fixture.managed.appendingPathComponent(".trash").path)).isEmpty)
+        for url in [superseded, unknown, leftover] { #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.path) was swept") }
+        #expect(FileManager.default.fileExists(atPath: resumable.path), "a resumable partial is kept")
+    }
+
+    @Test func aGatedRepositoryExplainsHowToGetAccess() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel()
+        server.serve(model)
+        server.next(.status(401), for: model, file: model.files[0].path)
+        server.next(.status(403), for: model, file: model.files[0].path)
+        let fixture = try Fixture()
+        var configuration = fixture.configuration()
+        configuration.accessToken = "hf_explicit"
+        let manifest = try fixture.manifest([model], base: server.baseURL.absoluteString)
+        let store = LWModelStore(manifest: manifest, configuration: configuration, facts: fixture.facts([model]))
+        for status in [401, 403] {
+            do {
+                try await store.acceptedDownload(model.id)
+                Issue.record("expected a gated refusal")
+            } catch let error as LWModelStoreError {
+                #expect(error == .gated(status: status, repository: model.repository, page: server.baseURL.appendingPathComponent(model.repository)))
+                #expect(error.description.contains("accept the model's terms") && error.description.contains("access token"), "\(error)")
+            }
+        }
+        #expect(server.requests.allSatisfy { $0.authorization == "Bearer hf_explicit" })
+        // The token `hf auth login` saved is used when none is given explicitly.
+        let tokenFile = fixture.root.appendingPathComponent("token")
+        try Data("hf_saved\n".utf8).write(to: tokenFile)
+        configuration.accessToken = nil
+        configuration.tokenFile = tokenFile
+        let saved = LWModelStore(manifest: manifest, configuration: configuration, facts: fixture.facts([model]))
+        #expect(try await saved.download(model.id).state.isReady)
+        #expect(server.requests.last?.authorization == "Bearer hf_saved")
+    }
+
+    @Test func evictingOrDeletingAManagedCopyNeverTouchesTheSceneWorksCopy() async throws {
+        let server = try TestHTTPServer()
+        let model = smallModel()
+        server.serve(model)
+        let fixture = try Fixture()
+        let manifest = try fixture.manifest([model], base: server.baseURL.absoluteString)
+        // A managed copy downloaded while SceneWorks had none...
+        let empty = LWModelStore(manifest: manifest, configuration: fixture.configuration(base: server.baseURL, libraries: []), facts: fixture.facts([model]))
+        try await empty.acceptedDownload(model.id)
+        // ...and later SceneWorks installs the same model in its hub.
+        try fixture.installInHub(model)
+        let before = fixture.tree(fixture.hub)
+        #expect(before.values.contains { $0.contains(" -> ") } && before.values.contains { $0.contains("sha=") }, "the hub tree has symlinks and blobs")
+        let root = fixture.managed.appendingPathComponent("SceneWorks--fixture-mlx/\(revisionA)")
+        let store = LWModelStore(manifest: manifest, configuration: fixture.configuration(base: server.baseURL), facts: fixture.facts([model]))
+        guard case .ready(_, .sceneWorks) = await store.refresh()[0].state else { Issue.record("expected the SceneWorks copy to be used"); return }
+        #expect(await store.evictManaged(toFree: .max) == [model.id])
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+        #expect(fixture.tree(fixture.hub) == before, "eviction left every hub file, inode, byte and symlink unchanged")
+
+        try fixture.installManaged(repository: model.repository, files: model.files)
+        try await store.deleteManagedCopy(model.id)
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+        #expect(fixture.tree(fixture.hub) == before, "deletion left every hub file, inode, byte and symlink unchanged")
+        #expect(await store.refresh()[0].state.isReady, "the SceneWorks copy is still admitted")
+        await #expect(throws: LWModelStoreError.externallyOwned(model.id)) { try await store.deleteManagedCopy(model.id) }
+        #expect(fixture.tree(fixture.hub) == before)
+    }
+}
+
+private extension LWModelStore {
+    func acceptLicense(_ id: String) throws { try acceptLicense(id, version: licenseTerms(id).version) }
+
+    @discardableResult
+    func acceptedDownload(_ id: String, progress: @escaping @Sendable (LWDownloadProgress) -> Void = { _ in }) async throws -> LWModelStatus {
+        try acceptLicense(id)
+        return try await download(id, progress: progress)
     }
 }
 

@@ -14,6 +14,7 @@
         {"key": "sana_sprint_1_6b_1024px_diffusers", "declared": "apache-2.0"},
         {"key": "gemma_2_2b_it", "declared": "gemma"}
       ],
+      "sceneWorksLicense": {"id": "sana", "name": "NVIDIA Open Model License", "homepage": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px", "nonCommercial": true},
       "memory": {"peakBytes": 19832105360, "residentBytes": 5568309580, "pixels": 1048576},
       "components": [
         {
@@ -35,7 +36,7 @@
       "routes": [{"task": "embed_image", "provider": "clip_vit_l14"}, {"task": "embed_text", "provider": "clip_vit_l14_text"}],
       "weights": {"kind": "dir", "path": ""},
       "licenseComponents": [],
-      "licenseNote": "The openai/clip-vit-large-patch14 model card declares no licence, and the pinned runtime's licence table has no row for it (inference mlx-gen-catalog licenses.rs). Review the model card before downloading.",
+      "licenseNote": "The openai/clip-vit-large-patch14 model card declares no licence, the pinned runtime's licence table has no row for it (inference mlx-gen-catalog licenses.rs), and SceneWorks' licence manifest has no entry for it. Review the model card before downloading.",
       "memory": {"peakBytes": 1577263112, "residentBytes": 1215877124, "pixels": 1048576},
       "components": [
         {
@@ -55,6 +56,7 @@
       "routes": [{"task": "segment_sam2_box", "provider": "sam2"}],
       "weights": {"kind": "file", "path": "sam2.1_hiera_large.safetensors"},
       "licenseComponents": [{"key": "sam2_1_hiera_large", "declared": "apache-2.0"}],
+      "sceneWorksLicense": {"id": "sam2", "name": "Apache-2.0", "homepage": "https://huggingface.co/facebook/sam2.1-hiera-large", "nonCommercial": false},
       "memory": {"peakBytes": 3352500872, "residentBytes": 909891092, "pixels": 1048576},
       "components": [
         {
@@ -73,6 +75,7 @@
       "routes": [{"task": "segment_sam3_concept", "provider": "sam3"}, {"task": "segment_sam3_box", "provider": "sam3"}],
       "weights": {"kind": "file", "path": "model.safetensors", "tokenizer": "tokenizer.json"},
       "licenseComponents": [{"key": "sam3", "declared": "SAM License"}],
+      "sceneWorksLicense": {"id": "sam3", "name": "SAM License (Meta, custom)", "homepage": "https://huggingface.co/facebook/sam3", "nonCommercial": false},
       "memory": {"peakBytes": 7375436400, "residentBytes": 3384056052, "pixels": 1048576},
       "components": [
         {

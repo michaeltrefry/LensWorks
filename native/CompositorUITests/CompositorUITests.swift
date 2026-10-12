@@ -656,6 +656,8 @@ extension CompositorUITests {
         XCTAssertTrue(location.exists)
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "LensWorks.download.license.sam2_1_hiera_large").firstMatch.exists,
                       "the runtime's licence row is shown")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "LensWorks.download.license.sceneworks.sam2").firstMatch.exists,
+                      "SceneWorks' declared licence is listed next to the runtime's")
         let start = app.buttons["LensWorks.download.start"]
         XCTAssertTrue(start.exists)
         XCTAssertFalse(start.isEnabled, "downloading needs explicit licence acceptance")

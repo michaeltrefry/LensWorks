@@ -7,7 +7,8 @@
 # ~/.cache/huggingface -> /Volumes/Models) whose directories macOS privacy consent blocks the
 # test host app from listing, which would hang the runner. The probe has a deadline; when the
 # weights are not readable from this context the real-weight suite is reported as skipped,
-# unless LW_REQUIRE_REAL=1, which makes that a failure.
+# unless LW_REQUIRE_REAL=1, which makes that a failure. The test host repeats the probe on the
+# weight files themselves (it may be denied where this shell is not), with the same rule.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bundle=$1
@@ -19,6 +20,13 @@ if [[ -z "$sana" ]]; then
   sana=$(./scripts/ci/probe_sana_weights.sh 30)
 fi
 export TEST_RUNNER_LW_INFERENCE_LIBRARY="$library"
+if [[ "${LW_REQUIRE_REAL:-}" == 1 ]]; then
+  export TEST_RUNNER_LW_REQUIRE_REAL=1
+else
+  # The test host probes the weight files itself (open + 4 KB read with a deadline) and skips
+  # with a warning when macOS privacy consent denies or blocks it, even if this shell could list them.
+  export XCODEBUILD_TEST_ALLOW_SKIPPED=CompositorTests/LensWorksInferenceRealWeightTests
+fi
 if [[ -n "$sana" && -d "$sana" ]]; then
   echo "Real-weight test uses $sana"
   export TEST_RUNNER_LW_INFERENCE_REAL_WEIGHTS=1 TEST_RUNNER_LW_INFERENCE_SANA_SPRINT_DIR="$sana"
@@ -27,11 +35,11 @@ elif [[ "${LW_REQUIRE_REAL:-}" == 1 ]]; then
   exit 1
 else
   echo "::warning::Sana Sprint q4 weights are not readable here (missing, or the model volume needs macOS access for this process); the real-weight Swift test is skipped."
-  export XCODEBUILD_TEST_ALLOW_SKIPPED=CompositorTests/LensWorksInferenceRealWeightTests
 fi
 exec ./scripts/ci/xcodebuild_test.sh "$bundle" -project native/Compositor.xcodeproj -scheme Compositor \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath "$derived" -parallel-testing-enabled NO \
   -only-testing:CompositorTests/LensWorksInferenceBufferTests \
+  -only-testing:CompositorTests/LensWorksRealWeightGateTests \
   -only-testing:CompositorTests/LensWorksInferenceRuntimeTests \
   -only-testing:CompositorTests/LensWorksInferenceRealWeightTests \
   -only-testing:CompositorTests/LensWorksModelStoreTests

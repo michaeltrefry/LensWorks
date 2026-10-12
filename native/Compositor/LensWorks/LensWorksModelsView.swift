@@ -87,12 +87,29 @@ final class LWModelCenter {
 
     func plan(_ id: String) async -> LWDownloadPlan? { try? await store?.downloadPlan(id) }
 
-    func startDownload(_ id: String, licenseAccepted: Bool) {
+    /// Records (or withdraws) acceptance of exactly this version of a model's licence terms.
+    func setLicenseAccepted(_ id: String, version: String, _ accepted: Bool) async {
+        guard let store else { return }
+        do {
+            if accepted { try await store.acceptLicense(id, version: version) } else { await store.revokeLicense(id) }
+        } catch { actionError = String(describing: error) }
+        await refresh()
+    }
+
+    /// The production inference job path: admits and leases the model for the whole job,
+    /// records its measured memory, and keeps keep_loaded models leased while resident.
+    func runJob(_ id: String, pixels: Int?, inputs: [LWInferenceImage] = [],
+                request: @escaping @Sendable (LWModelLease) -> LWInferenceRequest) async throws -> LWModelJob {
+        guard let store = await makeStore() else { throw LWModelStoreError.manifest(setupError ?? "The model store is unavailable.") }
+        return try await store.runJob(id, pixels: pixels, inputs: inputs, runtime: try LWInferenceRuntime.installed(), request: request)
+    }
+
+    func startDownload(_ id: String) {
         guard let store, tasks[id] == nil else { return }
         downloads[id] = DownloadState(progress: nil, running: true, error: nil)
         tasks[id] = Task { [weak self] in
             do {
-                try await store.download(id, licenseAccepted: licenseAccepted) { progress in
+                try await store.download(id) { progress in
                     Task { @MainActor [weak self] in
                         guard let self, self.downloads[id]?.running == true else { return }
                         self.downloads[id]?.progress = progress
@@ -183,6 +200,8 @@ private struct LWModelRow: View {
             }
             Text(status.model.summary).font(.caption)
             Text(status.state.message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            LWLicenseSummary(terms: status.license, compact: true)
+                .accessibilityIdentifier("LensWorks.models.license.\(status.id)")
             if let download, let progress = download.progress {
                 ProgressView(value: progress.fraction)
                 Text("\(ByteCountFormatter.string(fromByteCount: Int64(progress.completedBytes), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(progress.totalBytes), countStyle: .file))")
@@ -196,11 +215,17 @@ private struct LWModelRow: View {
                     Button(downloadLabel) { center.downloadSheetModel = status.id }
                         .accessibilityIdentifier("LensWorks.models.download.\(status.id)")
                 }
-                if case .ready(let root, .managed) = status.state {
+                if status.state.isReady && status.needsLicenseAcknowledgement {
+                    Button("Review Licence…") { center.downloadSheetModel = status.id }
+                        .accessibilityIdentifier("LensWorks.models.acknowledge.\(status.id)")
+                }
+                if case .ready(let root, _) = status.state {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+                }
+                if status.hasManagedCopy && download?.running != true {
+                    // Offered for any state, so a corrupt or incomplete copy of our own can be removed.
                     Button("Remove Download") { center.delete(status.id) }
-                } else if case .ready(let root, .sceneWorks) = status.state {
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
+                        .accessibilityIdentifier("LensWorks.models.remove.\(status.id)")
                 }
             }
             .controlSize(.small)
@@ -215,37 +240,74 @@ private struct LWModelRow: View {
     }
 }
 
+/// Every declared licence source, the governing terms and any conflict between sources.
+struct LWLicenseSummary: View {
+    let terms: LWModelLicenseTerms
+    var compact = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if !terms.runtimeDeclared {
+                Text("Licence not declared by runtime").font(.caption).bold()
+                    .accessibilityIdentifier("LensWorks.license.undeclared")
+            }
+            if terms.nonCommercial {
+                Text("Governing terms: \(terms.governing)").font(.caption).bold().foregroundStyle(.orange)
+                    .accessibilityIdentifier("LensWorks.license.noncommercial")
+            }
+            ForEach(terms.sources, id: \.self) { source in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(source.summary).font(.caption)
+                    if !compact {
+                        if let attribution = source.attribution { Text(attribution).font(.caption2).foregroundStyle(.secondary) }
+                        HStack {
+                            if let url = source.textURL { Link("Licence text", destination: url) }
+                            if let url = source.sourceURL { Link("Source", destination: url) }
+                        }.font(.caption2)
+                    }
+                }
+                .accessibilityIdentifier(source.origin == .runtime ? "LensWorks.download.license.\(source.key)" : "LensWorks.download.license.sceneworks.\(source.key)")
+            }
+            if let conflict = terms.conflict {
+                Text(conflict).font(.caption).foregroundStyle(.orange)
+                    .accessibilityIdentifier("LensWorks.license.conflict")
+            }
+            if let note = terms.note, !compact { Text(note).font(.caption).foregroundStyle(.secondary) }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// Explicit download confirmation: size, location, licence terms and live progress.
 struct LWModelDownloadSheet: View {
     let center: LWModelCenter
     let modelID: String
     @State private var plan: LWDownloadPlan?
-    @State private var accepted = false
     @Environment(\.dismiss) private var dismiss
+
+    private var status: LWModelStatus? { center.statuses.first { $0.id == modelID } }
+    /// Opened only to acknowledge the terms of a model that is already available.
+    private var acknowledgeOnly: Bool { status?.state.isReady == true }
 
     var body: some View {
         let download = center.downloads[modelID]
+        let accepted = plan?.licenseAccepted == true
         VStack(alignment: .leading, spacing: 10) {
-            Text("Download \(center.statuses.first { $0.id == modelID }?.model.name ?? modelID)").font(.title3)
+            Text("\(acknowledgeOnly ? "Licence for" : "Download") \(status?.model.name ?? modelID)").font(.title3)
             if let plan {
                 LabeledContent("Size", value: "\(ByteCountFormatter.string(fromByteCount: Int64(plan.remainingBytes), countStyle: .file)) to download (\(ByteCountFormatter.string(fromByteCount: Int64(plan.totalBytes), countStyle: .file)) total)")
                     .accessibilityIdentifier("LensWorks.download.size")
                 LabeledContent("Location", value: plan.destination.path)
                     .accessibilityIdentifier("LensWorks.download.location")
                 Text("Licence").font(.headline)
-                ForEach(plan.licenses, id: \.key) { license in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(license.familyName) (declared “\(license.declared)”)\(license.gated ? " — gated upstream" : "")")
-                        if let attribution = license.attribution { Text(attribution).font(.caption).foregroundStyle(.secondary) }
-                        HStack {
-                            if let url = license.textURL { Link("Licence text", destination: url) }
-                            if let url = license.sourceURL { Link("Source", destination: url) }
-                        }.font(.caption)
-                    }
-                    .accessibilityIdentifier("LensWorks.download.license.\(license.key)")
-                }
-                if let note = plan.licenseNote { Text(note).font(.caption).foregroundStyle(.secondary) }
-                Toggle("I have reviewed these licence terms", isOn: $accepted)
+                LWLicenseSummary(terms: plan.license)
+                Toggle(plan.license.nonCommercial ? "I acknowledge these terms allow non-commercial use only" : "I have reviewed these licence terms",
+                       isOn: Binding(get: { accepted }, set: { value in
+                           Task {
+                               await center.setLicenseAccepted(modelID, version: plan.license.version, value)
+                               self.plan = await center.plan(modelID)
+                           }
+                       }))
                     .accessibilityIdentifier("LensWorks.download.accept")
             } else {
                 ProgressView()
@@ -264,9 +326,9 @@ struct LWModelDownloadSheet: View {
                 if download?.running == true {
                     Button("Cancel Download") { center.cancelDownload(modelID) }
                         .accessibilityIdentifier("LensWorks.download.cancel")
-                } else {
+                } else if !acknowledgeOnly {
                     Button((plan?.remainingBytes ?? 0) < (plan?.totalBytes ?? 0) ? "Resume" : "Download") {
-                        center.startDownload(modelID, licenseAccepted: accepted)
+                        center.startDownload(modelID)
                     }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!accepted || plan == nil)

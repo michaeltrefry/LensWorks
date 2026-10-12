@@ -32,19 +32,73 @@ private nonisolated func resolveSanaSprintQ4(timeout: TimeInterval = 20) -> Resu
     return .success(url)
 }
 
-/// Whether this process can read a file under `dir` within the deadline. A model volume that
-/// macOS privacy consent withholds from the (ad-hoc signed, rebuilt) test host blocks `open`
-/// instead of failing, so the probe runs off the test thread.
-private nonisolated func canRead(_ file: URL, timeout: TimeInterval = 30) -> Bool {
-    final class Box: @unchecked Sendable { var ok = false }
+/// Opens `file` and reads its first 4 KB on a background thread with a deadline. Returns nil when
+/// readable, else why not. A model volume that macOS privacy consent withholds from the (ad-hoc
+/// signed, rebuilt) test host answers EPERM, or blocks `open` instead of failing; the blocked
+/// thread is abandoned, never joined.
+nonisolated func probeWeightFile(_ file: URL, timeout: TimeInterval) -> String? {
+    final class Box: @unchecked Sendable { var failure: String? = "no answer" }
     let box = Box()
     let done = DispatchSemaphore(value: 0)
-    DispatchQueue.global(qos: .userInitiated).async {
-        box.ok = (try? FileHandle(forReadingFrom: file).read(upToCount: 8))?.count == 8
+    let thread = Thread {
+        let fd = open(file.path, O_RDONLY | O_CLOEXEC)
+        if fd < 0 {
+            let code = errno
+            box.failure = code == EPERM || code == EACCES ? "access denied (\(String(cString: strerror(code))))" : String(cString: strerror(code))
+        } else {
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            let count = read(fd, &buffer, buffer.count)
+            box.failure = count > 0 ? nil : "read failed (\(count < 0 ? String(cString: strerror(errno)) : "empty file"))"
+            close(fd)
+        }
         done.signal()
     }
-    return done.wait(timeout: .now() + timeout) == .success && box.ok
+    thread.start()
+    guard done.wait(timeout: .now() + timeout) == .success else {
+        return "no answer within \(String(format: "%g", timeout)) s (blocked, typically by macOS privacy consent)"
+    }
+    return box.failure
 }
+
+/// The in-host gate for real-weight tests. The runner script resolves the weights outside the
+/// test host, but the test host itself may still be denied (or blocked) by macOS privacy consent
+/// for the model volume: that is a skip with a warning, unless LW_REQUIRE_REAL=1 makes it a failure.
+nonisolated enum RealWeightGate: Equatable {
+    case run
+    case skip(String)
+    case fail(String)
+
+    var shouldRun: Bool { if case .skip = self { return false }; return true }
+
+    static func evaluate(_ files: [URL], require: Bool, timeout: TimeInterval = 20) -> RealWeightGate {
+        for file in files {
+            guard let failure = probeWeightFile(file, timeout: timeout) else { continue }
+            let reason = "The test host cannot read \(file.path): \(failure). If the model cache is on another volume, grant the LensWorks development build access to it in Privacy & Security."
+            return require ? .fail("LW_REQUIRE_REAL=1: \(reason)") : .skip(reason)
+        }
+        return .run
+    }
+}
+
+private nonisolated let requireRealWeights = ProcessInfo.processInfo.environment["LW_REQUIRE_REAL"] == "1"
+
+/// Resolved once per test run: the Sana Sprint q4 directory and whether this host may read it.
+private nonisolated let sanaSprintGate: (URL?, RealWeightGate) = {
+    guard runRealWeights else { return (nil, .skip("LW_INFERENCE_REAL_WEIGHTS is not set")) }
+    switch resolveSanaSprintQ4() {
+    case .failure(let error):
+        let reason = "\(error)"
+        if requireRealWeights { return (nil, .fail("LW_REQUIRE_REAL=1: \(reason)")) }
+        print("::warning::Real-weight test skipped. \(reason)")
+        return (nil, .skip(reason))
+    case .success(let weights):
+        let files = ["text_encoder/gemma-2-2b-it.safetensors", "transformer/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.safetensors"]
+            .map { weights.appendingPathComponent($0) }
+        let gate = RealWeightGate.evaluate(files, require: requireRealWeights)
+        if case .skip(let reason) = gate { print("::warning::Real-weight test skipped. \(reason)") }
+        return (weights, gate)
+    }
+}()
 
 /// The app bundle layout build-native.sh produces: the dylib in `Contents/Helpers`, the
 /// metallib in `Contents/Resources` (sealed by the app signature).
@@ -53,6 +107,43 @@ private nonisolated func bundledMetallib(for library: URL) -> URL {
 }
 
 private nonisolated let runRealWeights = hasLibrary && ProcessInfo.processInfo.environment["LW_INFERENCE_REAL_WEIGHTS"] == "1"
+
+/// The real-weight gate itself, on files this test creates (no weights or adapter needed).
+@Suite nonisolated struct LensWorksRealWeightGateTests {
+    @Test func readableDeniedAndBlockedWeightFilesRunSkipOrFail() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lw-gate-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let readable = dir.appendingPathComponent("readable.safetensors")
+        try Data(repeating: 7, count: 8192).write(to: readable)
+        #expect(RealWeightGate.evaluate([readable], require: false, timeout: 2) == .run)
+
+        let denied = dir.appendingPathComponent("denied.safetensors")
+        try Data(repeating: 7, count: 8192).write(to: denied)
+        #expect(chmod(denied.path, 0o000) == 0)
+        defer { _ = chmod(denied.path, 0o600) }
+        guard case .skip(let reason) = RealWeightGate.evaluate([readable, denied], require: false, timeout: 2) else {
+            Issue.record("a denied weight file skips"); return
+        }
+        #expect(reason.contains("access denied") && reason.contains(denied.path))
+        guard case .fail(let required) = RealWeightGate.evaluate([denied], require: true, timeout: 2) else {
+            Issue.record("LW_REQUIRE_REAL=1 turns the skip into a failure"); return
+        }
+        #expect(required.hasPrefix("LW_REQUIRE_REAL=1"))
+
+        // open(O_RDONLY) on a FIFO blocks in the kernel like a privacy-withheld volume.
+        let blocked = dir.appendingPathComponent("blocked.fifo")
+        #expect(mkfifo(blocked.path, 0o600) == 0)
+        let started = Date()
+        guard case .skip(let timedOut) = RealWeightGate.evaluate([blocked], require: false, timeout: 0.5) else {
+            Issue.record("a blocked read skips at the deadline"); return
+        }
+        #expect(Date().timeIntervalSince(started) < 3 && timedOut.contains("no answer"))
+        // Release the abandoned probe thread.
+        let writer = open(blocked.path, O_WRONLY | O_NONBLOCK)
+        if writer >= 0 { close(writer) }
+    }
+}
 
 /// Pixel, alpha and colour-space conversion at the Swift side of the boundary (no adapter needed).
 @Suite nonisolated struct LensWorksInferenceBufferTests {
@@ -247,14 +338,13 @@ nonisolated struct LensWorksInferenceRuntimeTests {
 /// One real image job through Swift: typed progress, output, cancellation and failure.
 @Suite(.serialized, .enabled(if: runRealWeights, "Set LW_INFERENCE_REAL_WEIGHTS=1 on a machine with the SceneWorks Sana Sprint q4 weights"))
 nonisolated struct LensWorksInferenceRealWeightTests {
-    @Test func realImageJobProgressOutputCancelAndFailure() async throws {
+    @Test(.enabled("The test host cannot read the Sana Sprint q4 weights (see the warning); LW_REQUIRE_REAL=1 makes this a failure") {
+        sanaSprintGate.1.shouldRun
+    })
+    func realImageJobProgressOutputCancelAndFailure() async throws {
+        if case .fail(let reason) = sanaSprintGate.1 { Issue.record("\(reason)"); return }
+        let weights = try #require(sanaSprintGate.0)
         let runtime = try LWInferenceRuntime.installed()
-        let weights = try resolveSanaSprintQ4().get()
-        let probe = weights.appendingPathComponent("vae/diffusion_pytorch_model.safetensors")
-        guard canRead(probe) else {
-            throw LWInferenceError.libraryUnavailable(
-                "The test host cannot read \(probe.path) (blocked or missing). If the model cache is on another volume, grant the LensWorks development build access to it in Privacy & Security.")
-        }
         func request(_ prompt: String, steps: Int) -> LWInferenceRequest {
             .generate(provider: "sana_sprint_1600m", weights: .dir(weights), load: .init(residency: .keepLoaded),
                       LWGenerateParams(prompt: prompt, width: 512, height: 512, seed: 7, steps: steps))
