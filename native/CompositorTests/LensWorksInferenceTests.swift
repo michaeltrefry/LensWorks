@@ -148,6 +148,23 @@ nonisolated struct LensWorksInferenceRuntimeTests {
         #expect(caps.notRouted.contains { $0.surface == "trainers" })
     }
 
+    /// The shipped model manifest is compatible with the bundled runtime: same inference
+    /// revision, every route served, every licence row present with the qualified declaration.
+    @Test func shippedModelManifestMatchesTheRuntime() async throws {
+        let caps = try await runtime().capabilities()
+        let facts = LWModelRuntimeFacts(capabilities: caps)
+        let manifest = try LWModelManifest.bundled()
+        #expect(manifest.inferenceRevision == facts.inferenceRevision)
+        #expect(facts.licenses["sam3"]?.familyName.isEmpty == false && facts.licenses["sam3"]?.gated == true)
+        for model in manifest.models {
+            for route in model.routes { #expect(facts.routes.contains(route.key), "\(model.id): \(route.key)") }
+            for license in model.licenseComponents {
+                #expect(facts.licenses[license.key]?.declared == license.declared, "\(model.id): \(license.key)")
+            }
+            #expect(model.memory.peakBytes != nil, "\(model.id) has a measured memory need")
+        }
+    }
+
     @Test func malformedRequestsAreRejectedSynchronously() async throws {
         let runtime = try runtime()
         await #expect(throws: LWInferenceError.self) { try await runtime.start(LWInferenceRequest(json: Data("{".utf8))) }
@@ -254,6 +271,7 @@ nonisolated struct LensWorksInferenceRealWeightTests {
         #expect(cg.colorSpace?.name == CGColorSpace.sRGB && cg.width == 512)
         guard case .completed(let result)? = events.last else { Issue.record("expected completion: \(events.last as Any)"); return }
         #expect(result.provider == "sana_sprint_1600m" && result.images == 1 && result.inferenceRevision.count == 40)
+        #expect((result.memory?.peakBytes ?? 0) > 0 && (result.memory?.activeBytes ?? 0) > 0, "the job reports its measured memory")
         #expect(result.metallib == bundledMetallib(for: runtime.libraryURL).path,
                 "the real job ran on the bundled metallib")
 

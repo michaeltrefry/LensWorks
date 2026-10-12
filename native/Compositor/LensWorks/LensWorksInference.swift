@@ -358,6 +358,13 @@ nonisolated struct LWInferenceResult: Decodable, Sendable, Equatable {
     let space: String?
     /// The metallib MLX was pinned to, or `mlx_search_order` for unbundled development builds.
     let metallib: String?
+    /// MLX's measured unified-memory high-water mark for the job (load included unless reused).
+    let memory: Memory?
+
+    struct Memory: Decodable, Sendable, Equatable {
+        let peakBytes: UInt64
+        let activeBytes: UInt64
+    }
 }
 
 nonisolated enum LWInferenceEvent: Sendable, Equatable {
@@ -409,6 +416,28 @@ nonisolated struct LWInferenceCapabilities: Decodable, Sendable, Equatable {
     let backend: String
     let routes: [String: [LWInferenceRoute]]
     let notRouted: [LWInferenceNotRouted]
+    /// The pinned runtime's checkpoint licence table (families and component rows).
+    let modelLicenses: LWInferenceModelLicenses?
+}
+
+nonisolated struct LWInferenceModelLicenses: Decodable, Sendable, Equatable {
+    struct Family: Decodable, Sendable, Equatable {
+        let id: String
+        let spdxId: String?
+        let name: String
+        let textUrl: String
+    }
+    struct Component: Decodable, Sendable, Equatable {
+        let component: String
+        let sourceUrl: String
+        let gated: Bool
+        let declared: String
+        let family: String
+        let attribution: String?
+        let retrieved: String
+    }
+    let families: [Family]
+    let components: [Component]
 }
 
 /// The weights-free GPU self-test report.

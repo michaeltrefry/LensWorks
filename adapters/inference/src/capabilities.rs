@@ -558,6 +558,24 @@ pub fn segmentation_entries() -> Value {
     ])
 }
 
+/// The runtime's own checkpoint licence table (families and component rows, the shared
+/// `gen_core` surface every media catalog reads), so the native model store validates and shows
+/// licence terms from the pinned runtime instead of a hand-maintained copy. Provider mappings are
+/// not re-exported by the bundle, so model components name their licence rows explicitly.
+pub fn model_licenses() -> Value {
+    let manifest = runtime_macos::gen_core::component_licenses_manifest_json(
+        runtime_macos::gen_core::LICENSE_FAMILIES,
+        runtime_macos::gen_core::MEDIA_COMPONENT_LICENSES,
+        &[],
+    );
+    let mut value: Value = serde_json::from_str(&manifest).expect("licence manifest is JSON");
+    let object = value
+        .as_object_mut()
+        .expect("licence manifest is an object");
+    object.remove("providers");
+    value
+}
+
 /// The full weights-free capability document.
 pub fn capabilities(
     registry: &ProviderRegistry,
@@ -607,6 +625,7 @@ pub fn capabilities(
             "embed_text": text_embedders,
             "segment": segmentation_entries(),
         },
+        "model_licenses": model_licenses(),
         "not_routed": [
             {"surface": "trainers", "ids": trainer_ids, "reason": "fine-tuning is not a LensWorks task"},
             {"surface": "text_llm", "ids": text_llm_ids, "reason": "general chat models are not a LensWorks task; captions use the captioner route"},

@@ -33,4 +33,5 @@ exec ./scripts/ci/xcodebuild_test.sh "$bundle" -project native/Compositor.xcodep
   -destination 'platform=macOS,arch=arm64' -derivedDataPath "$derived" -parallel-testing-enabled NO \
   -only-testing:CompositorTests/LensWorksInferenceBufferTests \
   -only-testing:CompositorTests/LensWorksInferenceRuntimeTests \
-  -only-testing:CompositorTests/LensWorksInferenceRealWeightTests
+  -only-testing:CompositorTests/LensWorksInferenceRealWeightTests \
+  -only-testing:CompositorTests/LensWorksModelStoreTests

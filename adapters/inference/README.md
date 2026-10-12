@@ -112,12 +112,24 @@ load: a control the model cannot honour fails with kind `unsupported` and an
 `unsupported` list instead of being dropped. Engine features the adapter does not yet
 carry (LoRA, previews, HDR, prompt enhancement) are reported unsupported per model.
 
+## Model licences and measured memory
+
+The capability document carries `model_licenses`: the pinned runtime's own checkpoint licence
+table (`gen_core::LICENSE_FAMILIES` and `MEDIA_COMPONENT_LICENSES`, schema 3 without provider
+mappings, which the bundle does not re-export). Every `COMPLETED` result carries
+`memory.peak_bytes` and `memory.active_bytes`, MLX's high-water mark and resident bytes for the
+job (the load is included unless the model was reused). The native model store
+(`native/Compositor/LensWorks/LensWorksModelStore.swift`) validates each model's licence rows
+and route against this document and admits models only when their measured peak (the values in
+`LensWorksModels.json`, measured by `measure_reference_memory` in `tests/real_weights.rs`, or a
+larger measurement recorded on the Mac itself) fits the GPU's recommended working set.
+
 ## Events
 
 `STARTED` (`model_reused`), `PROGRESS` (`phase`: `load_model`, `loading`, `step`
 with `current`/`total`, `decoding`), `IMAGE`/`MASK` (pixels plus index, score and box
 for masks), `COMPLETED` (provenance: task, provider, inference revision, weights,
-quantization, reuse, input conversions; plus caption text or embeddings with their
+quantization, reuse, input conversions, measured memory; plus caption text or embeddings with their
 space and dimension), `FAILED` (`kind`: `invalid_request`, `unsupported`,
 `unknown_provider`, `load`, `engine`, `geometry_refused`, `unsupported_output`,
 `no_result`, `panic`, `runtime_unavailable`), `CANCELLED`.
