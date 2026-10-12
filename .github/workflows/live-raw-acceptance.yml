@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
 permissions: {contents: read}
+# One runner serves every workflow, so a newer push to a pull request replaces its older runs.
+# Pushes to main are grouped by commit and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 jobs:
   live-raw:
     runs-on: [self-hosted, macOS, ARM64]
