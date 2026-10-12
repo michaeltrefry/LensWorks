@@ -920,6 +920,8 @@ final class LensWorksCatalog {
     @ObservationIgnored private let rowLimit: UInt16
     @ObservationIgnored private var catalogSelectionEpoch: UInt64 = 0
     @ObservationIgnored private var selectionOwner = UUID().uuidString
+    /// The selection a catalog command (Merge to HDR…) reads, captured at admission.
+    var selectionOwnerForCommands: String { selectionOwner }
     @ObservationIgnored private var queryEpoch: UInt64 = 0
     @ObservationIgnored private var queryOwner = UUID().uuidString
     @ObservationIgnored private var pageOrdinal: Int64 = 0
@@ -962,8 +964,8 @@ final class LensWorksCatalog {
         relink.catalog = self
         storageObservers = LensWorksStorageObservers { [weak self] in self?.forgetOriginalAvailability() }
     }
-    private func beginBusy() -> UUID { let owner = UUID(); busyOwner = owner; return owner }
-    private func finishBusy(_ owner: UUID) { if busyOwner == owner { busyOwner = nil } }
+    func beginBusy() -> UUID { let owner = UUID(); busyOwner = owner; return owner }
+    func finishBusy(_ owner: UUID) { if busyOwner == owner { busyOwner = nil } }
     func captureScope() -> LensWorksCatalogScope { LensWorksCatalogScope(epoch: catalogEpoch, token: catalogToken, path: catalogPath) }
     func scopeIsCurrent(_ scope: LensWorksCatalogScope) -> Bool { !closingRequested && scope.epoch == catalogEpoch && scope.token == catalogToken && scope.path == catalogPath }
     func checkScope(_ scope: LensWorksCatalogScope) throws { if !scopeIsCurrent(scope) { throw CancellationError() } }

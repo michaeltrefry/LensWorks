@@ -86,6 +86,7 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case moveCatalogSelection = "catalog.selection.move", filterRating = "catalog.filter.rating"
     case filterFlag = "catalog.filter.flag", filterLabel = "catalog.filter.label"
     case filterAnyKeyword = "catalog.filter.anyKeyword", clearFilters = "catalog.filter.clear"
+    case mergeHDR = "catalog.hdr.merge"
     /// Choosing photos in the catalog grid: the selection every organize command acts on.
     case selectPhotos = "catalog.photo.select"
     // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
@@ -99,7 +100,7 @@ nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
 }
 nonisolated enum LensWorksCommandParameterType: String, Codable, Sendable {
-    case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating
+    case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating, catalogSelection
     /// One value from the closed set in `choices`.
     case choice
     /// An identity the invoking surface owns (a recent file, project tab, folder, keyword or photo).
@@ -488,7 +489,8 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .filterLabel, label: "Filter by Label", menu: "Catalog Filter/Label", titles: ["Any"] + catalogLabels, parameters: choice("label", ["any"] + catalogLabels)),
         .init(id: .filterAnyKeyword, label: "Any Keyword", menu: "Catalog Filter"),
         .init(id: .clearFilters, label: "Clear Filters", menu: "Catalog Filter"),
-        .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")])
+        .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")]),
+        .init(id: .mergeHDR, label: "Merge to HDR…", menu: "Catalog/Photo", parameters: [.init(name: "photos", type: .catalogSelection, description: "The current catalog selection: 2 through 9 bracketed photos whose originals are online; they are read, never modified."), .init(name: "deghost", type: .optionalBoolean, description: "True or nil keeps the reference frame where the subject moved; false merges every frame everywhere.")])
     ]
 
     private static let automation: [LensWorksCommandDescriptor] = [

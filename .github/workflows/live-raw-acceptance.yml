@@ -31,7 +31,7 @@ jobs:
           ./scripts/build-native.sh
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-app CODE_SIGN_IDENTITY=-
           test -x .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/LensWorksDecodeWorker
-      - name: Run every S08 live RAW, S09 float renderer and S10 layer graph suite
+      - name: Run every S08 live RAW, S09 float renderer and S10 layer graph suite and the S43 HDR merge suite
         # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
         # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
         timeout-minutes: 60
@@ -40,7 +40,7 @@ jobs:
             FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
             LiveRawSampleAllAdmissionTests LiveRawAcceptanceTests
             FloatRendererPrecisionTests FloatTileResidencyTests
-            LayerGraphPixelTests LayerGraphOperationTests)
+            LayerGraphPixelTests LayerGraphOperationTests HDRMergeTests)
           only=(); for suite in "${suites[@]}"; do only+=("-only-testing:CompositorTests/$suite"); done
           ./scripts/ci/xcodebuild_test.sh LiveRawAcceptance.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app -parallel-testing-enabled NO \
             "${only[@]}"
@@ -50,7 +50,7 @@ jobs:
         # many argument cases it runs (verified against a local result bundle: 14 functions, 107 argument cases).
         # Raise S08_EXPECTED_TESTS when test functions are added; a filter typo, a skipped suite or an empty
         # bundle executes fewer and fails here.
-        env: {S08_EXPECTED_TESTS: "287"}
+        env: {S08_EXPECTED_TESTS: "291"}
         run: |
           test -d LiveRawAcceptance.xcresult
           xcrun xcresulttool get test-results summary --path LiveRawAcceptance.xcresult --format json > s08-summary.json

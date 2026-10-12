@@ -444,6 +444,7 @@ struct LensWorksCatalogWorkspace: View {
                 .disabled(catalog.organizationRedo.isEmpty || catalog.isBusy)
                 .help(catalog.organizationRedo.last.map { "Redo " + $0.title } ?? "Nothing to redo")
                 .accessibilityIdentifier("LensWorks.redoOrganization")
+            LensWorksHDRMergeButton(catalog: catalog, workspace: workspace).fixedSize()
             Divider().frame(height: 16)
             Menu("Filter") {
                 Menu("Rating") {
