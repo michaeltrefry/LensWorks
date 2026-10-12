@@ -140,7 +140,7 @@ struct LensWorksHDRMergeButton: View {
     var body: some View {
         let descriptor = LensWorksCommandRegistry.descriptor(.mergeHDR)
         let reason = catalog.hdrMergeAvailability()
-        Button(LensWorksCommandRegistry.menuLabel(descriptor.label, reason: reason)) { confirming = true }
+        Button(LensWorksCommandRegistry.menuLabel(descriptor.label, reason: reason)) { LensWorksCommandDispatcher.perform(.init(.mergeHDR), reason: reason) { confirming = true } }
             .disabled(reason != nil).help(reason ?? descriptor.label)
             .accessibilityIdentifier(descriptor.id.rawValue)
             .sheet(isPresented: $confirming) {
@@ -151,7 +151,7 @@ struct LensWorksHDRMergeButton: View {
                     Toggle("Deghost moving subjects", isOn: $deghost).accessibilityIdentifier("LensWorks.hdrDeghost")
                     HStack {
                         Spacer()
-                        Button("Cancel", role: .cancel) { confirming = false }.keyboardShortcut(.cancelAction)
+                        Button("Cancel", role: .cancel) { confirming = false }.registeredCommandShortcut(.cancel, role: .cancelAction)
                         Button("Merge") {
                             confirming = false
                             let deghost = deghost
@@ -163,7 +163,7 @@ struct LensWorksHDRMergeButton: View {
                                     await catalog.createWorkingVersion(workspace: workspace)
                                 } catch { if !(error is CancellationError), catalog.scopeIsCurrent(scope) { catalog.error = error.localizedDescription } }
                             }
-                        }.keyboardShortcut(.defaultAction).accessibilityIdentifier("LensWorks.hdrMergeConfirm")
+                        }.registeredCommandShortcut(.apply, role: .defaultAction).accessibilityIdentifier("LensWorks.hdrMergeConfirm")
                     }
                 }.padding(20).frame(width: 380)
             }
