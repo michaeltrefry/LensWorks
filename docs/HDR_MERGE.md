@@ -6,7 +6,11 @@
 
 1. **Development.** Each source original is developed by the editor's own managed source development (`LWSourceDeveloper.createPlane`), RAW or raster, to extended-linear sRGB float. Originals are read only. Their SHA-256 is taken before development and checked again before the import; if any source changed, the DNG is deleted and nothing is imported.
 2. **Reference.** The reference is the frame with the median mean luminance, so the middle exposure of a bracket.
-3. **Alignment.** Each frame gets an integer translation found with median-threshold bitmaps (Ward 2003). The search runs coarse to fine over up to six pyramid levels, so shifts of up to ±63 px are found. On ties the smaller shift wins, so a static scene stays at (0, 0). Pixels shifted in from outside the frame get no weight.
+3. **Alignment.** Each frame gets an integer translation found with median-threshold bitmaps (Ward 2003). Two searches run:
+   - a coarse-to-fine pyramid search over up to six levels: ±1 at the coarsest level, then ±2 at each finer level, for large handheld shifts;
+   - a full-resolution search within ±2 px of zero, which uses fine texture that averaging removes from the coarse levels.
+
+   Both are scored by the disagreement rate over the pixels they actually compare, so a larger shift is not rewarded for comparing fewer pixels. The lower rate wins; on ties the smaller shift wins, so a static scene stays at (0, 0). Pixels shifted in from outside the frame get no weight.
 4. **Exposure.** Each frame's linear exposure relative to the reference is the median of log2(Y_frame / Y_ref) over pixels that are well exposed in both frames. The median ignores the minority of pixels that moved. Frames that share too few well-exposed pixels are refused.
 5. **Weights.** Weight = hat(peak / clip) × exposure.
    - hat(t) = 1 − (2t − 1)^12.
