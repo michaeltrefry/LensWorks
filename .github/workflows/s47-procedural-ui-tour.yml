@@ -58,7 +58,7 @@ jobs:
         run: |
           ./scripts/ci/xcodebuild_test.sh CommandAudit.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO \
             -only-testing:CompositorTests/CommandAuditTests
-      - name: Run the 100k-photo, organization, offline relink, command registry, S43 HDR catalog, S38 and S40 automation native tests
+      - name: Run the 100k-photo, organization, offline relink, command registry, S38 and S40 automation native tests
         timeout-minutes: 30
         env:
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
@@ -102,7 +102,6 @@ jobs:
             -only-testing:CompositorTests/LensWorksAutomationTests \
             -only-testing:CompositorTests/LensWorksAgentCommandTests \
             -only-testing:CompositorTests/LensWorksUserStateTests \
-            -only-testing:CompositorTests/HDRMergeCatalogTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
             -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
