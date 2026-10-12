@@ -15,9 +15,7 @@ library="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpe
 test -f "$library"
 sana=${LW_INFERENCE_SANA_SPRINT_DIR:-}
 if [[ -z "$sana" ]]; then
-  hub="$HOME/.cache/huggingface/hub"
-  sana=$(perl -e 'alarm shift; exec @ARGV' 30 /bin/bash -c \
-    'ls -d "$1"/models--SceneWorks--Sana_Sprint_1.6B_1024px_mlx/snapshots/*/q4 2>/dev/null | head -1' _ "$hub") || sana=""
+  sana=$(./scripts/ci/probe_sana_weights.sh 30)
 fi
 export TEST_RUNNER_LW_INFERENCE_LIBRARY="$library"
 if [[ -n "$sana" && -d "$sana" ]]; then
