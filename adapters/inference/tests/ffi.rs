@@ -127,6 +127,18 @@ fn malformed_requests_and_buffers_fail_synchronously() {
         color_space: 1,
     };
     assert_eq!(start(r#"{"version":1,"task":"caption","provider":"c","weights":{"dir":"/m"},"params":{"input":0}}"#, &[short], &ctx).unwrap_err()["kind"], "invalid_input");
+    // An edge above the limit is a typed error, checked before the buffer is read.
+    let huge = LwInferenceImage {
+        pixels: pixels.as_ptr(),
+        byte_length: 4,
+        width: pixels::MAX_EDGE + 1,
+        height: 1,
+        row_bytes: (pixels::MAX_EDGE + 1) * 4,
+        channels: 4,
+        alpha: 1,
+        color_space: 1,
+    };
+    assert_eq!(start(r#"{"version":1,"task":"caption","provider":"c","weights":{"dir":"/m"},"params":{"input":0}}"#, &[huge], &ctx).unwrap_err()["kind"], "input_too_large");
     // NULL callback.
     let request = CString::new("{}").unwrap();
     let mut error: *mut c_char = std::ptr::null_mut();
@@ -215,4 +227,26 @@ fn release_from_inside_the_c_callback_is_safe() {
     );
     assert_eq!(ctx.after_release.load(Ordering::SeqCst), 0);
     assert_eq!(lw_inference_release_models(), 0);
+}
+
+#[test]
+fn the_gpu_self_test_runs_both_kernels_on_the_executor_thread() {
+    let value = take_string(lw_inference_self_test());
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["ok"], true, "{value}");
+    let result = &value["result"];
+    assert_eq!(result["thread"], "lensworks-inference-executor");
+    let ops: Vec<&str> = result["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["op"].as_str().unwrap())
+        .collect();
+    assert_eq!(ops, ["steel_gemm_f32", "quantized_matmul_q4"]);
+    for op in result["ops"].as_array().unwrap() {
+        assert!(op["max_rel_error"].as_f64().unwrap() <= op["tolerance"].as_f64().unwrap());
+    }
+    // No bundled metallib beside the test binary: MLX keeps its own search order.
+    assert_eq!(result["metallib_resolution"], "mlx_search_order");
+    assert_eq!(result["metallib"], Value::Null);
 }

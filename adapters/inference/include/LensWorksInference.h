@@ -69,10 +69,18 @@ uint32_t lw_inference_abi_version(void);
 /* Owned JSON {"version":1,"ok":true,"result":{...}}; release with lw_inference_string_free. */
 char *lw_inference_capabilities(void);
 
+/* Weights-free GPU self-test, run on the executor thread after the jobs queued ahead of it:
+ * a steel GEMM and a Q4 quantized_matmul checked against a CPU reference. Owned JSON
+ * {"version":1,"ok":bool,"result":{"metallib":<path MLX loaded, or null under its own search
+ * order>,"metallib_resolution":...,"ops":[...]}}; release with lw_inference_string_free. */
+char *lw_inference_self_test(void);
+
 /* NULL is allowed. Never free these strings with any other allocator. */
 void lw_inference_string_free(char *value);
 
-/* Validates synchronously and queues the job. On failure returns NULL and, when error_out is
+/* Copies and validates the inputs synchronously and queues the job (callers on a UI thread
+ * should call this from a background thread: input copies scale with the image size). An input
+ * edge above 16384 pixels fails with kind "input_too_large". On failure returns NULL and, when error_out is
  * non-NULL, stores an owned JSON {"kind","message"}. On success the job owns no caller memory
  * except context, which must remain valid until lw_inference_job_release returns. Every job
  * not released first receives exactly one terminal event (COMPLETED, FAILED or CANCELLED). */

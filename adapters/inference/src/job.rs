@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use runtime_macos::gen_core::CancelFlag;
 use serde_json::Value;
@@ -155,7 +156,9 @@ impl Drop for JobHandle {
 /// `state` (the resident model and provider registry).
 pub trait Runner: Send + 'static {
     type State;
-    fn init(self) -> Result<Self::State, String>;
+    /// Build the executor state. Called on the executor thread; after a failure it is tried
+    /// again for a later job (see [`RetryPolicy`]), so a transient failure is not permanent.
+    fn init(&mut self) -> Result<Self::State, String>;
     fn run(state: &mut Self::State, request: Request, job: &Shared);
     /// Drop resident models; returns how many were released.
     fn release_models(state: &mut Self::State) -> usize;
@@ -163,9 +166,31 @@ pub trait Runner: Send + 'static {
     fn after_panic(state: &mut Self::State);
 }
 
+/// When runtime initialisation is retried after it failed: not before `initial` has passed,
+/// doubling after each further failure up to `max`. Jobs arriving inside the backoff window
+/// fail fast with `runtime_unavailable` and the remaining delay.
+#[derive(Clone, Copy, Debug)]
+pub struct RetryPolicy {
+    pub initial: Duration,
+    pub max: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            initial: Duration::from_secs(1),
+            max: Duration::from_secs(60),
+        }
+    }
+}
+
+type Call = Box<dyn FnOnce() + Send>;
+
 enum Command {
     Run(Box<Request>, Arc<Shared>),
     ReleaseModels(mpsc::SyncSender<usize>),
+    /// Arbitrary work that must run on the executor (MLX) thread, e.g. the GPU self-test.
+    Call(Call),
 }
 
 pub struct Executor {
@@ -176,25 +201,79 @@ pub fn failed_json(kind: &str, message: &str) -> Value {
     serde_json::json!({ "kind": kind, "message": message })
 }
 
+/// The executor thread's view of runtime initialisation.
+struct Init<R: Runner> {
+    runner: R,
+    policy: RetryPolicy,
+    state: Option<R::State>,
+    error: String,
+    delay: Duration,
+    next_attempt: Instant,
+    attempts: u32,
+}
+
+impl<R: Runner> Init<R> {
+    fn new(runner: R, policy: RetryPolicy) -> Self {
+        Self {
+            runner,
+            policy,
+            state: None,
+            error: String::new(),
+            delay: policy.initial,
+            next_attempt: Instant::now(),
+            attempts: 0,
+        }
+    }
+
+    /// The state, initialising it when absent and the backoff window has passed.
+    fn state(&mut self) -> Result<&mut R::State, Value> {
+        if self.state.is_none() {
+            let now = Instant::now();
+            if now < self.next_attempt {
+                let mut value = failed_json("runtime_unavailable", &self.error);
+                value["retry_after_ms"] =
+                    serde_json::json!((self.next_attempt - now).as_millis() as u64);
+                return Err(value);
+            }
+            self.attempts += 1;
+            match catch_unwind(AssertUnwindSafe(|| self.runner.init())) {
+                Ok(Ok(state)) => {
+                    self.state = Some(state);
+                    self.delay = self.policy.initial;
+                }
+                failure => {
+                    self.error = match failure {
+                        Ok(Err(message)) => message,
+                        _ => "inference runtime initialisation panicked".into(),
+                    };
+                    self.next_attempt = Instant::now() + self.delay;
+                    let mut value = failed_json("runtime_unavailable", &self.error);
+                    value["retry_after_ms"] = serde_json::json!(self.delay.as_millis() as u64);
+                    value["attempts"] = serde_json::json!(self.attempts);
+                    self.delay = (self.delay * 2).min(self.policy.max);
+                    return Err(value);
+                }
+            }
+        }
+        Ok(self.state.as_mut().expect("state"))
+    }
+}
+
 impl Executor {
     pub fn spawn<R: Runner>(runner: R) -> Self {
+        Self::spawn_with_retry(runner, RetryPolicy::default())
+    }
+
+    pub fn spawn_with_retry<R: Runner>(runner: R, policy: RetryPolicy) -> Self {
         let (tx, rx) = mpsc::channel::<Command>();
         thread::Builder::new()
             .name("lensworks-inference-executor".into())
             .spawn(move || {
-                let mut state = match catch_unwind(AssertUnwindSafe(|| runner.init())) {
-                    Ok(Ok(state)) => Some(state),
-                    Ok(Err(message)) => {
-                        Self::drain_failed(rx, &message);
-                        return;
-                    }
-                    Err(_) => {
-                        Self::drain_failed(rx, "inference runtime initialisation panicked");
-                        return;
-                    }
-                };
+                let mut init = Init::new(runner, policy);
+                // Initialise eagerly so the first job does not pay for it; a failure here is
+                // retried by a later job.
+                let _ = init.state();
                 for command in rx {
-                    let state = state.as_mut().expect("state");
                     match command {
                         Command::Run(request, job) => {
                             if job.is_cancelled() {
@@ -204,6 +283,13 @@ impl Executor {
                                 );
                                 continue;
                             }
+                            let state = match init.state() {
+                                Ok(state) => state,
+                                Err(failure) => {
+                                    job.emit_json(EventKind::Failed, &failure);
+                                    continue;
+                                }
+                            };
                             let outcome =
                                 catch_unwind(AssertUnwindSafe(|| R::run(state, *request, &job)));
                             if outcome.is_err() {
@@ -230,10 +316,18 @@ impl Executor {
                             }
                         }
                         Command::ReleaseModels(reply) => {
-                            let released =
-                                catch_unwind(AssertUnwindSafe(|| R::release_models(state)))
-                                    .unwrap_or(0);
+                            let released = init
+                                .state
+                                .as_mut()
+                                .map(|state| {
+                                    catch_unwind(AssertUnwindSafe(|| R::release_models(state)))
+                                        .unwrap_or(0)
+                                })
+                                .unwrap_or(0);
                             let _ = reply.send(released);
+                        }
+                        Command::Call(call) => {
+                            let _ = catch_unwind(AssertUnwindSafe(call));
                         }
                     }
                 }
@@ -242,18 +336,15 @@ impl Executor {
         Self { tx: Mutex::new(tx) }
     }
 
-    fn drain_failed(rx: mpsc::Receiver<Command>, message: &str) {
-        for command in rx {
-            match command {
-                Command::Run(_, job) => job.emit_json(
-                    EventKind::Failed,
-                    &failed_json("runtime_unavailable", message),
-                ),
-                Command::ReleaseModels(reply) => {
-                    let _ = reply.send(0);
-                }
-            }
-        }
+    /// Run `f` on the executor thread after the jobs queued ahead of it and return its result
+    /// (`None` if it panicked or the executor stopped).
+    pub fn call<T: Send + 'static>(&self, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (reply, rx) = mpsc::sync_channel(1);
+        let call: Call = Box::new(move || {
+            let _ = reply.send(f());
+        });
+        lock(&self.tx).send(Command::Call(call)).ok()?;
+        rx.recv().ok()
     }
 
     pub fn submit(&self, request: Request, sink: Sink) -> JobHandle {

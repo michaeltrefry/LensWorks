@@ -32,17 +32,21 @@ helpers="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpe
 mkdir -p "$helpers"
 cp "$CARGO_TARGET_DIR/release/photocatalog" "$helpers/PhotoCatalogWorker"
 cp "$CARGO_TARGET_DIR/release/lensworks-decode-worker" "$helpers/LensWorksDecodeWorker"
-# The inference runtime sits beside the helpers. The adapter pins the mlx.metallib next to
-# itself (strictly, before any Metal work), so the build machine's path is never used.
+# The inference runtime sits beside the helpers; its mlx.metallib is a resource, sealed by the
+# app's own signature. The adapter pins Contents/Resources/mlx.metallib strictly before any
+# Metal work, so the build machine's compiled-in metallib path is never used.
+app="$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app"
 cp "$inference_target/release/liblensworks_inference.dylib" "$helpers/liblensworks_inference.dylib"
 # Exactly the metallib this library was compiled against (its embedded MLX build path).
 metallib=$(strings -a "$inference_target/release/liblensworks_inference.dylib" | awk '/^\/.*\/mlx\.metallib$/ && !found { print; found = 1 }')
 test -f "$metallib"
-cp "$metallib" "$helpers/mlx.metallib"
+rm -f "$helpers/mlx.metallib"
+cp "$metallib" "$app/Contents/Resources/mlx.metallib"
 install_name_tool -id @rpath/liblensworks_inference.dylib "$helpers/liblensworks_inference.dylib"
 codesign --force --sign - --timestamp=none "$helpers/liblensworks_inference.dylib"
-# A data file in a nested-code directory carries its own signature for the app seal.
-codesign --force --sign - --timestamp=none "$helpers/mlx.metallib"
 codesign --force --sign - --timestamp=none "$helpers/PhotoCatalogWorker"
 codesign --force --sign - --timestamp=none "$helpers/LensWorksDecodeWorker"
-codesign --force --sign - --timestamp=none "$PWD/.build/xcode-app/Build/Products/Debug/LensWorks.app"
+# Re-seal the app over the added helpers and resource, keeping the entitlements and code
+# signing flags (including the hardened runtime, when enabled) that Xcode signed it with.
+codesign --force --sign - --timestamp=none --preserve-metadata=entitlements,flags,runtime "$app"
+codesign --verify --strict --deep "$app"

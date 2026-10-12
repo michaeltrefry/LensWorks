@@ -23,12 +23,91 @@ use crate::request::{
     TargetParam, WeightsRef,
 };
 
-/// Where providers come from. Production uses the validated runtime catalog; tests may
-/// substitute generator loading while keeping the real registry descriptors.
+/// A box-prompted still-image segmentation utility (SAM2). Host data in and out, so the
+/// route's input conversion and output mapping do not depend on the MLX implementation.
+pub trait Sam2Utility {
+    /// The mask for `box_xyxy` (source pixels) over `image` (RGB at the source size): row-major
+    /// `width * height` bytes.
+    fn segment(&self, image: &gen_core::Image, box_xyxy: [f32; 4]) -> gen_core::Result<Vec<u8>>;
+}
+
+/// One SAM3 instance read back to the host: a mask-logit grid with its score and box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sam3Instance {
+    pub score: f32,
+    pub box_xyxy: [f32; 4],
+    /// Row-major `grid_width * grid_height` mask values; `> 0` is inside.
+    pub grid: Vec<f32>,
+    pub grid_width: usize,
+    pub grid_height: usize,
+}
+
+/// The SAM3 open-vocabulary image segmenter with its tokenizer.
+pub trait Sam3Utility {
+    /// Every instance matching `concept` over `image` (RGB at the source size), optionally
+    /// constrained by one positive box in source pixels.
+    fn segment(
+        &self,
+        image: &gen_core::Image,
+        concept: &str,
+        prompt_box: Option<[f32; 4]>,
+        threshold: f32,
+        mask_threshold: f32,
+    ) -> gen_core::Result<Vec<Sam3Instance>>;
+}
+
+/// Where providers come from. Production uses the validated runtime catalog and the bespoke
+/// SAM utilities; tests substitute any loader while keeping the real registry descriptors.
 pub trait ProviderSource {
     fn registry(&self) -> &ProviderRegistry;
     fn load_generator(&self, id: &str, spec: &LoadSpec) -> gen_core::Result<Box<dyn Generator>> {
         self.registry().load(id, spec)
+    }
+    fn load_transform(&self, id: &str, spec: &LoadSpec) -> gen_core::Result<Box<dyn Transform>> {
+        self.registry().load_transform(id, spec)
+    }
+    fn load_captioner(&self, id: &str, spec: &LoadSpec) -> gen_core::Result<Box<dyn Captioner>> {
+        self.registry().load_captioner(id, spec)
+    }
+    fn load_image_embedder(
+        &self,
+        id: &str,
+        spec: &LoadSpec,
+    ) -> gen_core::Result<Box<dyn ImageEmbedder>> {
+        self.registry().load_image_embedder(id, spec)
+    }
+    fn load_text_embedder(
+        &self,
+        id: &str,
+        spec: &LoadSpec,
+    ) -> gen_core::Result<Box<dyn TextEmbedder>> {
+        self.registry().load_text_embedder(id, spec)
+    }
+    fn load_sam2(&self, weights: &Path, size: Sam2Size) -> gen_core::Result<Box<dyn Sam2Utility>> {
+        let size = match size {
+            Sam2Size::Tiny => Sam2ModelSize::Tiny,
+            Sam2Size::Small => Sam2ModelSize::Small,
+            Sam2Size::BasePlus => Sam2ModelSize::BasePlus,
+            Sam2Size::Large => Sam2ModelSize::Large,
+        };
+        let weights = read_weights(weights)?;
+        Ok(Box::new(Sam2Segmenter::from_weights_for_size(
+            &weights, size,
+        )?))
+    }
+    fn load_sam3(
+        &self,
+        weights: &Path,
+        tokenizer: &Path,
+        quantize_bits: Option<i32>,
+    ) -> gen_core::Result<Box<dyn Sam3Utility>> {
+        let weights = read_weights(weights)?;
+        let mut model = Sam3ImageSegmenter::from_weights(&weights)?;
+        if let Some(bits) = quantize_bits {
+            model.quantize(bits)?;
+        }
+        let tokenizer = Sam3Tokenizer::from_file(tokenizer, &Sam3TextConfig::sam3())?;
+        Ok(Box::new(Sam3 { model, tokenizer }))
     }
 }
 
@@ -50,14 +129,132 @@ impl ProviderSource for CatalogProviders {
     }
 }
 
+fn read_weights(path: &Path) -> gen_core::Result<Weights> {
+    Weights::from_file(path)
+        .and_then(|w| w.materialize().map(|()| w))
+        .map_err(|e| gen_core::Error::Msg(format!("weights {}: {e}", path.display())))
+}
+
+fn readback(stage: &str, e: impl std::fmt::Display) -> gen_core::Error {
+    gen_core::Error::Msg(format!("{stage}: {e}"))
+}
+
+impl Sam2Utility for Sam2Segmenter {
+    fn segment(&self, image: &gen_core::Image, box_xyxy: [f32; 4]) -> gen_core::Result<Vec<u8>> {
+        let mask =
+            Sam2Segmenter::segment(self, &image.pixels, image.height, image.width, box_xyxy)?;
+        let bytes = mask
+            .as_dtype(Dtype::Uint8)
+            .map_err(|e| readback("mask readback", e))?;
+        Ok(bytes.as_slice::<u8>().to_vec())
+    }
+}
+
+struct Sam3 {
+    model: Sam3ImageSegmenter,
+    tokenizer: Sam3Tokenizer,
+}
+
+const SAM3_INPUT: u32 = 1008;
+
+fn sam3_pixels(image: &gen_core::Image) -> gen_core::Result<Array> {
+    let buffer = image::RgbImage::from_raw(image.width, image.height, image.pixels.clone())
+        .ok_or_else(|| gen_core::Error::Msg("sam3 input buffer".into()))?;
+    let resized = image::imageops::resize(
+        &buffer,
+        SAM3_INPUT,
+        SAM3_INPUT,
+        image::imageops::FilterType::Triangle,
+    );
+    let plane = (SAM3_INPUT * SAM3_INPUT) as usize;
+    let mut chw = vec![0f32; 3 * plane];
+    for (i, px) in resized.as_raw().chunks_exact(3).enumerate() {
+        for c in 0..3 {
+            chw[c * plane + i] = f32::from(px[c]) / 127.5 - 1.0;
+        }
+    }
+    Ok(Array::from_slice(
+        &chw,
+        &[1, 3, SAM3_INPUT as i32, SAM3_INPUT as i32],
+    ))
+}
+
+impl Sam3Utility for Sam3 {
+    fn segment(
+        &self,
+        image: &gen_core::Image,
+        concept: &str,
+        prompt_box: Option<[f32; 4]>,
+        threshold: f32,
+        mask_threshold: f32,
+    ) -> gen_core::Result<Vec<Sam3Instance>> {
+        let pixels = sam3_pixels(image)?;
+        let (input_ids, text_mask) = self.tokenizer.encode(concept)?;
+        let (fw, fh) = (image.width as f32, image.height as f32);
+        let instances = match prompt_box {
+            None => self.model.segment(
+                &pixels,
+                &input_ids,
+                &text_mask,
+                (fw, fh),
+                threshold,
+                mask_threshold,
+            ),
+            Some(b) => {
+                let (x1, y1) = (b[0].clamp(0.0, fw), b[1].clamp(0.0, fh));
+                let (x2, y2) = (b[2].clamp(0.0, fw), b[3].clamp(0.0, fh));
+                let cxcywh = [
+                    (x1 + x2) * 0.5 / fw,
+                    (y1 + y2) * 0.5 / fh,
+                    (x2 - x1) / fw,
+                    (y2 - y1) / fh,
+                ];
+                let boxes = Array::from_slice(&cxcywh, &[1, 1, 4]);
+                self.model.segment_with_boxes(
+                    &pixels,
+                    &input_ids,
+                    &text_mask,
+                    &boxes,
+                    &[1],
+                    (fw, fh),
+                    threshold,
+                    mask_threshold,
+                )
+            }
+        }?;
+        instances
+            .iter()
+            .map(|inst| {
+                let shape = inst.mask.shape().to_vec();
+                if shape.len() != 2 {
+                    return Err(gen_core::Error::Msg(format!(
+                        "sam3 mask has shape {shape:?}"
+                    )));
+                }
+                let grid = inst
+                    .mask
+                    .as_dtype(Dtype::Float32)
+                    .map_err(|e| readback("mask readback", e))?;
+                Ok(Sam3Instance {
+                    score: inst.score,
+                    box_xyxy: inst.box_xyxy,
+                    grid: grid.as_slice::<f32>().to_vec(),
+                    grid_width: shape[1] as usize,
+                    grid_height: shape[0] as usize,
+                })
+            })
+            .collect()
+    }
+}
+
 enum Loaded {
     Generator(Box<dyn Generator>),
     Transform(Box<dyn Transform>),
     Captioner(Box<dyn Captioner>),
     ImageEmbedder(Box<dyn ImageEmbedder>),
     TextEmbedder(Box<dyn TextEmbedder>),
-    Sam2(Box<Sam2Segmenter>),
-    Sam3(Box<Sam3ImageSegmenter>),
+    Sam2(Box<dyn Sam2Utility>),
+    Sam3(Box<dyn Sam3Utility>),
 }
 
 pub struct State {
@@ -71,7 +268,7 @@ pub struct InferenceRunner<F> {
 
 impl<F> InferenceRunner<F>
 where
-    F: FnOnce() -> Result<Box<dyn ProviderSource>, String> + Send + 'static,
+    F: FnMut() -> Result<Box<dyn ProviderSource>, String> + Send + 'static,
 {
     pub fn new(make: F) -> Self {
         Self { make }
@@ -81,6 +278,10 @@ where
 /// A typed job failure, mapped onto the `Failed` / `Cancelled` terminal events.
 enum JobError {
     Cancelled,
+    /// The request was refused before execution (unknown provider, unsupported control,
+    /// out-of-range value). The resident model, if any, is untouched and stays loaded.
+    Rejected(Value),
+    /// Loading or execution failed; the provider may be inconsistent and is dropped.
     Failed(Value),
 }
 
@@ -89,9 +290,29 @@ impl JobError {
         JobError::Failed(failed_json(kind, message.as_ref()))
     }
 
-    fn unsupported(provider: &str, items: &[Unsupported]) -> Self {
-        JobError::Failed(unsupported_json(provider, items))
+    fn rejected(kind: &str, message: impl AsRef<str>) -> Self {
+        JobError::Rejected(failed_json(kind, message.as_ref()))
     }
+
+    fn unsupported(provider: &str, items: &[Unsupported]) -> Self {
+        JobError::Rejected(unsupported_json(provider, items))
+    }
+}
+
+/// A request-validation error from a capability floor or a provider's `validate`.
+fn validation_error(error: gen_core::Error) -> JobError {
+    match error {
+        gen_core::Error::Canceled => JobError::Cancelled,
+        gen_core::Error::Unsupported(m) => JobError::rejected("unsupported", m),
+        other => JobError::rejected("invalid_request", other.to_string()),
+    }
+}
+
+fn unknown_provider(kind: &str, id: &str) -> JobError {
+    JobError::rejected(
+        "unknown_provider",
+        format!("no {kind} '{id}' is registered"),
+    )
 }
 
 fn engine_error(stage: &str, error: impl Into<gen_core::Error>) -> JobError {
@@ -187,7 +408,7 @@ fn require_existing(path: &Path, label: &str) -> Result<(), JobError> {
     if path.exists() {
         Ok(())
     } else {
-        Err(JobError::new(
+        Err(JobError::rejected(
             "load",
             format!("{label} {} does not exist", path.display()),
         ))
@@ -225,11 +446,11 @@ impl State {
 
 impl<F> Runner for InferenceRunner<F>
 where
-    F: FnOnce() -> Result<Box<dyn ProviderSource>, String> + Send + 'static,
+    F: FnMut() -> Result<Box<dyn ProviderSource>, String> + Send + 'static,
 {
     type State = State;
 
-    fn init(self) -> Result<State, String> {
+    fn init(&mut self) -> Result<State, String> {
         Ok(State {
             providers: (self.make)()?,
             resident: None,
@@ -239,8 +460,8 @@ where
     fn run(state: &mut State, request: Request, job: &Shared) {
         let residency = request.load.residency;
         let outcome = route(state, &request, job);
-        // A failure may leave a provider inconsistent, so it is dropped; a cooperative cancel
-        // leaves a healthy model that `keep_loaded` keeps.
+        // A load/execution failure may leave a provider inconsistent, so it is dropped; a
+        // rejected request or a cooperative cancel leaves a healthy model that `keep_loaded` keeps.
         if residency == Residency::UnloadAfter || matches!(outcome, Err(JobError::Failed(_))) {
             state.drop_resident();
         }
@@ -259,7 +480,9 @@ where
             Err(JobError::Cancelled) => {
                 job.emit_json(EventKind::Cancelled, &json!({"stage": "run"}))
             }
-            Err(JobError::Failed(value)) => job.emit_json(EventKind::Failed, &value),
+            Err(JobError::Failed(value) | JobError::Rejected(value)) => {
+                job.emit_json(EventKind::Failed, &value)
+            }
         }
     }
 
@@ -332,12 +555,7 @@ fn generate(
         .generators()
         .map(|r| (r.descriptor)())
         .find(|d| d.id == request.provider)
-        .ok_or_else(|| {
-            JobError::new(
-                "unknown_provider",
-                format!("no generator '{}' is registered", request.provider),
-            )
-        })?;
+        .ok_or_else(|| unknown_provider("generator", &request.provider))?;
     let unsupported = capabilities::check_generate(&descriptor, p, request.load.quantize);
     if !unsupported.is_empty() {
         return Err(JobError::unsupported(&request.provider, &unsupported));
@@ -422,6 +640,13 @@ fn generate(
         cancel: job.cancel.clone(),
         ..Default::default()
     };
+    // The advertised shared floor (size range and grid, counts, steps, finiteness, sampler /
+    // scheduler membership, conditioning allowlist) is weights-free: refuse here, before any
+    // weights load and without disturbing a resident model.
+    descriptor
+        .capabilities
+        .validate_request(descriptor.id, &req)
+        .map_err(validation_error)?;
     let spec = load_spec(request);
     let key = cache_key(request, "generate");
     let provider = request.provider.clone();
@@ -438,11 +663,8 @@ fn generate(
         EventKind::Started,
         &json!({"task": "generate", "provider": request.provider, "model_reused": reused}),
     );
-    generator.validate(&req).map_err(|e| match e {
-        gen_core::Error::Unsupported(m) => JobError::new("unsupported", m),
-        gen_core::Error::Canceled => JobError::Cancelled,
-        other => JobError::new("invalid_request", other.to_string()),
-    })?;
+    // The provider's own checks (anything beyond the shared floor).
+    generator.validate(&req).map_err(validation_error)?;
     check_cancel(job)?;
     let output = generator
         .generate(&req, &mut |progress| {
@@ -502,12 +724,9 @@ fn transform(
         .transforms()
         .map(|r| (r.descriptor)())
         .find(|d| d.id == request.provider)
-        .ok_or_else(|| {
-            JobError::new(
-                "unknown_provider",
-                format!("no transform '{}' is registered", request.provider),
-            )
-        })?;
+        .ok_or_else(|| unknown_provider("transform", &request.provider))?;
+    // The transform contract advertises its targets and knobs only (no shared request floor),
+    // so this capability check is the whole weights-free validation.
     let unsupported = capabilities::check_transform(&descriptor, p);
     if !unsupported.is_empty() {
         return Err(JobError::unsupported(&request.provider, &unsupported));
@@ -533,7 +752,6 @@ fn transform(
     let provider = request.provider.clone();
     let (reused, loaded) = state.ensure(cache_key(request, "transform"), job, |providers| {
         providers
-            .registry()
             .load_transform(&provider, &spec)
             .map(Loaded::Transform)
             .map_err(|e| engine_error("load", e))
@@ -545,7 +763,8 @@ fn transform(
         EventKind::Started,
         &json!({"task": "transform", "provider": request.provider, "model_reused": reused}),
     );
-    t.validate(&req).map_err(|e| engine_error("validate", e))?;
+    t.validate(&req).map_err(validation_error)?;
+    check_cancel(job)?;
     let image = t
         .apply(&req, &mut |progress| {
             job.emit_json(EventKind::Progress, &progress_json(progress))
@@ -557,6 +776,10 @@ fn transform(
     result["images"] = json!(1);
     Ok((vec![(EventKind::Image, image, meta)], result))
 }
+
+/// Stand-in for a provider-rendered caption prompt in the weights-free floor check: the
+/// provider renders its template (from type/length/options) only after it loads.
+const RENDERED_PROMPT_PROBE: &str = "caption";
 
 fn caption(
     state: &mut State,
@@ -572,45 +795,63 @@ fn caption(
         .captioners()
         .map(|r| (r.descriptor)())
         .find(|d| d.id == request.provider)
-        .ok_or_else(|| {
-            JobError::new(
-                "unknown_provider",
-                format!("no captioner '{}' is registered", request.provider),
-            )
-        })?;
+        .ok_or_else(|| unknown_provider("captioner", &request.provider))?;
     let unsupported = capabilities::check_caption(&descriptor, p);
     if !unsupported.is_empty() {
         return Err(JobError::unsupported(&request.provider, &unsupported));
     }
     let defaults = CaptionOptions::default();
     let sampling_defaults = CaptionSampling::default();
+    let input = request.input(p.input);
+    let options = CaptionOptions {
+        caption_type: p.caption_type.clone().unwrap_or(defaults.caption_type),
+        caption_length: p.caption_length.clone().unwrap_or(defaults.caption_length),
+        extra_options: p.extra_options.clone(),
+        name_input: p.name_input.clone().unwrap_or_default(),
+        custom_prompt: p.custom_prompt.clone().unwrap_or_default(),
+        low_vram: p.low_vram,
+    };
+    let sampling = CaptionSampling {
+        temperature: p.temperature.unwrap_or(sampling_defaults.temperature),
+        top_p: p.top_p.unwrap_or(sampling_defaults.top_p),
+        max_new_tokens: p.max_new_tokens.unwrap_or(sampling_defaults.max_new_tokens),
+        seed: p.seed,
+        repetition_penalty: p
+            .repetition_penalty
+            .unwrap_or(sampling_defaults.repetition_penalty),
+        repetition_context: sampling_defaults.repetition_context,
+    };
+    // Empty: the provider renders its own template from the options (or the custom prompt).
+    let prompt = p.custom_prompt.clone().unwrap_or_default();
+    // The shared captioner floor reads only the image size, prompt, options and sampling, so a
+    // pixel-free probe validates it before any weights load. The rendered template's length is
+    // checked by the provider's own `validate` after loading.
+    let probe = CaptionRequest {
+        image: gen_core::Image {
+            width: input.width,
+            height: input.height,
+            pixels: Vec::new(),
+        },
+        prompt: if prompt.trim().is_empty() {
+            RENDERED_PROMPT_PROBE.into()
+        } else {
+            prompt.clone()
+        },
+        options: options.clone(),
+        sampling,
+        trigger_words: Vec::new(),
+        cancel: job.cancel.clone(),
+    };
+    descriptor
+        .capabilities
+        .validate_request(descriptor.id, &probe)
+        .map_err(validation_error)?;
     let mut conversions = Vec::new();
     let req = CaptionRequest {
-        image: rgb_input(
-            request.input(p.input),
-            format!("input {}", p.input),
-            &mut conversions,
-        ),
-        // Empty: the provider renders its own template from the options (or the custom prompt).
-        prompt: p.custom_prompt.clone().unwrap_or_default(),
-        options: CaptionOptions {
-            caption_type: p.caption_type.clone().unwrap_or(defaults.caption_type),
-            caption_length: p.caption_length.clone().unwrap_or(defaults.caption_length),
-            extra_options: p.extra_options.clone(),
-            name_input: p.name_input.clone().unwrap_or_default(),
-            custom_prompt: p.custom_prompt.clone().unwrap_or_default(),
-            low_vram: p.low_vram,
-        },
-        sampling: CaptionSampling {
-            temperature: p.temperature.unwrap_or(sampling_defaults.temperature),
-            top_p: p.top_p.unwrap_or(sampling_defaults.top_p),
-            max_new_tokens: p.max_new_tokens.unwrap_or(sampling_defaults.max_new_tokens),
-            seed: p.seed,
-            repetition_penalty: p
-                .repetition_penalty
-                .unwrap_or(sampling_defaults.repetition_penalty),
-            repetition_context: sampling_defaults.repetition_context,
-        },
+        image: rgb_input(input, format!("input {}", p.input), &mut conversions),
+        prompt,
+        options,
+        sampling,
         trigger_words: Vec::new(),
         cancel: job.cancel.clone(),
     };
@@ -618,7 +859,6 @@ fn caption(
     let provider = request.provider.clone();
     let (reused, loaded) = state.ensure(cache_key(request, "caption"), job, |providers| {
         providers
-            .registry()
             .load_captioner(&provider, &spec)
             .map(Loaded::Captioner)
             .map_err(|e| engine_error("load", e))
@@ -630,7 +870,8 @@ fn caption(
         EventKind::Started,
         &json!({"task": "caption", "provider": request.provider, "model_reused": reused}),
     );
-    c.validate(&req).map_err(|e| engine_error("validate", e))?;
+    c.validate(&req).map_err(validation_error)?;
+    check_cancel(job)?;
     let out = c
         .caption(&req, &mut |progress| {
             job.emit_json(EventKind::Progress, &progress_json(progress))
@@ -643,6 +884,19 @@ fn caption(
     Ok((Vec::new(), result))
 }
 
+fn dense_only(request: &Request) -> Result<(), JobError> {
+    if request.load.quantize.is_some() {
+        return Err(JobError::unsupported(
+            &request.provider,
+            &[Unsupported {
+                control: "quantize".into(),
+                reason: "embedders load dense".into(),
+            }],
+        ));
+    }
+    Ok(())
+}
+
 fn embed(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs, Value), JobError> {
     let spec = load_spec(request);
     let provider = request.provider.clone();
@@ -653,21 +907,8 @@ fn embed(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs,
                 .image_embedders()
                 .map(|r| (r.descriptor)())
                 .find(|d| d.id == request.provider)
-                .ok_or_else(|| {
-                    JobError::new(
-                        "unknown_provider",
-                        format!("no image embedder '{}' is registered", request.provider),
-                    )
-                })?;
-            if request.load.quantize.is_some() {
-                return Err(JobError::unsupported(
-                    &provider,
-                    &[Unsupported {
-                        control: "quantize".into(),
-                        reason: "embedders load dense".into(),
-                    }],
-                ));
-            }
+                .ok_or_else(|| unknown_provider("image embedder", &request.provider))?;
+            dense_only(request)?;
             let mut conversions = Vec::new();
             let images: Vec<_> = p
                 .inputs
@@ -677,7 +918,6 @@ fn embed(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs,
             let (reused, loaded) =
                 state.ensure(cache_key(request, "embed_image"), job, |providers| {
                     providers
-                        .registry()
                         .load_image_embedder(&provider, &spec)
                         .map(Loaded::ImageEmbedder)
                         .map_err(|e| engine_error("load", e))
@@ -704,25 +944,11 @@ fn embed(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs,
                 .text_embedders()
                 .map(|r| (r.descriptor)())
                 .find(|d| d.id == request.provider)
-                .ok_or_else(|| {
-                    JobError::new(
-                        "unknown_provider",
-                        format!("no text embedder '{}' is registered", request.provider),
-                    )
-                })?;
-            if request.load.quantize.is_some() {
-                return Err(JobError::unsupported(
-                    &provider,
-                    &[Unsupported {
-                        control: "quantize".into(),
-                        reason: "embedders load dense".into(),
-                    }],
-                ));
-            }
+                .ok_or_else(|| unknown_provider("text embedder", &request.provider))?;
+            dense_only(request)?;
             let (reused, loaded) =
                 state.ensure(cache_key(request, "embed_text"), job, |providers| {
                     providers
-                        .registry()
                         .load_text_embedder(&provider, &spec)
                         .map(Loaded::TextEmbedder)
                         .map_err(|e| engine_error("load", e))
@@ -747,13 +973,19 @@ fn embed(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs,
         }
         _ => unreachable!(),
     };
-    if vectors
-        .iter()
-        .any(|v| v.len() != dim || v.iter().any(|x| !x.is_finite()))
+    let expected = match &request.params {
+        Params::EmbedImage(p) => p.inputs.len(),
+        Params::EmbedText(p) => p.texts.len(),
+        _ => unreachable!(),
+    };
+    if vectors.len() != expected
+        || vectors
+            .iter()
+            .any(|v| v.len() != dim || v.iter().any(|x| !x.is_finite()))
     {
         return Err(JobError::new(
             "engine",
-            format!("embedder returned vectors that are not finite {dim}-d"),
+            format!("embedder returned vectors that are not {expected} finite {dim}-d vectors"),
         ));
     }
     let mut result = provenance(request, reused, conversions);
@@ -770,21 +1002,11 @@ fn weights_file(request: &Request) -> Result<PathBuf, JobError> {
             require_existing(p, "weights")?;
             Ok(p.clone())
         }
-        WeightsRef::Dir(_) => Err(JobError::new(
+        WeightsRef::Dir(_) => Err(JobError::rejected(
             "invalid_request",
             format!("{} takes a single weights file", request.task.name()),
         )),
     }
-}
-
-fn read_weights(path: &Path) -> Result<Weights, JobError> {
-    Weights::from_file(path)
-        .and_then(|w| w.materialize().map(|()| w))
-        .map_err(|e| JobError::new("load", format!("weights {}: {e}", path.display())))
-}
-
-fn mlx<T>(stage: &str, r: std::result::Result<T, impl std::fmt::Display>) -> Result<T, JobError> {
-    r.map_err(|e| JobError::new("engine", format!("{stage}: {e}")))
 }
 
 fn sam2_box(
@@ -796,7 +1018,7 @@ fn sam2_box(
         unreachable!()
     };
     if request.provider != "sam2" {
-        return Err(JobError::new(
+        return Err(JobError::rejected(
             "unknown_provider",
             "segment_sam2_box uses provider 'sam2'",
         ));
@@ -811,17 +1033,12 @@ fn sam2_box(
         ));
     }
     let file = weights_file(request)?;
-    let size = match p.model_size {
-        Sam2Size::Tiny => Sam2ModelSize::Tiny,
-        Sam2Size::Small => Sam2ModelSize::Small,
-        Sam2Size::BasePlus => Sam2ModelSize::BasePlus,
-        Sam2Size::Large => Sam2ModelSize::Large,
-    };
     let key = format!("{}\u{0}{:?}", cache_key(request, "sam2"), p.model_size);
-    let (reused, loaded) = state.ensure(key, job, |_| {
-        let weights = read_weights(&file)?;
-        Sam2Segmenter::from_weights_for_size(&weights, size)
-            .map(|s| Loaded::Sam2(Box::new(s)))
+    let size = p.model_size;
+    let (reused, loaded) = state.ensure(key, job, |providers| {
+        providers
+            .load_sam2(&file, size)
+            .map(Loaded::Sam2)
             .map_err(|e| engine_error("load", e))
     })?;
     let Loaded::Sam2(segmenter) = loaded else {
@@ -835,12 +1052,11 @@ fn sam2_box(
     let image = request.input(p.input);
     let mut conversions = Vec::new();
     let rgb = rgb_input(image, format!("input {}", p.input), &mut conversions);
-    let mask = segmenter
-        .segment(&rgb.pixels, image.height, image.width, p.box_xyxy)
+    let bytes = segmenter
+        .segment(&rgb, p.box_xyxy)
         .map_err(|e| engine_error("segment", e))?;
     check_cancel(job)?;
-    let bytes = mlx("mask readback", mask.as_dtype(Dtype::Uint8))?;
-    let mask = HostImage::mask(image.width, image.height, bytes.as_slice::<u8>().to_vec())
+    let mask = HostImage::mask(image.width, image.height, bytes)
         .map_err(|e| JobError::new("engine", e))?;
     let meta = json!({"index": 0, "width": mask.width, "height": mask.height, "channels": 1, "row_bytes": mask.row_bytes(),
                       "values": "0 or 255", "coordinates": "source pixels", "box_xyxy": p.box_xyxy});
@@ -849,33 +1065,29 @@ fn sam2_box(
     Ok((vec![(EventKind::Mask, mask, meta)], result))
 }
 
-const SAM3_INPUT: u32 = 1008;
-
-fn sam3_pixels(image: &gen_core::Image) -> Result<Array, JobError> {
-    let buffer = image::RgbImage::from_raw(image.width, image.height, image.pixels.clone())
-        .ok_or_else(|| JobError::new("engine", "sam3 input buffer"))?;
-    let resized = image::imageops::resize(
-        &buffer,
-        SAM3_INPUT,
-        SAM3_INPUT,
-        image::imageops::FilterType::Triangle,
+/// Number of grid cells of `m` that are inside the mask and inside the normalised box.
+fn mask_area_in_box(m: &Sam3Instance, b: [f32; 4], w: u32, h: u32) -> usize {
+    let (nx1, ny1, nx2, ny2) = (
+        b[0] / w as f32,
+        b[1] / h as f32,
+        b[2] / w as f32,
+        b[3] / h as f32,
     );
-    let plane = (SAM3_INPUT * SAM3_INPUT) as usize;
-    let mut chw = vec![0f32; 3 * plane];
-    for (i, px) in resized.as_raw().chunks_exact(3).enumerate() {
-        for c in 0..3 {
-            chw[c * plane + i] = f32::from(px[c]) / 127.5 - 1.0;
-        }
-    }
-    Ok(Array::from_slice(
-        &chw,
-        &[1, 3, SAM3_INPUT as i32, SAM3_INPUT as i32],
-    ))
+    let (gw, gh) = (m.grid_width, m.grid_height);
+    (0..gw * gh)
+        .filter(|&i| {
+            let (cx, cy) = (
+                ((i % gw) as f32 + 0.5) / gw as f32,
+                ((i / gw) as f32 + 0.5) / gh as f32,
+            );
+            m.grid[i] > 0.0 && cx >= nx1 && cx < nx2 && cy >= ny1 && cy < ny2
+        })
+        .count()
 }
 
 fn sam3(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs, Value), JobError> {
     if request.provider != "sam3" {
-        return Err(JobError::new(
+        return Err(JobError::rejected(
             "unknown_provider",
             format!("{} uses provider 'sam3'", request.task.name()),
         ));
@@ -887,14 +1099,11 @@ fn sam3(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs, 
         .load
         .quantize
         .map(|q| if q == QuantChoice::Q4 { 4 } else { 8 });
-    let (reused, loaded) = state.ensure(cache_key(request, "sam3"), job, |_| {
-        let weights = read_weights(&file)?;
-        let mut model =
-            Sam3ImageSegmenter::from_weights(&weights).map_err(|e| engine_error("load", e))?;
-        if let Some(bits) = bits {
-            model.quantize(bits).map_err(|e| engine_error("load", e))?;
-        }
-        Ok(Loaded::Sam3(Box::new(model)))
+    let (reused, loaded) = state.ensure(cache_key(request, "sam3"), job, |providers| {
+        providers
+            .load_sam3(&file, &tokenizer_path, bits)
+            .map(Loaded::Sam3)
+            .map_err(|e| engine_error("load", e))
     })?;
     let Loaded::Sam3(model) = loaded else {
         unreachable!()
@@ -903,8 +1112,6 @@ fn sam3(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs, 
         EventKind::Started,
         &json!({"task": request.task.name(), "provider": "sam3", "model_reused": reused}),
     );
-    let tokenizer = Sam3Tokenizer::from_file(&tokenizer_path, &Sam3TextConfig::sam3())
-        .map_err(|e| engine_error("load", e))?;
     let (input_index, concept, threshold, mask_threshold, prompt_box) = match &request.params {
         Params::Sam3Concept(p) => (
             p.input,
@@ -925,95 +1132,38 @@ fn sam3(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs, 
     let image = request.input(input_index);
     let (w, h) = (image.width, image.height);
     let mut conversions = Vec::new();
-    let pixels = sam3_pixels(&rgb_input(
-        image,
-        format!("input {input_index}"),
-        &mut conversions,
-    ))?;
-    let (input_ids, text_mask) = tokenizer
-        .encode(&concept)
-        .map_err(|e| engine_error("tokenize", e))?;
+    let rgb = rgb_input(image, format!("input {input_index}"), &mut conversions);
     check_cancel(job)?;
-    let threshold = threshold.unwrap_or(0.5);
-    let mask_threshold = mask_threshold.unwrap_or(0.5);
-    let instances = match prompt_box {
-        None => model.segment(
-            &pixels,
-            &input_ids,
-            &text_mask,
-            (w as f32, h as f32),
-            threshold,
-            mask_threshold,
-        ),
-        Some(b) => {
-            let (fw, fh) = (w as f32, h as f32);
-            let (x1, y1) = (b[0].clamp(0.0, fw), b[1].clamp(0.0, fh));
-            let (x2, y2) = (b[2].clamp(0.0, fw), b[3].clamp(0.0, fh));
-            let cxcywh = [
-                (x1 + x2) * 0.5 / fw,
-                (y1 + y2) * 0.5 / fh,
-                (x2 - x1) / fw,
-                (y2 - y1) / fh,
-            ];
-            let boxes = Array::from_slice(&cxcywh, &[1, 1, 4]);
-            model.segment_with_boxes(
-                &pixels,
-                &input_ids,
-                &text_mask,
-                &boxes,
-                &[1],
-                (fw, fh),
-                threshold,
-                mask_threshold,
-            )
-        }
-    }
-    .map_err(|e| engine_error("segment", e))?;
+    let instances = model
+        .segment(
+            &rgb,
+            &concept,
+            prompt_box,
+            threshold.unwrap_or(0.5),
+            mask_threshold.unwrap_or(0.5),
+        )
+        .map_err(|e| engine_error("segment", e))?;
     check_cancel(job)?;
-    let mut masks = Vec::new();
-    for inst in &instances {
-        let shape = inst.mask.shape().to_vec();
-        if shape.len() != 2 {
-            return Err(JobError::new(
-                "engine",
-                format!("sam3 mask has shape {shape:?}"),
-            ));
-        }
-        let grid = mlx("mask readback", inst.mask.as_dtype(Dtype::Float32))?;
-        let values = grid.as_slice::<f32>().to_vec();
-        masks.push((
-            inst.score,
-            inst.box_xyxy,
-            values,
-            shape[1] as usize,
-            shape[0] as usize,
+    if let Some(bad) = instances.iter().find(|m| {
+        m.grid_width == 0 || m.grid_height == 0 || m.grid.len() != m.grid_width * m.grid_height
+    }) {
+        return Err(JobError::new(
+            "engine",
+            format!(
+                "sam3 returned a {}x{} mask grid with {} values",
+                bad.grid_width,
+                bad.grid_height,
+                bad.grid.len()
+            ),
         ));
     }
-    let selected: Vec<_> = match prompt_box {
-        None => masks.into_iter().collect(),
+    let selected: Vec<Sam3Instance> = match prompt_box {
+        None => instances,
         Some(b) => {
             // As SceneWorks' smart select: the instance with the most mask area inside the box.
-            let (nx1, ny1, nx2, ny2) = (
-                b[0] / w as f32,
-                b[1] / h as f32,
-                b[2] / w as f32,
-                b[3] / h as f32,
-            );
-            let inside = |m: &(f32, [f32; 4], Vec<f32>, usize, usize)| {
-                let (gw, gh) = (m.3, m.4);
-                (0..gw * gh)
-                    .filter(|&i| {
-                        let (cx, cy) = (
-                            ((i % gw) as f32 + 0.5) / gw as f32,
-                            ((i / gw) as f32 + 0.5) / gh as f32,
-                        );
-                        m.2[i] > 0.0 && cx >= nx1 && cx < nx2 && cy >= ny1 && cy < ny2
-                    })
-                    .count()
-            };
-            let best = masks
+            let best = instances
                 .into_iter()
-                .map(|m| (inside(&m), m))
+                .map(|m| (mask_area_in_box(&m, b, w, h), m))
                 .filter(|(n, _)| *n > 0)
                 .max_by_key(|(n, _)| *n);
             match best {
@@ -1030,10 +1180,10 @@ fn sam3(state: &mut State, request: &Request, job: &Shared) -> Result<(Outputs, 
     let outputs: Outputs = selected
         .into_iter()
         .enumerate()
-        .map(|(i, (score, bbox, values, gw, gh))| {
-            let mask = HostImage { width: w, height: h, channels: 1, pixels: pixels::resize_binary_mask(&values, gw, gh, w, h) };
+        .map(|(i, m)| {
+            let mask = HostImage { width: w, height: h, channels: 1, pixels: pixels::resize_binary_mask(&m.grid, m.grid_width, m.grid_height, w, h) };
             let meta = json!({"index": i, "width": w, "height": h, "channels": 1, "row_bytes": w, "values": "0 or 255",
-                              "coordinates": "source pixels", "score": score, "box_xyxy": bbox});
+                              "coordinates": "source pixels", "score": m.score, "box_xyxy": m.box_xyxy});
             (EventKind::Mask, mask, meta)
         })
         .collect();

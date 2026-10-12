@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lensworks_inference::job::{EventKind, EventOut, Executor, JobHandle};
+use lensworks_inference::job::{EventKind, EventOut, Executor, JobHandle, RetryPolicy};
 use lensworks_inference::pixels::HostImage;
 use lensworks_inference::request::Request;
 use lensworks_inference::routes::{InferenceRunner, ProviderSource};
@@ -19,6 +19,9 @@ use runtime_macos::gen_core::{
 use serde_json::Value;
 
 const PROVIDER: &str = "sana_sprint_1600m";
+/// The smallest size Sana Sprint advertises (its shared floor is range-checked 256..=1024).
+const W: u32 = 256;
+const H: u32 = 256;
 
 struct Scripted {
     descriptor: ModelDescriptor,
@@ -30,7 +33,16 @@ impl Generator for Scripted {
         &self.descriptor
     }
 
-    fn validate(&self, _req: &GenerationRequest) -> gen_core::Result<()> {
+    /// As real providers do: the descriptor's shared floor, then provider-specific checks.
+    fn validate(&self, req: &GenerationRequest) -> gen_core::Result<()> {
+        self.descriptor
+            .capabilities
+            .validate_request(self.descriptor.id, req)?;
+        if req.prompt.contains("provider-refuses") {
+            return Err(gen_core::Error::Msg(
+                "scripted provider-specific refusal".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -121,8 +133,8 @@ impl Harness {
             let catalog = runtime_macos::catalog().map_err(|e| e.to_string())?;
             Ok(Box::new(FakeProviders {
                 catalog,
-                loads: l,
-                observed_cancel: c,
+                loads: l.clone(),
+                observed_cancel: c.clone(),
             }) as Box<dyn ProviderSource>)
         }));
         Self {
@@ -163,7 +175,7 @@ fn recording_sink(
 fn generate(prompt: &str, steps: u32, extra: &str) -> Request {
     let json = format!(
         r#"{{"version":1,"task":"generate","provider":"{PROVIDER}","weights":{{"dir":"/models/sana/q4"}}{extra},
-            "params":{{"prompt":"{prompt}","width":4,"height":2,"steps":{steps},"seed":11}}}}"#
+            "params":{{"prompt":"{prompt}","width":{W},"height":{H},"steps":{steps},"seed":11}}}}"#
     );
     Request::parse(json.as_bytes(), Vec::new()).expect("valid request")
 }
@@ -229,10 +241,10 @@ fn successful_job_streams_typed_progress_then_output_then_one_terminal() {
         .unwrap();
     assert!(started < image_at && image_at < events.len() - 1);
     let image = events[image_at].image.clone().unwrap();
-    assert_eq!((image.width, image.height, image.channels), (4, 2, 3));
+    assert_eq!((image.width, image.height, image.channels), (W, H, 3));
     assert_eq!(
         image.pixels,
-        (0..24).map(|i| (i % 251) as u8).collect::<Vec<_>>()
+        (0..W * H * 3).map(|i| (i % 251) as u8).collect::<Vec<_>>()
     );
     assert_eq!(events[image_at].json["color_space"], "srgb");
     assert_eq!(events[image_at].json["alpha"], "none");
@@ -293,14 +305,14 @@ fn failures_are_typed_and_never_load_for_unsupported_controls() {
         (generate("fail", 2, ""), "engine"),
         (
             Request::parse(
-                format!(r#"{{"version":1,"task":"generate","provider":"{PROVIDER}","weights":{{"dir":"/models/missing"}},"params":{{"prompt":"x","width":4,"height":2}}}}"#).as_bytes(),
+                format!(r#"{{"version":1,"task":"generate","provider":"{PROVIDER}","weights":{{"dir":"/models/missing"}},"params":{{"prompt":"x","width":256,"height":256}}}}"#).as_bytes(),
                 vec![],
             )
             .unwrap(),
             "load",
         ),
         (
-            Request::parse(br#"{"version":1,"task":"generate","provider":"no_such_model","weights":{"dir":"/m"},"params":{"prompt":"x","width":4,"height":2}}"#, vec![]).unwrap(),
+            Request::parse(br#"{"version":1,"task":"generate","provider":"no_such_model","weights":{"dir":"/m"},"params":{"prompt":"x","width":256,"height":256}}"#, vec![]).unwrap(),
             "unknown_provider",
         ),
     ];
@@ -317,7 +329,7 @@ fn failures_are_typed_and_never_load_for_unsupported_controls() {
     let request = Request::parse(
         format!(
             r#"{{"version":1,"task":"generate","provider":"{PROVIDER}","weights":{{"dir":"/m"}},
-                "params":{{"prompt":"x","width":4,"height":2,"negative_prompt":"blur","sampler":"euler","alpha_output":true,
+                "params":{{"prompt":"x","width":256,"height":256,"negative_prompt":"blur","sampler":"euler","alpha_output":true,
                            "conditioning":[{{"kind":"mask","input":0}}]}}}}"#
         )
         .as_bytes(),
@@ -539,4 +551,138 @@ fn many_concurrent_submitters_each_get_exactly_one_terminal() {
         let (_, terminals) = t.join().unwrap();
         assert_eq!(terminals, 1);
     }
+}
+
+fn generate_sized(prompt: &str, width: u32, height: u32, extra: &str) -> Request {
+    let json = format!(
+        r#"{{"version":1,"task":"generate","provider":"{PROVIDER}","weights":{{"dir":"/models/sana/q4"}}{extra},
+            "params":{{"prompt":"{prompt}","width":{width},"height":{height},"steps":1}}}}"#
+    );
+    Request::parse(json.as_bytes(), Vec::new()).expect("valid request")
+}
+
+#[test]
+fn an_out_of_range_size_is_rejected_by_the_shared_floor_before_any_load() {
+    let h = Harness::new();
+    for (w, hh) in [(4, 2), (2048, 2048), (256, 1100)] {
+        let (handle, log, rx, _) = submit(&h, generate_sized("x", w, hh, ""));
+        assert_eq!(wait_terminal(&rx), EventKind::Failed, "{w}x{hh}");
+        let events = log.lock().unwrap().clone();
+        let last = &events.last().unwrap().json;
+        assert_eq!(last["kind"], "invalid_request", "{w}x{hh}: {last}");
+        assert!(
+            events
+                .iter()
+                .all(|e| e.kind != EventKind::Started && e.json["phase"] != "load_model"),
+            "{w}x{hh} rejected before loading: {events:?}"
+        );
+        handle.release();
+    }
+    assert_eq!(h.loads.load(Ordering::SeqCst), 0, "no weights touched");
+}
+
+#[test]
+fn a_resident_model_survives_validation_failures() {
+    let h = Harness::new();
+    let keep = r#","load":{"residency":"keep_loaded"}"#;
+    let (first, _, rx, _) = submit(&h, generate("warm", 1, keep));
+    assert_eq!(wait_terminal(&rx), EventKind::Completed);
+    assert_eq!(h.loads.load(Ordering::SeqCst), 1);
+    // Refused by the weights-free floor, by the capability check, and by the loaded
+    // provider's own validate: none of them disturbs the healthy resident model.
+    let unsupported = Request::parse(
+        format!(
+            r#"{{"version":1,"task":"generate","provider":"{PROVIDER}","weights":{{"dir":"/models/sana/q4"}}{keep},
+                "params":{{"prompt":"x","width":256,"height":256,"negative_prompt":"blur"}}}}"#
+        )
+        .as_bytes(),
+        Vec::new(),
+    )
+    .unwrap();
+    for (request, kind) in [
+        (generate_sized("x", 4, 2, keep), "invalid_request"),
+        (unsupported, "unsupported"),
+        (generate("provider-refuses", 1, keep), "invalid_request"),
+    ] {
+        let (handle, log, rx, _) = submit(&h, request);
+        assert_eq!(wait_terminal(&rx), EventKind::Failed);
+        assert_eq!(log.lock().unwrap().last().unwrap().json["kind"], kind);
+        handle.release();
+    }
+    let (again, log, rx, _) = submit(&h, generate("again", 1, keep));
+    assert_eq!(wait_terminal(&rx), EventKind::Completed);
+    assert_eq!(
+        log.lock().unwrap().last().unwrap().json["model_reused"],
+        true,
+        "the resident model was kept"
+    );
+    assert_eq!(h.loads.load(Ordering::SeqCst), 1);
+    assert_eq!(h.executor.release_models(), 1);
+    first.release();
+    again.release();
+}
+
+#[test]
+fn runtime_initialisation_is_retried_after_a_transient_failure_with_backoff() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let a = attempts.clone();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let observed_cancel = Arc::new(AtomicUsize::new(0));
+    let (l, c) = (loads.clone(), observed_cancel.clone());
+    let policy = RetryPolicy {
+        initial: Duration::from_millis(300),
+        max: Duration::from_secs(5),
+    };
+    let executor = Executor::spawn_with_retry(
+        InferenceRunner::new(move || {
+            // The first two initialisations fail (e.g. the catalog was briefly unreadable).
+            if a.fetch_add(1, Ordering::SeqCst) < 2 {
+                return Err("transient: model catalog unavailable".into());
+            }
+            let catalog = runtime_macos::catalog().map_err(|e| e.to_string())?;
+            Ok(Box::new(FakeProviders {
+                catalog,
+                loads: l.clone(),
+                observed_cancel: c.clone(),
+            }) as Box<dyn ProviderSource>)
+        }),
+        policy,
+    );
+    let h = Harness {
+        executor,
+        loads,
+        observed_cancel,
+    };
+    let failed = |h: &Harness| {
+        let (handle, log, rx, _) = submit(h, generate("x", 1, ""));
+        assert_eq!(wait_terminal(&rx), EventKind::Failed);
+        let last = log.lock().unwrap().last().unwrap().json.clone();
+        handle.release();
+        assert_eq!(last["kind"], "runtime_unavailable", "{last}");
+        assert!(last["message"].as_str().unwrap().contains("transient"));
+        last
+    };
+    // The eager attempt at spawn failed; a job inside the backoff window does not retry.
+    let inside = failed(&h);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(inside["retry_after_ms"].as_u64().unwrap() <= 300);
+    // After the window the next job retries; it fails again and the delay doubles.
+    std::thread::sleep(Duration::from_millis(350));
+    let second = failed(&h);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(second["retry_after_ms"], 600);
+    assert_eq!(second["attempts"], 2);
+    // The third attempt succeeds and the job runs normally from then on.
+    std::thread::sleep(Duration::from_millis(650));
+    let (handle, _, rx, _) = submit(&h, generate("x", 1, ""));
+    assert_eq!(wait_terminal(&rx), EventKind::Completed);
+    handle.release();
+    let (handle, _, rx, _) = submit(&h, generate("y", 1, ""));
+    assert_eq!(wait_terminal(&rx), EventKind::Completed);
+    handle.release();
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        3,
+        "no re-initialisation once healthy"
+    );
 }

@@ -33,6 +33,13 @@ fn child_runs_one_metal_op() {
     b.eval().expect("eval");
     assert_eq!(b.as_slice::<f32>(), &[1.0, 4.0, 9.0]);
     println!("METAL_OP_OK");
+    // The self-test reports the file MLX actually loaded.
+    let report = lensworks_inference::selftest::run();
+    assert_eq!(report["ok"], true, "{report}");
+    println!(
+        "SELF_TEST_METALLIB={}",
+        report["metallib"].as_str().unwrap_or("<none>")
+    );
 }
 
 #[test]
@@ -49,6 +56,10 @@ fn a_pinned_copy_is_loaded_and_a_missing_pin_never_falls_back() {
         ok.status.success() && out.contains("METAL_OP_OK"),
         "{out}\n{}",
         String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(
+        out.contains(&format!("SELF_TEST_METALLIB={}", copy.display())),
+        "the self-test reports the pinned copy: {out}"
     );
 
     // The compiled-in build path still exists here, yet a missing pin fails rather than

@@ -17,9 +17,24 @@ pub const ALPHA_NONE: u32 = 0;
 pub const ALPHA_STRAIGHT: u32 = 1;
 pub const ALPHA_PREMULTIPLIED: u32 = 2;
 
-/// Upper bound on a single input dimension; far above any model input, small enough that
-/// `width * height * 4` cannot overflow.
-pub const MAX_EDGE: u32 = 32_768;
+/// Upper bound on a single input dimension (larger inputs fail with `input_too_large`). Above
+/// every model's input range, and it caps one RGBA input copy at 1 GiB.
+pub const MAX_EDGE: u32 = 16_384;
+
+/// A rejected input buffer: `kind` is `input_too_large` for an edge above [`MAX_EDGE`], else
+/// `invalid_input`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IngestError {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+fn invalid(message: impl Into<String>) -> IngestError {
+    IngestError {
+        kind: "invalid_input",
+        message: message.into(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alpha {
@@ -60,47 +75,56 @@ impl HostImage {
 
     /// Validate and copy a caller buffer, removing row padding and converting premultiplied
     /// alpha to straight alpha.
-    pub fn ingest(desc: BufferDesc<'_>) -> Result<Self, String> {
+    pub fn ingest(desc: BufferDesc<'_>) -> Result<Self, IngestError> {
         if desc.color_space != COLOR_SPACE_SRGB {
-            return Err(format!(
+            return Err(invalid(format!(
                 "input color space {} is not sRGB; convert to sRGB before calling",
                 desc.color_space
-            ));
+            )));
         }
-        if desc.width == 0 || desc.height == 0 || desc.width > MAX_EDGE || desc.height > MAX_EDGE {
-            return Err(format!(
-                "input size {}x{} is outside 1..={MAX_EDGE}",
+        if desc.width == 0 || desc.height == 0 {
+            return Err(invalid(format!(
+                "input size {}x{} is empty",
                 desc.width, desc.height
-            ));
+            )));
+        }
+        if desc.width > MAX_EDGE || desc.height > MAX_EDGE {
+            return Err(IngestError {
+                kind: "input_too_large",
+                message: format!(
+                    "input size {}x{} exceeds the {MAX_EDGE}-pixel edge limit",
+                    desc.width, desc.height
+                ),
+            });
         }
         let channels = desc.channels;
         match (channels, desc.alpha) {
             (1 | 3, ALPHA_NONE) | (4, ALPHA_STRAIGHT | ALPHA_PREMULTIPLIED) => {}
             (4, ALPHA_NONE) => {
-                return Err(
-                    "a 4-channel input must declare straight or premultiplied alpha".into(),
-                );
+                return Err(invalid(
+                    "a 4-channel input must declare straight or premultiplied alpha",
+                ));
             }
             _ => {
-                return Err(format!(
+                return Err(invalid(format!(
                     "unsupported input layout: {channels} channels with alpha mode {}",
                     desc.alpha
-                ));
+                )));
             }
         }
         let packed = desc.width as usize * channels as usize;
         let row_bytes = desc.row_bytes as usize;
         if row_bytes < packed {
-            return Err(format!(
+            return Err(invalid(format!(
                 "row_bytes {row_bytes} is smaller than width*channels {packed}"
-            ));
+            )));
         }
         let needed = row_bytes * (desc.height as usize - 1) + packed;
         if desc.bytes.len() < needed {
-            return Err(format!(
+            return Err(invalid(format!(
                 "input buffer holds {} bytes; {needed} required",
                 desc.bytes.len()
-            ));
+            )));
         }
         let mut pixels = Vec::with_capacity(packed * desc.height as usize);
         for row in 0..desc.height as usize {
@@ -388,7 +412,26 @@ mod tests {
         );
         let mut p3 = desc(&bytes, 2, 2, 2, 1, ALPHA_NONE);
         p3.color_space = 2;
-        assert!(HostImage::ingest(p3).unwrap_err().contains("sRGB"));
+        assert!(HostImage::ingest(p3).unwrap_err().message.contains("sRGB"));
+        let error = HostImage::ingest(desc(&bytes, 2, 2, 8, 4, ALPHA_NONE)).unwrap_err();
+        assert_eq!(error.kind, "invalid_input");
+    }
+
+    #[test]
+    fn edges_above_the_limit_fail_with_a_typed_error_before_any_copy() {
+        let bytes = [0u8; 4];
+        // The limit is checked before the buffer length, so no oversized copy is attempted.
+        for (w, h) in [(MAX_EDGE + 1, 1), (1, MAX_EDGE + 1)] {
+            let error = HostImage::ingest(desc(&bytes, w, h, w, 1, ALPHA_NONE)).unwrap_err();
+            assert_eq!(error.kind, "input_too_large", "{w}x{h}");
+        }
+        assert_eq!(MAX_EDGE, 16_384);
+        let edge =
+            HostImage::ingest(desc(&bytes, MAX_EDGE, 1, MAX_EDGE, 1, ALPHA_NONE)).unwrap_err();
+        assert_eq!(
+            edge.kind, "invalid_input",
+            "an edge at the limit is accepted (then the buffer is short)"
+        );
     }
 
     #[test]

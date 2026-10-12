@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Security
 import Testing
 @testable import Compositor
 
@@ -43,6 +44,12 @@ private nonisolated func canRead(_ file: URL, timeout: TimeInterval = 30) -> Boo
         done.signal()
     }
     return done.wait(timeout: .now() + timeout) == .success && box.ok
+}
+
+/// The app bundle layout build-native.sh produces: the dylib in `Contents/Helpers`, the
+/// metallib in `Contents/Resources` (sealed by the app signature).
+private nonisolated func bundledMetallib(for library: URL) -> URL {
+    library.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/mlx.metallib")
 }
 
 private nonisolated let runRealWeights = hasLibrary && ProcessInfo.processInfo.environment["LW_INFERENCE_REAL_WEIGHTS"] == "1"
@@ -119,14 +126,14 @@ private nonisolated let runRealWeights = hasLibrary && ProcessInfo.processInfo.e
 nonisolated struct LensWorksInferenceRuntimeTests {
     func runtime() throws -> LWInferenceRuntime { try LWInferenceRuntime.installed() }
 
-    @Test func capabilitiesEnumerateEveryRouteWithUnsupportedReasons() throws {
-        let caps = try runtime().capabilities()
+    @Test func capabilitiesEnumerateEveryRouteWithUnsupportedReasons() async throws {
+        let caps = try await runtime().capabilities()
         #expect(caps.abiVersion == LWInferenceRuntime.expectedABI && caps.platform == "macos" && caps.backend == "mlx")
         #expect(caps.inferenceRevision.count == 40)
-        // The bundled metallib next to the loaded library is pinned strictly (no fallback).
-        let colocated = URL(fileURLWithPath: try #require(inferenceLibrary)).deletingLastPathComponent().appendingPathComponent("mlx.metallib")
-        if FileManager.default.fileExists(atPath: colocated.path) {
-            #expect(caps.execution.metallib == colocated.path)
+        // The bundle's sealed metallib is pinned strictly (no fallback).
+        let bundled = bundledMetallib(for: URL(fileURLWithPath: try #require(inferenceLibrary)))
+        if FileManager.default.fileExists(atPath: bundled.path) {
+            #expect(caps.execution.metallib == bundled.path)
         } else {
             #expect(caps.execution.metallib == "mlx_search_order")
         }
@@ -141,12 +148,12 @@ nonisolated struct LensWorksInferenceRuntimeTests {
         #expect(caps.notRouted.contains { $0.surface == "trainers" })
     }
 
-    @Test func malformedRequestsAreRejectedSynchronously() throws {
+    @Test func malformedRequestsAreRejectedSynchronously() async throws {
         let runtime = try runtime()
-        #expect(throws: LWInferenceError.self) { try runtime.start(LWInferenceRequest(json: Data("{".utf8))) }
+        await #expect(throws: LWInferenceError.self) { try await runtime.start(LWInferenceRequest(json: Data("{".utf8))) }
         let bad = LWInferenceRequest.caption(provider: "x", weights: .dir(URL(fileURLWithPath: "/m")), LWCaptionParams(input: 3))
         do {
-            _ = try runtime.start(bad, inputs: [try LWInferenceImage(width: 1, height: 1, channels: 3, alpha: .none, pixels: Data([1, 2, 3]))])
+            _ = try await runtime.start(bad, inputs: [try LWInferenceImage(width: 1, height: 1, channels: 3, alpha: .none, pixels: Data([1, 2, 3]))])
             Issue.record("expected rejection")
         } catch let LWInferenceError.rejected(kind, message) {
             #expect(kind == "invalid_request" && message.contains("out of range"))
@@ -157,7 +164,7 @@ nonisolated struct LensWorksInferenceRuntimeTests {
         let runtime = try runtime()
         let missing = LWInferenceRequest.generate(provider: "sana_sprint_1600m", weights: .dir(URL(fileURLWithPath: "/nonexistent/lensworks/sana")),
                                                   LWGenerateParams(prompt: "x", width: 512, height: 512, steps: 2))
-        let job = try runtime.start(missing)
+        let job = try await runtime.start(missing)
         let events = await job.collect()
         guard case .failed(let failure)? = events.last else { Issue.record("expected failure: \(events)"); return }
         #expect(failure.kind == "load")
@@ -166,7 +173,7 @@ nonisolated struct LensWorksInferenceRuntimeTests {
 
         let unsupported = LWInferenceRequest.generate(provider: "sana_sprint_1600m", weights: .dir(URL(fileURLWithPath: "/nonexistent/lensworks/sana")),
                                                       LWGenerateParams(prompt: "x", width: 512, height: 512, negativePrompt: "blur", alphaOutput: true))
-        let rejected = await (try runtime.start(unsupported)).collect()
+        let rejected = await (try await runtime.start(unsupported)).collect()
         guard case .failed(let f)? = rejected.last else { Issue.record("expected unsupported"); return }
         #expect(f.kind == "unsupported")
         let controls: Set<String> = Set((f.unsupported ?? []).map(\.control))
@@ -174,11 +181,31 @@ nonisolated struct LensWorksInferenceRuntimeTests {
         #expect(!rejected.contains { if case .progress = $0 { true } else { false } }, "rejected before any load")
     }
 
+    /// The dylib exactly as the signed app ships it: weights-free GPU kernels run on the
+    /// executor thread against the metallib sealed in the bundle's Resources.
+    @Test func bundledRuntimePassesTheGPUSelfTest() async throws {
+        let runtime = try runtime()
+        let library = runtime.libraryURL.standardizedFileURL
+        #expect(library.path.hasSuffix(".app/Contents/Helpers/liblensworks_inference.dylib"), "\(library.path)")
+        let app = library.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        var code: SecStaticCode?
+        #expect(SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess)
+        let status = SecStaticCodeCheckValidity(try #require(code), SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode), nil)
+        #expect(status == errSecSuccess, "the app signature (which seals Resources/mlx.metallib) is valid: \(status)")
+        let report = try await runtime.selfTest()
+        #expect(report.ok, "\(report)")
+        #expect(report.thread == "lensworks-inference-executor")
+        #expect(report.metallib == bundledMetallib(for: library).path, "MLX loaded the bundled metallib: \(report.metallib ?? "nil")")
+        #expect(report.metallibResolution == report.metallib)
+        #expect(report.ops.map(\.op) == ["steel_gemm_f32", "quantized_matmul_q4"])
+        #expect(report.ops.allSatisfy { $0.ok && ($0.maxRelError ?? .infinity) <= ($0.tolerance ?? 0) })
+    }
+
     @Test func releaseTearsDownTheCallbackContextWithoutLeaks() async throws {
         let runtime = try runtime()
         weak var weakBox: LWInferenceCallbackBox?
         do {
-            let job = try runtime.start(.embedText(provider: "clip_vit_l14_text", weights: .dir(URL(fileURLWithPath: "/nonexistent/lensworks/clip")),
+            let job = try await runtime.start(.embedText(provider: "clip_vit_l14_text", weights: .dir(URL(fileURLWithPath: "/nonexistent/lensworks/clip")),
                                                    LWEmbedTextParams(texts: ["a"])))
             weakBox = job.callbackBox
             job.release()
@@ -190,7 +217,7 @@ nonisolated struct LensWorksInferenceRuntimeTests {
         // A job that completes and is dropped without an explicit release also frees everything.
         weak var weakBox2: LWInferenceCallbackBox?
         do {
-            let job = try runtime.start(.embedText(provider: "no_such_embedder", weights: .dir(URL(fileURLWithPath: "/m")), LWEmbedTextParams(texts: ["a"])))
+            let job = try await runtime.start(.embedText(provider: "no_such_embedder", weights: .dir(URL(fileURLWithPath: "/m")), LWEmbedTextParams(texts: ["a"])))
             weakBox2 = job.callbackBox
             guard case .failed(let f)? = await job.collect().last else { Issue.record("expected failure"); return }
             #expect(f.kind == "unknown_provider")
@@ -215,7 +242,7 @@ nonisolated struct LensWorksInferenceRealWeightTests {
             .generate(provider: "sana_sprint_1600m", weights: .dir(weights), load: .init(residency: .keepLoaded),
                       LWGenerateParams(prompt: prompt, width: 512, height: 512, seed: 7, steps: steps))
         }
-        let job = try runtime.start(request("a red apple on a white table", steps: 2))
+        let job = try await runtime.start(request("a red apple on a white table", steps: 2))
         let events = await job.collect()
         #expect(!job.deliveredOnMainThread)
         let steps = events.compactMap { if case .progress(let p) = $0, p.phase == "step" { (p.current ?? 0, p.total ?? 0) } else { nil } }
@@ -227,10 +254,10 @@ nonisolated struct LensWorksInferenceRealWeightTests {
         #expect(cg.colorSpace?.name == CGColorSpace.sRGB && cg.width == 512)
         guard case .completed(let result)? = events.last else { Issue.record("expected completion: \(events.last as Any)"); return }
         #expect(result.provider == "sana_sprint_1600m" && result.images == 1 && result.inferenceRevision.count == 40)
-        #expect(result.metallib == runtime.libraryURL.deletingLastPathComponent().appendingPathComponent("mlx.metallib").path,
+        #expect(result.metallib == bundledMetallib(for: runtime.libraryURL).path,
                 "the real job ran on the bundled metallib")
 
-        let cancelling = try runtime.start(request("a lighthouse at dusk", steps: 4))
+        let cancelling = try await runtime.start(request("a lighthouse at dusk", steps: 4))
         var seen: [LWInferenceEvent] = []
         for await event in cancelling.events {
             seen.append(event)
@@ -244,7 +271,7 @@ nonisolated struct LensWorksInferenceRealWeightTests {
         let empty = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: empty) }
-        let failing = try runtime.start(.generate(provider: "sana_sprint_1600m", weights: .dir(empty), LWGenerateParams(prompt: "x", width: 512, height: 512, steps: 2)))
+        let failing = try await runtime.start(.generate(provider: "sana_sprint_1600m", weights: .dir(empty), LWGenerateParams(prompt: "x", width: 512, height: 512, steps: 2)))
         guard case .failed(let failure)? = await failing.collect().last else { Issue.record("expected failure"); return }
         #expect(failure.kind == "load")
     }

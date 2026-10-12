@@ -5,8 +5,11 @@ import Foundation
 // Typed Swift boundary over the LensWorks-owned inference adapter
 // (adapters/inference, ABI in LensWorksInference.h). The adapter dylib is loaded at runtime
 // so the app build does not link the MLX runtime; build-native.sh embeds it in
-// Contents/Helpers next to mlx.metallib. All blocking work runs on the adapter's own
-// executor thread; callbacks arrive there and are forwarded into an AsyncStream.
+// Contents/Helpers and mlx.metallib in Contents/Resources (sealed by the app signature).
+// Inference runs on the adapter's own executor thread; callbacks arrive there and are
+// forwarded into an AsyncStream. The calls that block (input copies, the capability
+// enumeration, the self-test) are async and run off the caller's thread, so a UI caller
+// never blocks.
 
 nonisolated enum LWInferenceError: Error, Equatable, CustomStringConvertible {
     case libraryUnavailable(String)
@@ -126,10 +129,11 @@ nonisolated struct LWInferenceImage: Sendable, Equatable {
         try! LWInferenceImage(width: width, height: height, channels: channels, rowBytes: rowBytes, alpha: alpha, pixels: pixels)
     }
 
-    private mutating func withMutablePixels(_ body: (inout [UInt8]) -> Void) {
-        var bytes = [UInt8](pixels)
-        body(&bytes)
-        self = try! LWInferenceImage(width: width, height: height, channels: channels, rowBytes: rowBytes, alpha: alpha, pixels: Data(bytes))
+    /// Mutates the (already packed, uniquely owned) pixel buffer in place.
+    private mutating func withMutablePixels(_ body: (UnsafeMutableBufferPointer<UInt8>) -> Void) {
+        var data = pixels
+        data.withUnsafeMutableBytes { body($0.bindMemory(to: UInt8.self)) } // one copy-on-write
+        self = try! LWInferenceImage(width: width, height: height, channels: channels, rowBytes: rowBytes, alpha: alpha, pixels: data)
     }
 }
 
@@ -407,6 +411,23 @@ nonisolated struct LWInferenceCapabilities: Decodable, Sendable, Equatable {
     let notRouted: [LWInferenceNotRouted]
 }
 
+/// The weights-free GPU self-test report.
+nonisolated struct LWInferenceSelfTest: Decodable, Sendable, Equatable {
+    struct Op: Decodable, Sendable, Equatable {
+        let op: String?
+        let ok: Bool
+        let maxRelError: Double?
+        let tolerance: Double?
+        let error: String?
+    }
+    let ok: Bool
+    let thread: String
+    /// The metallib MLX loaded (its strict path), or nil under MLX's own search order.
+    let metallib: String?
+    let metallibResolution: String
+    let ops: [Op]
+}
+
 private nonisolated struct LWInferenceEnvelope<T: Decodable>: Decodable {
     let ok: Bool
     let result: T?
@@ -433,6 +454,7 @@ nonisolated final class LWInferenceRuntime: @unchecked Sendable {
                                                 UnsafeMutableRawPointer?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> OpaquePointer?
     fileprivate typealias JobFn = @convention(c) (OpaquePointer?) -> Void
     private typealias ReleaseModelsFn = @convention(c) () -> Int
+    private typealias SelfTestFn = @convention(c) () -> UnsafeMutablePointer<CChar>?
 
     private let freeString: FreeFn
     private let capabilitiesFn: CapsFn
@@ -440,6 +462,7 @@ nonisolated final class LWInferenceRuntime: @unchecked Sendable {
     fileprivate let cancelFn: JobFn
     fileprivate let releaseFn: JobFn
     private let releaseModelsFn: ReleaseModelsFn
+    private let selfTestFn: SelfTestFn
     let libraryURL: URL
 
     private static let lock = NSLock()
@@ -465,16 +488,20 @@ nonisolated final class LWInferenceRuntime: @unchecked Sendable {
             startFn: try symbol("lw_inference_job_start", as: StartFn.self),
             cancelFn: try symbol("lw_inference_job_cancel", as: JobFn.self),
             releaseFn: try symbol("lw_inference_job_release", as: JobFn.self),
-            releaseModelsFn: try symbol("lw_inference_release_models", as: ReleaseModelsFn.self))
+            releaseModelsFn: try symbol("lw_inference_release_models", as: ReleaseModelsFn.self),
+            selfTestFn: try symbol("lw_inference_self_test", as: SelfTestFn.self))
         loaded[libraryURL.path] = runtime
         return runtime
     }
 
-    /// The embedded runtime (`Contents/Helpers`), or `LW_INFERENCE_LIBRARY` when set.
+    /// The embedded runtime (`Contents/Helpers`). Debug builds (tests) may point
+    /// `LW_INFERENCE_LIBRARY` at another copy; release builds only load the bundled one.
     static func installed() throws -> LWInferenceRuntime {
+        #if DEBUG
         if let explicit = ProcessInfo.processInfo.environment["LW_INFERENCE_LIBRARY"], !explicit.isEmpty {
             return try load(libraryURL: URL(fileURLWithPath: explicit))
         }
+        #endif
         guard let contents = Bundle.main.executableURL?.deletingLastPathComponent().deletingLastPathComponent() else {
             throw LWInferenceError.libraryUnavailable("The application bundle has no executable.")
         }
@@ -482,9 +509,11 @@ nonisolated final class LWInferenceRuntime: @unchecked Sendable {
     }
 
     private init(libraryURL: URL, freeString: @escaping FreeFn, capabilitiesFn: @escaping CapsFn, startFn: @escaping StartFn,
-                 cancelFn: @escaping JobFn, releaseFn: @escaping JobFn, releaseModelsFn: @escaping ReleaseModelsFn) {
+                 cancelFn: @escaping JobFn, releaseFn: @escaping JobFn, releaseModelsFn: @escaping ReleaseModelsFn,
+                 selfTestFn: @escaping SelfTestFn) {
         self.libraryURL = libraryURL; self.freeString = freeString; self.capabilitiesFn = capabilitiesFn
         self.startFn = startFn; self.cancelFn = cancelFn; self.releaseFn = releaseFn; self.releaseModelsFn = releaseModelsFn
+        self.selfTestFn = selfTestFn
     }
 
     private func takeString(_ raw: UnsafeMutablePointer<CChar>?) -> Data? {
@@ -493,33 +522,59 @@ nonisolated final class LWInferenceRuntime: @unchecked Sendable {
         return Data(bytes: raw, count: strlen(raw))
     }
 
-    /// Weights-free capability document (computed once by the adapter, then cached).
-    func capabilities() throws -> LWInferenceCapabilities {
-        guard let data = takeString(capabilitiesFn()) else { throw LWInferenceError.protocolViolation("No capability document.") }
-        let envelope = try lwInferenceDecoder.decode(LWInferenceEnvelope<LWInferenceCapabilities>.self, from: data)
+    private func decodeEnvelope<T: Decodable>(_ raw: UnsafeMutablePointer<CChar>?, as: T.Type, what: String) throws -> T {
+        guard let data = takeString(raw) else { throw LWInferenceError.protocolViolation("No \(what) document.") }
+        let envelope = try lwInferenceDecoder.decode(LWInferenceEnvelope<T>.self, from: data)
         if let result = envelope.result, envelope.ok { return result }
         throw LWInferenceError.rejected(kind: envelope.error?.kind ?? "unknown", message: envelope.error?.message ?? "")
     }
 
-    /// Validates and queues a job. Input buffers are copied before this returns.
-    func start(_ request: LWInferenceRequest, inputs: [LWInferenceImage] = []) throws -> LWInferenceJob {
+    /// Weights-free capability document. The first call builds the runtime catalog, so it
+    /// runs off the caller's thread.
+    func capabilities() async throws -> LWInferenceCapabilities {
+        let fn = capabilitiesFn
+        return try await Task.detached(priority: .userInitiated) { [self] in
+            try decodeEnvelope(fn(), as: LWInferenceCapabilities.self, what: "capability")
+        }.value
+    }
+
+    /// Weights-free GPU self-test on the executor thread (a steel GEMM and a Q4
+    /// quantized_matmul against a CPU reference), reporting the metallib MLX loaded. The
+    /// result carries `ok == false` when a kernel is wrong; a missing document throws.
+    func selfTest() async throws -> LWInferenceSelfTest {
+        let fn = selfTestFn
+        return try await Task.detached(priority: .userInitiated) { [self] in
+            guard let data = takeString(fn()) else { throw LWInferenceError.protocolViolation("No self-test document.") }
+            let envelope = try lwInferenceDecoder.decode(LWInferenceEnvelope<LWInferenceSelfTest>.self, from: data)
+            guard let result = envelope.result else {
+                throw LWInferenceError.rejected(kind: envelope.error?.kind ?? "unknown", message: envelope.error?.message ?? "")
+            }
+            return result
+        }.value
+    }
+
+    /// Validates and queues a job. Input buffers are copied (and premultiplied alpha
+    /// converted) by the adapter before this returns, off the caller's thread.
+    func start(_ request: LWInferenceRequest, inputs: [LWInferenceImage] = []) async throws -> LWInferenceJob {
+        try await Task.detached(priority: .userInitiated) { [self] in try startBlocking(request, inputs: inputs) }.value
+    }
+
+    private func startBlocking(_ request: LWInferenceRequest, inputs: [LWInferenceImage]) throws -> LWInferenceJob {
         let box = LWInferenceCallbackBox()
         let context = Unmanaged.passRetained(box).toOpaque()
         var error: UnsafeMutablePointer<CChar>?
-        let job: OpaquePointer? = withExtendedLifetime(inputs) {
-            let datas = inputs.map(\.pixels)
-            return Self.withPointers(datas) { pointers in
-                var raw = zip(inputs, pointers).map { image, pointer in
-                    lw_inference_image(pixels: pointer, byte_length: image.pixels.count, width: UInt32(image.width), height: UInt32(image.height),
-                                       row_bytes: UInt32(image.rowBytes), channels: UInt32(image.channels), alpha: image.alpha.rawValue,
-                                       color_space: LW_INFERENCE_COLOR_SPACE_SRGB)
-                }
-                return request.json.withUnsafeBytes { bytes -> OpaquePointer? in
-                    var cString = [CChar](repeating: 0, count: bytes.count + 1)
-                    for (i, b) in bytes.enumerated() { cString[i] = CChar(bitPattern: b) }
-                    return raw.withUnsafeMutableBufferPointer { buffer in
-                        startFn(cString, buffer.isEmpty ? nil : UnsafePointer(buffer.baseAddress), buffer.count, lwInferenceCallback, context, &error)
-                    }
+        var json = request.json
+        json.append(0)
+        let job: OpaquePointer? = Self.withPointers(inputs.map(\.pixels)) { pointers in
+            var raw = zip(inputs, pointers).map { image, pointer in
+                lw_inference_image(pixels: pointer, byte_length: image.pixels.count, width: UInt32(image.width), height: UInt32(image.height),
+                                   row_bytes: UInt32(image.rowBytes), channels: UInt32(image.channels), alpha: image.alpha.rawValue,
+                                   color_space: LW_INFERENCE_COLOR_SPACE_SRGB)
+            }
+            return json.withUnsafeBytes { bytes -> OpaquePointer? in
+                raw.withUnsafeMutableBufferPointer { buffer in
+                    startFn(bytes.bindMemory(to: CChar.self).baseAddress, buffer.isEmpty ? nil : UnsafePointer(buffer.baseAddress),
+                            buffer.count, lwInferenceCallback, context, &error)
                 }
             }
         }
@@ -531,12 +586,18 @@ nonisolated final class LWInferenceRuntime: @unchecked Sendable {
         return LWInferenceJob(runtime: self, handle: job, box: box, context: context)
     }
 
-    private static func withPointers<R>(_ datas: [Data], _ index: Int = 0, _ acc: [UnsafePointer<UInt8>] = [],
-                                        _ body: ([UnsafePointer<UInt8>]) -> R) -> R {
-        if index == datas.count { return body(acc) }
-        return datas[index].withUnsafeBytes { raw in
-            withPointers(datas, index + 1, acc + [raw.bindMemory(to: UInt8.self).baseAddress!], body)
+    /// Borrows every buffer's bytes (no copies) for the duration of `body`.
+    private static func withPointers<R>(_ datas: [Data], _ body: ([UnsafePointer<UInt8>]) -> R) -> R {
+        var pointers: [UnsafePointer<UInt8>] = []
+        pointers.reserveCapacity(datas.count)
+        func next(_ index: Int) -> R {
+            if index == datas.count { return body(pointers) }
+            return datas[index].withUnsafeBytes { raw in
+                pointers.append(raw.bindMemory(to: UInt8.self).baseAddress!)
+                return next(index + 1)
+            }
         }
+        return next(0)
     }
 
     /// Drops resident models once queued jobs finish. Blocks, so it hops off the caller.

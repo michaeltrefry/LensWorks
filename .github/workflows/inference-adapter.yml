@@ -11,6 +11,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 4
       MACOSX_DEPLOYMENT_TARGET: "26.2"
+      # Repository variable: set to 1 once the runner service can read the model volume, so a
+      # missing or unreadable weight set fails the run instead of skipping the real-weight tests.
+      LW_REQUIRE_REAL: ${{ vars.LW_REQUIRE_REAL }}
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
@@ -30,11 +33,15 @@ jobs:
         # Real-weight runs reuse the SceneWorks Hugging Face cache on this runner; nothing is downloaded.
         # The cache may live on another volume that macOS privacy consent keeps from the runner
         # service; a read there blocks instead of failing, so the probe has a deadline.
+        timeout-minutes: 2
         run: |
           sana=$(./scripts/ci/probe_sana_weights.sh 30)
           if [[ -n "$sana" ]]; then
             echo "LW_INFERENCE_REAL=1" >> "$GITHUB_ENV"
             echo "LW_INFERENCE_SANA_SPRINT_DIR=$sana" >> "$GITHUB_ENV"
+          elif [[ "$LW_REQUIRE_REAL" == 1 ]]; then
+            echo "::error::LW_REQUIRE_REAL=1 but the Sana Sprint q4 weights are not readable by this runner (missing, or the model volume needs macOS access for the runner service)."
+            exit 1
           else
             echo "::warning::Sana Sprint q4 weights are not readable by this runner (missing, or the model volume needs macOS access for the runner service); real-weight tests are skipped."
           fi
@@ -49,10 +56,15 @@ jobs:
       - name: Build the app with the embedded inference runtime
         run: |
           ./scripts/build-native.sh
-          helpers=.build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers
-          test -f "$helpers/liblensworks_inference.dylib" && test -f "$helpers/mlx.metallib"
+          app=.build/xcode-app/Build/Products/Debug/LensWorks.app
+          test -f "$app/Contents/Helpers/liblensworks_inference.dylib" && test -f "$app/Contents/Resources/mlx.metallib"
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' \
             -configuration Debug -derivedDataPath .build/xcode-inference CODE_SIGN_IDENTITY=-
+      - name: GPU self-test against the signed app bundle
+        # Always runs: a steel GEMM and a Q4 quantized_matmul on the adapter's executor thread,
+        # loaded from Contents/Helpers and required to use the metallib sealed in Resources.
+        timeout-minutes: 5
+        run: python3 scripts/ci/inference_self_test.py .build/xcode-app/Build/Products/Debug/LensWorks.app
       - name: Swift inference boundary tests
         timeout-minutes: 30
         # Resolves the weights outside the test host (see the script) and reports the

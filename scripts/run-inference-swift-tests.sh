@@ -6,7 +6,8 @@
 # here, outside the test host: the model cache may live on another volume (for example
 # ~/.cache/huggingface -> /Volumes/Models) whose directories macOS privacy consent blocks the
 # test host app from listing, which would hang the runner. The probe has a deadline; when the
-# weights are not readable from this context the real-weight suite is reported as skipped.
+# weights are not readable from this context the real-weight suite is reported as skipped,
+# unless LW_REQUIRE_REAL=1, which makes that a failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bundle=$1
@@ -21,6 +22,9 @@ export TEST_RUNNER_LW_INFERENCE_LIBRARY="$library"
 if [[ -n "$sana" && -d "$sana" ]]; then
   echo "Real-weight test uses $sana"
   export TEST_RUNNER_LW_INFERENCE_REAL_WEIGHTS=1 TEST_RUNNER_LW_INFERENCE_SANA_SPRINT_DIR="$sana"
+elif [[ "${LW_REQUIRE_REAL:-}" == 1 ]]; then
+  echo "::error::LW_REQUIRE_REAL=1 but the Sana Sprint q4 weights are not readable here (missing, or the model volume needs macOS access for this process)."
+  exit 1
 else
   echo "::warning::Sana Sprint q4 weights are not readable here (missing, or the model volume needs macOS access for this process); the real-weight Swift test is skipped."
   export XCODEBUILD_TEST_ALLOW_SKIPPED=CompositorTests/LensWorksInferenceRealWeightTests

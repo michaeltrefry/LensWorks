@@ -7,6 +7,7 @@ pub mod metallib;
 pub mod pixels;
 pub mod request;
 pub mod routes;
+pub mod selftest;
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -74,7 +75,11 @@ fn owned_string(value: &Value) -> *mut c_char {
 pub fn capabilities_document() -> Value {
     static DOCUMENT: OnceLock<Value> = OnceLock::new();
     DOCUMENT
-        .get_or_init(|| match runtime_macos::catalog() {
+        .get_or_init(|| {
+            // Pin the bundled metallib before the catalog is built, so no catalog code can
+            // touch Metal first under MLX's search order.
+            let metallib = metallib::resolve_once();
+            match runtime_macos::catalog() {
             Ok(catalog) => {
                 let snapshot = catalog.snapshot();
                 let mut result = capabilities::capabilities(
@@ -84,10 +89,11 @@ pub fn capabilities_document() -> Value {
                     &snapshot.trainer_ids,
                     &snapshot.text_llm_ids,
                 );
-                result["execution"]["metallib"] = json!(metallib::resolve_once().describe());
+                result["execution"]["metallib"] = json!(metallib.describe());
                 json!({"version": 1, "ok": true, "result": result})
             }
             Err(e) => json!({"version": 1, "ok": false, "error": {"kind": "runtime_unavailable", "message": e.to_string()}}),
+            }
         })
         .clone()
 }
@@ -103,6 +109,24 @@ pub extern "C" fn lw_inference_capabilities() -> *mut c_char {
     let value = catch_unwind(capabilities_document).unwrap_or_else(|_| {
         json!({"version": 1, "ok": false, "error": {"kind": "panic", "message": "capability enumeration panicked"}})
     });
+    owned_string(&value)
+}
+
+/// Weights-free GPU self-test on the executor thread (a steel GEMM and a Q4
+/// `quantized_matmul` checked against a CPU reference). Returns an owned JSON string
+/// `{"version":1,"ok":bool,"result":{...}}` naming the metallib MLX loaded; blocks until the
+/// jobs queued ahead of it finish.
+#[unsafe(no_mangle)]
+pub extern "C" fn lw_inference_self_test() -> *mut c_char {
+    let result = catch_unwind(|| executor().call(selftest::run))
+        .ok()
+        .flatten();
+    let value = match result {
+        Some(result) => json!({"version": 1, "ok": result["ok"] == true, "result": result}),
+        None => {
+            json!({"version": 1, "ok": false, "error": {"kind": "panic", "message": "the GPU self-test panicked or the executor stopped"}})
+        }
+    };
     owned_string(&value)
 }
 
@@ -229,7 +253,7 @@ pub unsafe extern "C" fn lw_inference_job_start(
                     alpha: d.alpha,
                     color_space: d.color_space,
                 })
-                .map_err(|e| ("invalid_input".to_string(), format!("input {i}: {e}")))?;
+                .map_err(|e| (e.kind.to_string(), format!("input {i}: {}", e.message)))?;
                 images.push(image);
             }
             let request =

@@ -14,18 +14,25 @@ inference are tracked there and arrive here only as a tested repin.
 
 The crate builds `liblensworks_inference.dylib`. The app never links MLX: the Swift
 boundary (`native/Compositor/LensWorks/LensWorksInference.swift`) `dlopen`s the
-library from `Contents/Helpers` (or `LW_INFERENCE_LIBRARY`), checks
+library from `Contents/Helpers` (or, in Debug builds only, `LW_INFERENCE_LIBRARY`), checks
 `lw_inference_abi_version`, and resolves the symbols in `include/LensWorksInference.h`.
-`scripts/build-native.sh` embeds the dylib and `mlx.metallib` side by side. The
-library is never unloaded (Rust/MLX thread-local destructors make `dlclose` unsafe).
+`scripts/build-native.sh` embeds the dylib in `Contents/Helpers` and `mlx.metallib` in
+`Contents/Resources`, where the app's own signature seals it as a resource. The library is
+never unloaded (Rust/MLX thread-local destructors make `dlclose` unsafe).
 
 The pinned MLX fork would otherwise prefer the absolute build-directory metallib compiled
-into the library (and `~/.cache/pmetal`) over the bundled copy. When `mlx.metallib` sits
-next to the loaded library, the adapter pins it before any Metal work through upstream
+into the library (and `~/.cache/pmetal`) over the bundled copy. When the loaded library sits
+in an app bundle's `Contents/Helpers` and `Contents/Resources/mlx.metallib` exists (or, in a
+flat layout, a `mlx.metallib` sits next to the library), the adapter pins that file before
+any Metal work (and before the catalog is built) through upstream
 MLX's strict `set_metallib_path` (a small C++ shim, `shim/metallib.cpp`): MLX loads exactly
 that file or fails device creation, never falling back. Capabilities (`execution.metallib`)
 and every result's provenance report the pinned path, or `mlx_search_order` for unbundled
 development builds. `tests/metallib.rs` proves both halves in child processes.
+
+`lw_inference_self_test` is a weights-free GPU check: on the executor thread it runs a steel
+GEMM and a Q4 `quantized_matmul` against a CPU reference and reports the metallib MLX loaded
+(MLX's own record of the strict path). CI runs it against the signed app bundle.
 
 ## Execution model
 
@@ -34,8 +41,16 @@ development builds. `tests/metallib.rs` proves both halves in child processes.
 * At most one model is resident. `load.residency` is `unload_after` (default: drop
   the model and return MLX cached buffers when the job ends) or `keep_loaded`
   (reuse it for the next job with the same task/provider/weights/quantization).
-  A failed or panicking job always drops it; a cancelled job keeps a healthy
-  `keep_loaded` model. `lw_inference_release_models` drops it explicitly.
+  A load/execution failure or a panic always drops it; a cancelled job, or a request
+  refused by validation (unknown provider, unsupported control, a value outside the
+  advertised floor), keeps a healthy `keep_loaded` model. `lw_inference_release_models`
+  drops it explicitly.
+* Requests are validated against the provider's weights-free capability floor
+  (`Capabilities::validate_request` for generators, `CaptionCapabilities::validate_request`
+  for captioners, the adapter's capability checks for every route) before any weights load.
+* If runtime initialisation fails, the next job after a backoff (1 s, doubling to 60 s)
+  retries it; jobs inside the backoff window fail with `runtime_unavailable` and
+  `retry_after_ms`.
 * Cancellation is cooperative: a queued job cancels immediately; a running provider
   stops at its next step boundary (registry providers check the request
   `CancelFlag`; bespoke SAM utilities are checked before load and before/after their
@@ -45,8 +60,11 @@ development builds. `tests/metallib.rs` proves both halves in child processes.
 
 ## Ownership and callbacks
 
-* `lw_inference_job_start` copies every input buffer before returning. On rejection
-  it returns NULL and an owned error JSON (`lw_inference_string_free`).
+* `lw_inference_job_start` copies every input buffer (once, converting premultiplied
+  alpha) before returning, so its cost scales with the input size: the Swift boundary
+  calls it, and the capability enumeration and self-test, off the caller's thread
+  (`async` APIs). An input edge above 16384 pixels fails with kind `input_too_large`. On
+  rejection it returns NULL and an owned error JSON (`lw_inference_string_free`).
 * The callback runs on the executor thread, never concurrently for one job. Event
   JSON and pixels are borrowed for the callback only.
 * Every job not released first gets exactly one terminal event (`COMPLETED`,
