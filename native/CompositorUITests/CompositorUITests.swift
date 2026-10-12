@@ -520,7 +520,18 @@ extension CompositorUITests {
         let parent = context.app.menuBars.menuBarItems[menu]
         XCTAssertTrue(parent.exists && parent.isEnabled); parent.click()
         let item = context.app.menuBars.menuItems[label]
-        XCTAssertTrue(item.waitForExistence(timeout: 10) && item.isEnabled); item.click()
+        XCTAssertTrue(item.waitForExistence(timeout: 10)); s38Click(item)
+    }
+    /// SwiftUI applies a pending main-menu change while a menu is open, about a second into tracking, when the
+    /// pointer first moves inside it: the Undo/Redo items are removed and reinserted, and other items change in
+    /// place. A click whose hover triggers that swap targets an item that is gone (an infinite click point) or is
+    /// lost. Hover first, then click only once the item is live, enabled and hittable in the open menu.
+    @MainActor
+    private func s38Click(_ item: XCUIElement) {
+        item.hover()
+        let live = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND enabled == true AND hittable == true"), object: item)
+        XCTAssertEqual(XCTWaiter.wait(for: [live], timeout: 10), .completed, "The menu item must be live and enabled before it is chosen")
+        item.click()
     }
     @MainActor
     private func s38Saved(_ context: S38UIContext, matching: @escaping (S38Package) -> Bool) throws -> S38Package {
@@ -760,7 +771,7 @@ extension CompositorUITests {
         let layerMenu = context.app.menuBars.menuBarItems["Layer"]
         layerMenu.click()
         let hide = layerMenu.menuItems["Hide Layer"]
-        XCTAssertTrue(hide.exists && hide.isEnabled); XCTAssertEqual(hide.title, "Hide Layer"); hide.click()
+        XCTAssertTrue(hide.exists && hide.isEnabled); XCTAssertEqual(hide.title, "Hide Layer"); s38Click(hide)
         let hidden = try s38Saved(context) { !$0.visible }
         s38Conserved(baseline, hidden, field: "isVisible", value: false)
         XCTAssertTrue(s38History(context).contains("Undo Hide Layer"))
