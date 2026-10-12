@@ -2,6 +2,16 @@ import CryptoKit
 import Darwin
 import Foundation
 
+/// The connection a request arrived on, as its handler may ask about it.
+nonisolated struct LensWorksAutomationCaller: Sendable {
+    let connection: ObjectIdentifier?
+    /// False once the connection was dropped: its secret was regenerated or revoked, automation stopped, or the
+    /// client hung up. A request must not run, and a running one must not go on, once this is false.
+    let isCurrent: @Sendable () -> Bool
+    /// A call made inside the app (tests), on no connection.
+    static let inProcess = LensWorksAutomationCaller(connection: nil, isCurrent: { true })
+}
+
 /// The automation transport: a Unix domain socket that only this Mac account can reach, a secret handshake on every
 /// connection, then newline-delimited JSON requests answered by `handler`. The MCP bridge helper
 /// (Contents/Helpers/LensWorksMCP) is the client; it speaks MCP on stdio to the agent.
@@ -9,11 +19,15 @@ import Foundation
 /// Handshake: the client sends `{"type":"hello","secret":"…"}`; the server answers `{"type":"welcome",…}` or
 /// `{"type":"refused","reason":"…"}` and closes. Requests: `{"id":…,"method":"tools/list"|"tools/call","params":{…}}`,
 /// one per line, answered in order by `{"id":…,"result":{…}}` or `{"id":…,"error":{"code":…,"message":"…"}}`.
+/// A client that closes its side while a request is pending has hung up: nothing more is run or answered for it.
 nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
     static let protocolVersion = 1
     static let helloLimit = 4096
     static let requestLimit = 1 << 20
+    /// The whole handshake must arrive within this long of the connection opening, however it is paced.
     static let helloTimeout: TimeInterval = 10
+    /// How often a connection waiting on its request's answer looks for its client hanging up.
+    static let hangUpPoll: TimeInterval = 0.2
     /// Open connections (authenticated or still in their handshake) served at once; further ones are closed.
     static let connectionLimit = 16
 
@@ -47,21 +61,28 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
     }
 
     let socketPath: String
-    private let handler: @Sendable (Data) async -> Data
+    private let handler: @Sendable (Data, LensWorksAutomationCaller) async -> Data
+    private let hungUp: @Sendable (ObjectIdentifier) -> Void
+    var handshakeTimeout = LensWorksAutomationServer.helloTimeout
     private let lock = NSLock()
     private var secretDigest: [UInt8]?
     private var listener: DispatchSourceRead?
     private var connections: [ObjectIdentifier: Connection] = [:]
     private var authenticatedCount = 0
 
-    init(socketPath: String, handler: @escaping @Sendable (Data) async -> Data) {
-        self.socketPath = socketPath; self.handler = handler
+    private var dispatchedCount = 0
+
+    init(socketPath: String, handler: @escaping @Sendable (Data, LensWorksAutomationCaller) async -> Data,
+         hungUp: @escaping @Sendable (ObjectIdentifier) -> Void = { _ in }) {
+        self.socketPath = socketPath; self.handler = handler; self.hungUp = hungUp
     }
 
     var isListening: Bool { lock.withLock { listener != nil } }
     var authenticatedConnections: Int { lock.withLock { authenticatedCount } }
     /// Connections being served, authenticated or still in their handshake.
     var openConnections: Int { lock.withLock { connections.count } }
+    /// Requests handed to the handler since the server was made.
+    var dispatchedRequests: Int { lock.withLock { dispatchedCount } }
 
     /// Replaces the accepted secret (nil: revoked, every handshake is refused) and drops every open connection, which
     /// authenticated with the previous one.
@@ -145,8 +166,7 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
     }
 
     private func serve(_ connection: Connection) {
-        connection.setReceiveTimeout(Self.helloTimeout)
-        guard let hello = connection.readLine(limit: Self.helloLimit),
+        guard let hello = connection.readLine(limit: Self.helloLimit, deadline: Date().addingTimeInterval(handshakeTimeout)),
               let object = try? JSONSerialization.jsonObject(with: hello) as? [String: Any],
               object["type"] as? String == "hello", let secret = object["secret"] as? String else {
             connection.write(["type": "refused", "reason": "The automation handshake was malformed."]); return
@@ -166,14 +186,23 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
         guard admitted else { connection.write(["type": "refused", "reason": "The automation secret changed during the handshake."]); return }
         defer { lock.withLock { authenticatedCount -= 1 } }
         guard connection.write(["type": "welcome", "app": "LensWorks", "protocol": Self.protocolVersion]) else { return }
-        connection.setReceiveTimeout(0)
+        let caller = LensWorksAutomationCaller(connection: ObjectIdentifier(connection)) { connection.isCurrent }
         while let line = connection.readLine(limit: Self.requestLimit) {
+            lock.withLock { dispatchedCount += 1 }
             let reply = Box()
             let done = DispatchSemaphore(value: 0)
             let handler = self.handler
-            Task { reply.value = await handler(line); done.signal() }
-            done.wait()
-            guard connection.write(raw: reply.value) else { return }
+            Task { reply.value = await handler(line, caller); done.signal() }
+            // A client that hangs up while its request waits (on the person's confirmation, say) is dropped: the
+            // handler is told, so nothing more runs and no confirmation stays up for nobody.
+            while done.wait(timeout: .now() + Self.hangUpPoll) == .timedOut {
+                guard connection.peerHungUp() else { continue }
+                connection.terminate()
+                hungUp(ObjectIdentifier(connection))
+                done.wait()
+                break
+            }
+            guard connection.isCurrent, connection.write(raw: reply.value) else { return }
         }
     }
 
@@ -185,18 +214,32 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
         private let fd: Int32
         private let lock = NSLock()
         private var closed = false
+        private var terminated = false
         private var buffer = Data()
         init(fd: Int32) { self.fd = fd }
-        func terminate() { lock.withLock { if !closed { shutdown(fd, SHUT_RDWR) } } }
+        /// False once the connection was dropped or closed: nothing more is read from it, run for it or written to it.
+        var isCurrent: Bool { lock.withLock { !terminated && !closed } }
+        func terminate() { lock.withLock { terminated = true; if !closed { shutdown(fd, SHUT_RDWR) } } }
         func close() { lock.withLock { if !closed { closed = true; Darwin.close(fd) } } }
-        func setReceiveTimeout(_ seconds: TimeInterval) {
-            var value = timeval(tv_sec: Int(seconds), tv_usec: 0)
+        /// Zero or less waits without limit.
+        private func setReceiveTimeout(_ seconds: TimeInterval) {
+            let clamped = max(0, seconds), whole = clamped.rounded(.down)
+            var value = timeval(tv_sec: Int(whole), tv_usec: Int32((clamped - whole) * 1_000_000))
+            if seconds > 0, value.tv_sec == 0, value.tv_usec == 0 { value.tv_usec = 1 }
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &value, socklen_t(MemoryLayout<timeval>.size))
         }
-        /// The next newline-terminated line without its newline, or nil at end of stream, on error or past `limit`.
-        func readLine(limit: Int) -> Data? {
+        /// Whether the client closed its side (called by the serving thread while a request is pending).
+        func peerHungUp() -> Bool {
+            var descriptor = pollfd(fd: fd, events: Int16(POLLHUP), revents: 0)
+            return poll(&descriptor, 1, 0) > 0 && descriptor.revents & Int16(POLLHUP | POLLERR | POLLNVAL) != 0
+        }
+        /// The next newline-terminated line without its newline, or nil at end of stream, on error, past `limit`,
+        /// once the connection was dropped, or when the whole line has not arrived by `deadline`.
+        func readLine(limit: Int, deadline: Date? = nil) -> Data? {
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+            defer { if deadline != nil { setReceiveTimeout(0) } }
             while true {
+                guard isCurrent else { return nil }
                 if let newline = buffer.firstIndex(of: 0x0a) {
                     let line = buffer[buffer.startIndex..<newline]
                     guard line.count <= limit else { return nil }
@@ -204,8 +247,14 @@ nonisolated final class LensWorksAutomationServer: @unchecked Sendable {
                     return Data(line)
                 }
                 guard buffer.count <= limit else { return nil }
+                if let deadline {
+                    let remaining = deadline.timeIntervalSinceNow
+                    guard remaining > 0 else { return nil }
+                    setReceiveTimeout(remaining)
+                }
                 let count = read(fd, &chunk, chunk.count)
                 if count < 0 && errno == EINTR { continue }
+                if count < 0 && errno == EAGAIN && deadline != nil { continue }
                 guard count > 0 else { return nil }
                 buffer.append(contentsOf: chunk[0..<count])
             }

@@ -21,14 +21,14 @@ struct LensWorksAutomationSettingsView: View {
                         HStack {
                             LensWorksCommandToggle(.automationShowSecret, isOn: $automation.showsSecret)
                             LensWorksCommandButton(.automationCopySecret) { automation.copyToPasteboard(secret) }
-                            LensWorksCommandButton(.automationRegenerateSecret) { automation.regenerateSecret() }
-                            LensWorksCommandButton(.automationRevokeSecret, role: .destructive) { automation.revokeSecret() }
+                            LensWorksCommandButton(.automationRegenerateSecret, reason: automation.secretChangeReason) { automation.regenerateSecret() }
+                            LensWorksCommandButton(.automationRevokeSecret, reason: automation.secretChangeReason, role: .destructive) { automation.revokeSecret() }
                         }
                     } else {
                         Text(automation.isEnabled ? "Revoked: every connection is refused until you generate a new secret." : "A secret is created when automation is turned on.")
                             .font(.caption)
                         LensWorksCommandButton(.automationRegenerateSecret, title: "Generate Secret",
-                                               reason: LensWorksCommandRegistry.unavailable(!automation.isEnabled, "Turn automation on first.")) { automation.regenerateSecret() }
+                                               reason: LensWorksCommandRegistry.unavailable(!automation.isEnabled, "Turn automation on first.") ?? automation.secretChangeReason) { automation.regenerateSecret() }
                     }
                 }
                 Section("MCP client configuration") {
@@ -64,15 +64,47 @@ struct LensWorksAgentConfirmationSheet: View {
             Label(confirmation.title, systemImage: "exclamationmark.triangle").font(.headline)
                 .accessibilityIdentifier("LensWorks.automation.confirmation.title")
             Text(confirmation.message).fixedSize(horizontal: false, vertical: true)
+            // Each name is the app's own data in its own one-line field: it can never reword the question.
+            if confirmation.items.count > 6 { ScrollView { items }.frame(height: 160) } else { items }
             HStack {
                 Spacer()
                 LensWorksCommandButton(.automationDecline) { automation.resolveConfirmation(false) }
                     .registeredCommandShortcut(.cancel, role: .cancelAction)
                     .accessibilityIdentifier(LensWorksCommandID.automationDecline.rawValue)
-                LensWorksCommandButton(.automationAllow, title: confirmation.actionTitle, role: .destructive) { automation.resolveConfirmation(true) }
-                    .accessibilityIdentifier(LensWorksCommandID.automationAllow.rawValue)
+                LensWorksAgentAllowButton { automation.resolveConfirmation(true) }.fixedSize()
             }
         }
         .padding(20).frame(width: 440)
+    }
+    private var items: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(confirmation.items) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.action).foregroundStyle(.secondary).fixedSize()
+                    Text(verbatim: item.name).font(.system(.body, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                        .accessibilityIdentifier("LensWorks.automation.confirmation.item")
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The sheet's Allow button as an AppKit control: the person's click on it (and nothing else — it has no key
+/// equivalent, so no stray Return allows a permanent change) runs the registered Allow command.
+private struct LensWorksAgentAllowButton: NSViewRepresentable {
+    let action: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(action) }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: LensWorksCommandRegistry.descriptor(.automationAllow).label, target: context.coordinator, action: #selector(Coordinator.run))
+        button.bezelStyle = .push
+        button.hasDestructiveAction = true
+        button.setAccessibilityIdentifier(LensWorksCommandID.automationAllow.rawValue)
+        return button
+    }
+    func updateNSView(_ button: NSButton, context: Context) { context.coordinator.action = action }
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+        @objc func run() { LensWorksCommandDispatcher.perform(.init(.automationAllow), action) }
     }
 }

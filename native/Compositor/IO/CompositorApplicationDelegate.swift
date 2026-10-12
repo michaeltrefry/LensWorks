@@ -12,7 +12,7 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     var showEditor: (() -> Void)?
     let catalog = LensWorksCatalog(defaults: CompositorApplicationDelegate.catalogDefaults())
     /// Settings › Automation (MCP). Agents act on the current project tab and the open catalog. The setting lives
-    /// with the catalog preferences, so a launch given `--lensworks-defaults-suite` never serves the person's socket.
+    /// with the catalog preferences; whether a launch serves it without being asked is `servesAtLaunch`.
     lazy var automation = LensWorksAutomation(defaults: CompositorApplicationDelegate.catalogDefaults(),
                                               session: { [unowned self] in self.session }, catalog: { [unowned self] in self.catalog })
     /// Automation (for example a CI fixture import) can keep catalog preferences out of the
@@ -98,8 +98,7 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     private var pinnedWindowBackdrop: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // A unit-test host never serves the person's automation socket or reads their Keychain item.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil { automation.startIfEnabled() }
+        if LensWorksAutomation.servesAtLaunch(arguments: ProcessInfo.processInfo.arguments, environment: ProcessInfo.processInfo.environment) { automation.startIfEnabled() }
         LensWorksLaunchTrace.record("delegate.didFinishLaunching", details: ["windows": String(NSApp.windows.count), "visibleWindows": String(NSApp.windows.filter(\.isVisible).count)])
         // A fresh installed launch can finish with no admitted SwiftUI window.
         // Reuse the Finder-open fallback after scene registration gets its next turn.

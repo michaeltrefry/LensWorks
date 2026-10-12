@@ -27,27 +27,47 @@ pub const REFUSED: i64 = -32001;
 unsafe extern "C" {
     fn confstr(name: c_int, buf: *mut c_char, len: usize) -> usize;
     fn recv(socket: c_int, buffer: *mut u8, length: usize, flags: c_int) -> isize;
+    fn getpeereid(socket: c_int, uid: *mut u32, gid: *mut u32) -> c_int;
+    fn geteuid() -> u32;
 }
 const CS_DARWIN_USER_TEMP_DIR: c_int = 65537;
 const MSG_PEEK: c_int = 0x2;
 const MSG_DONTWAIT: c_int = 0x80;
 
-/// The app's default socket: `<per-user temp dir>/net.trefry.lensworks.automation/automation.sock`.
-pub fn default_socket_path() -> PathBuf {
+/// This account's private temporary directory, from the system (never the environment), or `None` when the
+/// system does not report one.
+fn user_temp_dir() -> Option<PathBuf> {
     let mut buffer = vec![0 as c_char; 1024];
     // SAFETY: the buffer is writable for its full length and confstr NUL-terminates within it.
     let length = unsafe { confstr(CS_DARWIN_USER_TEMP_DIR, buffer.as_mut_ptr(), buffer.len()) };
-    let base = if length > 0 && length <= buffer.len() {
-        // SAFETY: confstr wrote a NUL-terminated string into the buffer.
-        PathBuf::from(
-            unsafe { CStr::from_ptr(buffer.as_ptr()) }
-                .to_string_lossy()
-                .into_owned(),
-        )
-    } else {
-        std::env::temp_dir()
-    };
-    base.join("net.trefry.lensworks.automation/automation.sock")
+    if length == 0 || length > buffer.len() {
+        return None;
+    }
+    // SAFETY: confstr wrote a NUL-terminated string into the buffer.
+    Some(PathBuf::from(
+        unsafe { CStr::from_ptr(buffer.as_ptr()) }
+            .to_string_lossy()
+            .into_owned(),
+    ))
+}
+
+/// The app's socket under `user_temp`: `<per-user temp dir>/net.trefry.lensworks.automation/automation.sock`.
+/// There is none without a per-user directory: `$TMPDIR` and `/tmp` are places another account could plant a
+/// listener, so they are never a fallback.
+pub fn socket_path_in(user_temp: Option<PathBuf>) -> Option<PathBuf> {
+    user_temp.map(|base| base.join("net.trefry.lensworks.automation/automation.sock"))
+}
+
+/// The app's default socket, or `None` when the system reports no per-user temporary directory.
+pub fn default_socket_path() -> Option<PathBuf> {
+    socket_path_in(user_temp_dir())
+}
+
+/// The account that owns the other end of `stream`.
+fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    let (mut uid, mut gid) = (0u32, 0u32);
+    // SAFETY: the descriptor is open for the life of `stream` and both out-pointers are valid.
+    (unsafe { getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } == 0).then_some(uid)
 }
 
 struct Link {
@@ -78,7 +98,10 @@ impl Link {
 
 pub struct Bridge {
     secret: Option<String>,
-    socket: PathBuf,
+    /// `None`: no socket path could be determined safely.
+    socket: Option<PathBuf>,
+    /// The only account the secret is ever sent to: this process's own.
+    owner: u32,
     link: Option<Link>,
 }
 
@@ -97,10 +120,12 @@ fn refused(message: impl Into<String>) -> Failure {
 }
 
 impl Bridge {
-    pub fn new(secret: Option<String>, socket: PathBuf) -> Self {
+    pub fn new(secret: Option<String>, socket: Option<PathBuf>) -> Self {
         Self {
             secret: secret.filter(|value| !value.is_empty()),
             socket,
+            // SAFETY: geteuid takes no arguments and cannot fail.
+            owner: unsafe { geteuid() },
             link: None,
         }
     }
@@ -108,7 +133,7 @@ impl Bridge {
     pub fn from_environment() -> Self {
         let socket = std::env::var_os("LENSWORKS_MCP_SOCKET")
             .map(PathBuf::from)
-            .unwrap_or_else(default_socket_path);
+            .or_else(default_socket_path);
         Self::new(std::env::var("LENSWORKS_MCP_SECRET").ok(), socket)
     }
 
@@ -228,12 +253,24 @@ impl Bridge {
                 "LENSWORKS_MCP_SECRET is not set. Copy the client configuration from LensWorks Settings › Automation.",
             ));
         };
-        let stream = UnixStream::connect(&self.socket).map_err(|error| {
+        let Some(socket) = &self.socket else {
+            return Err(refused(
+                "This Mac account's private temporary directory could not be determined, so the LensWorks automation socket was not looked for anywhere else. Set LENSWORKS_MCP_SOCKET to the socket path shown in LensWorks Settings › Automation.",
+            ));
+        };
+        let stream = UnixStream::connect(socket).map_err(|error| {
             refused(format!(
                 "LensWorks automation is off, or LensWorks is not running (no automation socket at {}: {error}). Turn it on in LensWorks Settings › Automation.",
-                self.socket.display()
+                socket.display()
             ))
         })?;
+        // The secret goes only to a listener this account runs.
+        if peer_uid(&stream) != Some(self.owner) {
+            return Err(refused(format!(
+                "The listener at {} is not run by this Mac account, so the automation secret was not sent to it.",
+                socket.display()
+            )));
+        }
         let io =
             |error: std::io::Error| refused(format!("The automation connection failed: {error}"));
         stream.set_read_timeout(Some(REPLY_TIMEOUT)).map_err(io)?;
@@ -291,7 +328,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": {"name": "lensworks", "title": "LensWorks", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "Drives the running LensWorks app. Call get_state for layer and catalog ids, list_commands for what can run now and why not, invoke_command to run one (edits are labeled “(Agent)” in LensWorks history and Undo reverts them; permanent deletes ask the person first), and render_preview to see the result."
+        "instructions": "Drives the running LensWorks app. Call get_state for layer and catalog ids, list_commands for what can run now and why not, invoke_command to run one or batch to run several as one step (document edits are labeled “(Agent)” in LensWorks history and Undo reverts them; permanent deletes ask the person first), and render_preview to see the result."
     })
 }
 
@@ -371,7 +408,7 @@ mod tests {
 
     #[test]
     fn initialize_negotiates_a_supported_protocol_without_contacting_the_app() {
-        let mut bridge = Bridge::new(None, PathBuf::from("/nonexistent/s.sock"));
+        let mut bridge = Bridge::new(None, Some(PathBuf::from("/nonexistent/s.sock")));
         let reply = call(
             &mut bridge,
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}),
@@ -414,7 +451,7 @@ mod tests {
     #[test]
     fn tools_requests_are_forwarded_after_the_secret_handshake() {
         let (_dir, path) = fake_app("right");
-        let mut bridge = Bridge::new(Some("right".into()), path);
+        let mut bridge = Bridge::new(Some("right".into()), Some(path));
         let reply = call(
             &mut bridge,
             json!({"jsonrpc": "2.0", "id": "a", "method": "tools/list"}),
@@ -434,7 +471,7 @@ mod tests {
     #[test]
     fn a_wrong_or_missing_secret_and_a_missing_socket_are_refused_with_the_reason() {
         let (_dir, path) = fake_app("right");
-        let mut wrong = Bridge::new(Some("wrong".into()), path.clone());
+        let mut wrong = Bridge::new(Some("wrong".into()), Some(path.clone()));
         let reply = call(
             &mut wrong,
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
@@ -446,7 +483,7 @@ mod tests {
                 .unwrap()
                 .contains("secret is not valid")
         );
-        let mut missing = Bridge::new(None, path);
+        let mut missing = Bridge::new(None, Some(path));
         let reply = call(
             &mut missing,
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
@@ -459,7 +496,7 @@ mod tests {
         );
         let mut off = Bridge::new(
             Some("right".into()),
-            PathBuf::from("/tmp/lwmcp-none/s.sock"),
+            Some(PathBuf::from("/tmp/lwmcp-none/s.sock")),
         );
         let reply = call(
             &mut off,
@@ -524,7 +561,7 @@ mod tests {
     #[test]
     fn a_closed_connection_is_replaced_before_the_next_request_is_sent() {
         let (_dir, path, received) = closing_app(1);
-        let mut bridge = Bridge::new(Some("s".into()), path);
+        let mut bridge = Bridge::new(Some("s".into()), Some(path));
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "invoke_command"}});
         assert_eq!(call_reply(&mut bridge, &call)["result"]["count"], 1);
         // The app closed that connection after answering; the next request goes out once, on a new one.
@@ -536,7 +573,7 @@ mod tests {
     #[test]
     fn a_request_the_app_never_answered_is_reported_and_never_sent_twice() {
         let (_dir, path, received) = closing_app(0);
-        let mut bridge = Bridge::new(Some("s".into()), path);
+        let mut bridge = Bridge::new(Some("s".into()), Some(path));
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "invoke_command"}});
         let reply = call_reply(&mut bridge, &call);
         assert_eq!(reply["error"]["code"], REFUSED);
@@ -552,7 +589,7 @@ mod tests {
     #[test]
     fn an_oversized_request_is_refused_without_being_sent() {
         let (_dir, path, received) = closing_app(1);
-        let mut bridge = Bridge::new(Some("s".into()), path);
+        let mut bridge = Bridge::new(Some("s".into()), Some(path));
         let reply = call_reply(
             &mut bridge,
             &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "x", "arguments": {"pad": "a".repeat(REQUEST_LIMIT)}}}),
@@ -573,12 +610,59 @@ mod tests {
 
     #[test]
     fn default_socket_is_in_the_per_user_temp_directory() {
-        let path = default_socket_path();
+        let path = default_socket_path().expect("this account has a private temporary directory");
         assert!(path.ends_with("net.trefry.lensworks.automation/automation.sock"));
+        assert!(path.starts_with("/var/folders") || path.starts_with("/private/var/folders"));
+    }
+
+    #[test]
+    fn without_a_per_user_directory_there_is_no_socket_path_and_nothing_is_contacted() {
+        // No fallback to $TMPDIR or /tmp, where another account could plant a listener.
+        assert_eq!(socket_path_in(None), None);
+        let mut bridge = Bridge::new(Some("s".into()), socket_path_in(None));
+        let reply = call_reply(
+            &mut bridge,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        );
+        assert_eq!(reply["error"]["code"], REFUSED);
         assert!(
-            path.starts_with("/var/folders")
-                || path.starts_with("/private/var/folders")
-                || path.starts_with(std::env::temp_dir())
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("private temporary directory could not be determined")
+        );
+    }
+
+    #[test]
+    fn the_secret_is_never_sent_to_a_listener_another_account_runs() {
+        let dir = tempdir::Dir::new();
+        let path = dir.0.join("s.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let (sender, heard) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let _ = stream.read_to_end(&mut bytes);
+            sender.send(bytes).unwrap();
+        });
+        let mut bridge = Bridge::new(Some("the-secret".into()), Some(path));
+        // The listener is this account's; a bridge owned by any other account must refuse it.
+        bridge.owner = bridge.owner.wrapping_add(1);
+        let reply = call_reply(
+            &mut bridge,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        );
+        assert_eq!(reply["error"]["code"], REFUSED);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not run by this Mac account")
+        );
+        // The bridge hung up without sending the hello: the listener read nothing at all.
+        assert_eq!(
+            heard.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Vec::<u8>::new()
         );
     }
 }

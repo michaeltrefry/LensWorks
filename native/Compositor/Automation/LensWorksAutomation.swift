@@ -4,8 +4,8 @@ import Observation
 import Security
 import SwiftUI
 
-/// Where the automation secret lives. The app uses the Keychain; tests inject an in-memory store or a Keychain store
-/// bound to a temporary keychain so they never touch the person's own items.
+/// Where the automation secret lives. The app uses the Keychain; tests inject an in-memory store so they never touch
+/// the person's own items or keychain search list.
 nonisolated protocol LensWorksAutomationSecretStore: AnyObject, Sendable {
     func load() throws -> String?
     func save(_ secret: String) throws
@@ -19,21 +19,16 @@ nonisolated struct LensWorksKeychainError: LocalizedError {
     }
 }
 
-/// A generic-password Keychain item. `keychain` pins a specific (test) keychain file; nil is the default keychain.
+/// A generic-password item in the account's default keychain.
 nonisolated final class LensWorksKeychainSecretStore: LensWorksAutomationSecretStore, @unchecked Sendable {
     static let appService = "net.trefry.lensworks.automation"
     static let appAccount = "mcp-bridge-secret"
     let service: String, account: String
-    private let keychain: SecKeychain?
-    init(service: String = appService, account: String = appAccount, keychain: SecKeychain? = nil) {
-        self.service = service; self.account = account; self.keychain = keychain
+    init(service: String = appService, account: String = appAccount) {
+        self.service = service; self.account = account
     }
     private func query(_ extra: [CFString: Any] = [:]) -> CFDictionary {
-        var query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
-        if let keychain {
-            query[kSecUseKeychain] = keychain
-            query[kSecMatchSearchList] = [keychain]
-        }
+        let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
         return query.merging(extra) { $1 } as CFDictionary
     }
     func load() throws -> String? {
@@ -67,13 +62,22 @@ nonisolated final class LensWorksMemorySecretStore: LensWorksAutomationSecretSto
     func delete() throws { lock.withLock { secret = nil } }
 }
 
-/// One in-app confirmation an agent's destructive command is waiting on.
+/// One in-app confirmation an agent's permanent commands are waiting on. `items` names each change from the app's
+/// own data; the names never become part of the title or message.
 struct LensWorksAgentConfirmation: Identifiable {
+    struct Item: Identifiable {
+        static let nameLimit = 256
+        let id = UUID()
+        /// The registered command's label.
+        let action: String
+        /// What it acts on, clipped; the sheet shows it in its own one-line field.
+        let name: String
+        init(action: String, name: String) { self.action = action; self.name = String(name.prefix(Self.nameLimit)) }
+    }
     let id = UUID()
-    let commandID: LensWorksCommandID
     let title: String
     let message: String
-    let actionTitle: String
+    var items: [Item] = []
 }
 /// How a confirmation ended: the person's answer, no answer (timed out, automation turned off, secret changed), or
 /// never asked because another confirmation was already open.
@@ -84,6 +88,10 @@ enum LensWorksAgentConfirmationAnswer: Equatable { case allowed, declined, unans
 @Observable
 final class LensWorksAutomation {
     static let enabledKey = "LensWorksAutomationEnabled"
+    /// Set by Revoke and cleared by a new secret, so a revoked secret stays revoked across relaunches even when its
+    /// Keychain item could not be removed.
+    static let revokedKey = "LensWorksAutomationSecretRevoked"
+    static let concealedPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
     static let helperName = "LensWorksMCP"
     static let confirmationTimeout: Duration = .seconds(120)
 
@@ -95,10 +103,14 @@ final class LensWorksAutomation {
     private(set) var secret: String?
     private(set) var isListening = false
     private(set) var lastError: String?
+    /// Another LensWorks of this Mac account serves the socket: this one accepts nobody.
+    private(set) var isServedElsewhere = false
     var showsSecret = false
     /// The destructive agent command waiting for the person's answer, shown as a sheet on the app's window.
     private(set) var pendingConfirmation: LensWorksAgentConfirmation?
     @ObservationIgnored private var confirmationReply: CheckedContinuation<LensWorksAgentConfirmationAnswer, Never>?
+    /// The connection whose request the pending confirmation belongs to: when it hangs up, nobody is left to answer for.
+    @ObservationIgnored private var confirmationOwner: ObjectIdentifier?
     /// The sheet asking `pendingConfirmation`, and the window it is attached to (nil: shown on its own).
     @ObservationIgnored private(set) var confirmationPanel: NSWindow?
     @ObservationIgnored private weak var confirmationParent: NSWindow?
@@ -107,6 +119,10 @@ final class LensWorksAutomation {
         NSApp?.mainWindow ?? NSApp?.windows.first { $0.isVisible && $0.canBecomeMain && !($0 is NSPanel) }
     }
     @ObservationIgnored var confirmationTimeout = LensWorksAutomation.confirmationTimeout
+    /// Adjusts a confirmation's window before it is shown (tests keep theirs invisible).
+    @ObservationIgnored var prepareConfirmationPanel: (NSWindow) -> Void = { _ in }
+    /// Whether a confirmation asks for the person's attention in the Dock.
+    @ObservationIgnored var requestsAttention = true
 
     init(defaults: UserDefaults = .standard, secretStore: LensWorksAutomationSecretStore = LensWorksKeychainSecretStore(),
          socketPath: String = LensWorksAutomationServer.defaultSocketPath(),
@@ -115,19 +131,28 @@ final class LensWorksAutomation {
         isEnabled = defaults.bool(forKey: Self.enabledKey)
         tools = LensWorksAgentTools(session: session, catalog: catalog)
         tools.automation = self
-        server = LensWorksAutomationServer(socketPath: socketPath) { [weak self] request in
-            await self?.handle(request) ?? LensWorksAgentTools.encodeError(id: nil, code: -32000, "LensWorks is quitting.")
-        }
+        server = LensWorksAutomationServer(socketPath: socketPath, handler: { [weak self] request, caller in
+            await self?.handle(request, caller: caller) ?? LensWorksAgentTools.encodeError(id: nil, code: -32000, "LensWorks is quitting.")
+        }, hungUp: { [weak self] connection in
+            Task { @MainActor in self?.connectionHungUp(connection) }
+        })
     }
 
     var socketPath: String { server.socketPath }
     /// The bridge an MCP client launches: Contents/Helpers/LensWorksMCP in this app.
     var helperPath: String { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/" + Self.helperName).path }
 
+    /// Whether a launch with these arguments and environment serves automation without being asked. A unit-test host
+    /// and every scripted launch (any `--lensworks-…` argument: catalog plans, evidence runs, fixture imports) never
+    /// serve the person's automation socket or read their Keychain item.
+    nonisolated static func servesAtLaunch(arguments: [String], environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] == nil && !arguments.contains { $0.hasPrefix("--lensworks-") }
+    }
+
     /// Starts serving when the setting is on (at launch). Reads the Keychain only then.
     func startIfEnabled() {
         guard isEnabled else { return }
-        do { secret = try secretStore.load() } catch { lastError = error.localizedDescription }
+        do { secret = try loadSecret() } catch { lastError = error.localizedDescription }
         startServer()
     }
 
@@ -135,25 +160,44 @@ final class LensWorksAutomation {
         isEnabled = enabled
         defaults.set(enabled, forKey: Self.enabledKey)
         if enabled {
-            do {
-                secret = try secretStore.load()
-                if secret == nil { try storeNewSecret() }
-            } catch { lastError = error.localizedDescription }
+            do { secret = try loadSecret() } catch { lastError = error.localizedDescription }
             startServer()
+            // A LensWorks that serves nobody never rewrites the secret the serving one accepts.
+            if secret == nil, !isServedElsewhere {
+                do { try storeNewSecret(); if isListening { lastError = nil } } catch { lastError = error.localizedDescription }
+            }
         } else {
-            server.stop(); isListening = false
+            server.stop(); isListening = false; isServedElsewhere = false
             endConfirmation(.unanswered)
         }
     }
 
+    /// The stored secret, or none while it is revoked.
+    private func loadSecret() throws -> String? {
+        defaults.bool(forKey: Self.revokedKey) ? nil : try secretStore.load()
+    }
+
+    /// Why the secret cannot be regenerated or revoked here, or nil when it can: another LensWorks serves automation
+    /// and would keep accepting the secret this one replaced.
+    var secretChangeReason: String? {
+        isServedElsewhere ? "Another LensWorks is serving automation for this Mac account. Change the secret there." : nil
+    }
+
     /// A new secret: the old one stops working and every connected client is disconnected.
     func regenerateSecret() {
+        guard secretChangeReason == nil else { return }
         do { try storeNewSecret(); lastError = nil } catch { lastError = error.localizedDescription }
     }
 
-    /// No secret at all: every connection is refused until a new one is generated.
+    /// No secret at all: every connection is refused until a new one is generated, in this launch and later ones.
     func revokeSecret() {
-        do { try secretStore.delete(); lastError = nil } catch { lastError = error.localizedDescription }
+        guard secretChangeReason == nil else { return }
+        defaults.set(true, forKey: Self.revokedKey)
+        do { try secretStore.delete(); lastError = nil } catch {
+            lastError = error.localizedDescription
+            // The item could not be removed: replace its value with one nobody was given.
+            if let unknown = try? Self.randomSecret() { try? secretStore.save(unknown) }
+        }
         secret = nil
         server.setSecretDigest(nil)
         endConfirmation(.unanswered)
@@ -161,11 +205,16 @@ final class LensWorksAutomation {
 
     func stop() { server.stop(); isListening = false; endConfirmation(.unanswered) }
 
-    private func storeNewSecret() throws {
+    private static func randomSecret() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw LensWorksKeychainError(status: errSecAllocate) }
-        let value = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    private func storeNewSecret() throws {
+        let value = try Self.randomSecret()
         try secretStore.save(value)
+        defaults.removeObject(forKey: Self.revokedKey)
         secret = value
         server.setSecretDigest(LensWorksAutomationServer.digest(value))
         endConfirmation(.unanswered)
@@ -173,8 +222,11 @@ final class LensWorksAutomation {
 
     private func startServer() {
         server.setSecretDigest(secret.map(LensWorksAutomationServer.digest))
-        do { try server.start(); isListening = true; if secret != nil { lastError = nil } }
-        catch { isListening = false; lastError = error.localizedDescription }
+        do { try server.start(); isListening = true; isServedElsewhere = false; if secret != nil { lastError = nil } }
+        catch {
+            isListening = false; lastError = error.localizedDescription
+            if case LensWorksAutomationServer.ServerError.alreadyServing = error { isServedElsewhere = true } else { isServedElsewhere = false }
+        }
     }
 
     /// The JSON an MCP client (Claude Code, Claude Desktop, …) needs to launch the bridge with the current secret.
@@ -184,20 +236,23 @@ final class LensWorksAutomation {
         return String(decoding: data, as: UTF8.self)
     }
 
-    func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+    /// Copies a secret (or a configuration carrying it), marked concealed so clipboard managers do not keep it.
+    func copyToPasteboard(_ text: String, pasteboard: NSPasteboard = .general) {
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        pasteboard.setString("", forType: Self.concealedPasteboardType)
     }
 
     // MARK: Confirmations
 
     /// Asks the person in the app with a sheet and waits for Allow or Don’t Allow. Nothing but Allow lets the
     /// command run: no answer in time, automation turned off and a changed secret all end it unanswered.
-    func confirm(_ confirmation: LensWorksAgentConfirmation) async -> LensWorksAgentConfirmationAnswer {
+    /// `owner` is the connection that asked: when it hangs up the confirmation ends unanswered.
+    func confirm(_ confirmation: LensWorksAgentConfirmation, owner: ObjectIdentifier? = nil) async -> LensWorksAgentConfirmationAnswer {
         guard pendingConfirmation == nil else { return .busy }
-        pendingConfirmation = confirmation
+        pendingConfirmation = confirmation; confirmationOwner = owner
         presentConfirmation(confirmation)
-        NSApp?.requestUserAttention(.criticalRequest)
+        if requestsAttention { NSApp?.requestUserAttention(.criticalRequest) }
         let id = confirmation.id, limit = confirmationTimeout
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: limit)
@@ -211,9 +266,14 @@ final class LensWorksAutomation {
     /// The person's answer to the pending confirmation (the sheet's Allow / Don’t Allow).
     func resolveConfirmation(_ allowed: Bool) { endConfirmation(allowed ? .allowed : .declined) }
 
+    /// A client hung up: a confirmation it was waiting on has nobody left to answer for.
+    private func connectionHungUp(_ connection: ObjectIdentifier) {
+        if confirmationOwner == connection { endConfirmation(.unanswered) }
+    }
+
     private func endConfirmation(_ answer: LensWorksAgentConfirmationAnswer) {
         guard pendingConfirmation != nil else { return }
-        pendingConfirmation = nil
+        pendingConfirmation = nil; confirmationOwner = nil
         if let panel = confirmationPanel {
             if let parent = confirmationParent { parent.endSheet(panel) } else { panel.close() }
         }
@@ -229,6 +289,7 @@ final class LensWorksAutomation {
         panel.title = "LensWorks Automation"
         panel.isReleasedWhenClosed = false
         confirmationPanel = panel
+        prepareConfirmationPanel(panel)
         if let parent = confirmationWindow() {
             confirmationParent = parent
             parent.beginSheet(panel)
@@ -240,19 +301,21 @@ final class LensWorksAutomation {
 
     // MARK: Requests
 
-    private func handle(_ request: Data) async -> Data {
+    private func handle(_ request: Data, caller: LensWorksAutomationCaller) async -> Data {
         guard let object = try? JSONSerialization.jsonObject(with: request) as? [String: Any] else {
             return LensWorksAgentTools.encodeError(id: nil, code: -32700, "The request was not a JSON object.")
         }
         let id = object["id"]
         guard isEnabled, isListening else { return LensWorksAgentTools.encodeError(id: id, code: -32000, "LensWorks automation is off.") }
+        // A request read before its connection was dropped (secret regenerated or revoked, client gone) never runs.
+        guard caller.isCurrent() else { return LensWorksAgentTools.encodeError(id: id, code: -32000, "This automation connection was closed: its secret changed or the client disconnected.") }
         switch object["method"] as? String {
         case "tools/list": return LensWorksAgentTools.encodeResult(id: id, ["tools": LensWorksAgentTools.definitions])
         case "tools/call":
             let params = object["params"] as? [String: Any] ?? [:]
             guard let name = params["name"] as? String else { return LensWorksAgentTools.encodeError(id: id, code: -32602, "tools/call needs a tool name.") }
             guard LensWorksAgentTools.toolNames.contains(name) else { return LensWorksAgentTools.encodeError(id: id, code: -32602, "Unknown tool: \(name)") }
-            return LensWorksAgentTools.encodeResult(id: id, await tools.call(name, arguments: params["arguments"] as? [String: Any] ?? [:]))
+            return LensWorksAgentTools.encodeResult(id: id, await tools.call(name, arguments: params["arguments"] as? [String: Any] ?? [:], caller: caller))
         case let method: return LensWorksAgentTools.encodeError(id: id, code: -32601, "Unsupported method: \(method ?? "none")")
         }
     }

@@ -152,14 +152,19 @@ nonisolated struct LensWorksCommandDescriptor: Codable, Identifiable, Sendable {
     let parameters: [LensWorksCommandParameter]
     let undoable: Bool
     let historyOwner: LensWorksCommandHistoryOwner
+    /// A permanent change nothing in the app can undo: when an agent asks for it, the person confirms it in the app
+    /// before it runs.
+    let requiresAgentConfirmation: Bool
     /// The first default chord, for single-binding commands.
     var shortcut: LensWorksCommandShortcut? { bindings.first?.chord }
     init(id: LensWorksCommandID, label: String, menu: String, menus: [String]? = nil, titles: [String]? = nil,
          titleMatch: LensWorksTitleMatch = .exact, bindings: [LensWorksCommandBinding] = [],
-         parameters: [LensWorksCommandParameter] = [], undoable: Bool = false, historyOwner: LensWorksCommandHistoryOwner = .none) {
+         parameters: [LensWorksCommandParameter] = [], undoable: Bool = false, historyOwner: LensWorksCommandHistoryOwner = .none,
+         requiresAgentConfirmation: Bool = false) {
         self.id = id; self.label = label; self.menu = menu; self.menus = menus ?? [menu]
         self.titles = titles ?? [label]; self.titleMatch = titleMatch; self.bindings = bindings
         self.parameters = parameters; self.undoable = undoable; self.historyOwner = historyOwner
+        self.requiresAgentConfirmation = requiresAgentConfirmation
     }
     /// Whether a rendered menu item titled `title` is this command (a disabled reason may follow " — ").
     func accepts(title: String) -> Bool {
@@ -389,7 +394,7 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .removeFromVirtualFolder, label: "Remove Selected Photos", menu: "Catalog Virtual Folder", parameters: reference("folder", "A virtual folder."), undoable: true, historyOwner: .nativeMetadata),
         .init(id: .renameVirtualFolder, label: "Rename…", menu: "Catalog Virtual Folder", parameters: reference("folder", "A virtual folder."), historyOwner: .nativeMetadata),
         .init(id: .moveVirtualFolder, label: "Move Into…", menu: "Catalog Virtual Folder", parameters: reference("folder", "A virtual folder."), historyOwner: .nativeMetadata),
-        .init(id: .deleteVirtualFolder, label: "Delete Empty Folder", menu: "Catalog Virtual Folder", parameters: reference("folder", "An empty virtual folder."), historyOwner: .nativeMetadata),
+        .init(id: .deleteVirtualFolder, label: "Delete Empty Folder", menu: "Catalog Virtual Folder", parameters: reference("folder", "An empty virtual folder."), historyOwner: .nativeMetadata, requiresAgentConfirmation: true),
         .init(id: .showNestedKeywords, label: "Show Nested Keywords", menu: "Catalog Keyword", parameters: reference("keyword", "A hierarchical keyword.")),
         .init(id: .addKeyword, label: "Add to Selected Photos", menu: "Catalog Keyword", parameters: reference("keyword", "A catalog keyword."), undoable: true, historyOwner: .nativeMetadata),
         .init(id: .removeKeyword, label: "Remove from Selected Photos", menu: "Catalog Keyword", parameters: reference("keyword", "A catalog keyword."), undoable: true, historyOwner: .nativeMetadata),

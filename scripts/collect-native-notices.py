@@ -36,14 +36,16 @@ stage = output.parent / (output.name + '-inputs')
 if stage.exists():
     raise SystemExit('Notice input staging must be new')
 (stage / 'desktop/src-tauri').mkdir(parents=True)
-locks = [root / 'adapters/catalog/Cargo.lock', root / 'engines/catalog/Cargo.lock']
+# Every Rust payload the app ships: the catalog adapter and engine, and the MCP bridge (Contents/Helpers/LensWorksMCP).
+manifests = ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml', 'adapters/mcp/Cargo.toml')
+locks = [root / 'adapters/catalog/Cargo.lock', root / 'engines/catalog/Cargo.lock', root / 'adapters/mcp/Cargo.lock']
 lock_bytes = {lock: lock.read_bytes() for lock in locks}
 lock_hashes = {str(lock.relative_to(root)): hashlib.sha256(data).hexdigest() for lock, data in lock_bytes.items()}
-manifest_bytes = {root / name: (root / name).read_bytes() for name in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml')}
+manifest_bytes = {root / name: (root / name).read_bytes() for name in manifests}
 packages = {}
 graphs = []
 payload_identities = set()
-for manifest in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml'):
+for manifest in manifests:
     command = ['cargo', 'tree', '--manifest-path', str(root / manifest), '--locked', '--offline', '--edges', 'normal,build', '--target', 'aarch64-apple-darwin', '--prefix', 'none', '--format', '{p}']
     tree = subprocess.check_output(command, text=True)
     for line in tree.splitlines():
@@ -64,7 +66,7 @@ packages = {identity: record for identity, record in packages.items() if identit
 if {identity[:2] for identity in packages} != payload_identities:
     raise SystemExit('Cargo payload dependency graph does not match locked identities')
 # This is a notice input, never a build lock. The retained collector reads only
-# the desktop lock, so inventory the union of both independently built payloads.
+# the desktop lock, so inventory the union of every independently built payload.
 union = 'version = 4\n' + ''.join('\n[[package]]\n' + ''.join(key + ' = ' + json.dumps(value) + '\n' for key, value in record.items()) for _, record in sorted(packages.items()))
 (stage / 'desktop/src-tauri/Cargo.lock').write_text(union)
 for destination, source in [('Cargo.lock', locks[1]), ('rust-toolchain.toml', root / 'rust-toolchain.toml')]:
@@ -100,11 +102,11 @@ report['excluded_lock_packages'] = {'basis': 'Not reachable through default-feat
 expected = {(record['name'] + '@' + record['version'], record.get('source'), record.get('checksum')) for record in packages.values()}
 actual = {(record['identity'], record.get('source'), record.get('checksum')) for record in report['rust']}
 if actual != expected:
-    raise SystemExit('Collected Rust notices do not match both locked payloads')
+    raise SystemExit('Collected Rust notices do not match the locked payloads')
 # This absent component is intentional and directly evidenced by the empty lock;
 # all other missing notices remain errors rather than a redistribution claim.
 report['missing'] = [entry for entry in report['missing'] if entry.get('component') != 'frontend-dependencies']
-report['native_adaptation'] = 'Union of actual default-feature Apple-silicon normal/build dependency graphs from both locked payloads; excluded lock entries recorded explicitly; no npm runtime/frontend component is linked.'
+report['native_adaptation'] = 'Union of actual default-feature Apple-silicon normal/build dependency graphs from every locked payload (catalog adapter, catalog engine, MCP bridge); excluded lock entries recorded explicitly; no npm runtime/frontend component is linked.'
 report['status'] = 'NOTICE_INVENTORY_COMPLETE' if not report['missing'] else 'NOTICE_INVENTORY_INCOMPLETE'
 report_path.write_text(json.dumps(report, indent=2) + '\n')
 if report['missing']:

@@ -92,15 +92,53 @@ extension EditorSession {
         }
         return .init(command: command, document: document, selection: activeLayerID, selected: selectedLayerIDs, revision: history.currentRevision, epoch: commandContextEpoch, interactionToken: commandInteraction?.token, origin: origin)
     }
-    /// Why an agent cannot step document history now, or nil when it can. An agent never steps history under a
-    /// person's open edit (a layer interaction, a name editor, a pending gradient or any modal edit).
-    func agentHistoryAvailability(redo: Bool) -> String? {
+    /// The person's open interaction an agent must not act under (a layer interaction, a name editor, a pending
+    /// crop or gradient, any tool stroke, dialog or modal edit), or nil when there is none.
+    var agentModalReason: String? {
         guard document != nil else { return "Open a document first." }
         if isProjectBusy || isImporting { return "Finish the current project operation first." }
         if commandInteraction != nil || renamingLayerID != nil { return "Finish the current layer interaction first." }
-        if gradientEdit != nil || !canUseHistory { return "Finish the current edit in LensWorks first." }
-        if redo { return canRedo ? nil : "There is nothing to redo." }
-        return canUndo ? nil : "There is nothing to undo."
+        if gradientEdit != nil || !canUseHistory || cropRect != nil || pixelMove != nil || hueSaturation != nil
+            || filterEdit != nil || adjustmentEditingID != nil { return "Finish the current edit in LensWorks first." }
+        return nil
+    }
+    /// Why an agent cannot step document history now, or nil when it can. An agent never steps history under a
+    /// person's open edit, and steps only over its own entries: undoing the person's edits and then editing would
+    /// discard their redo history.
+    func agentHistoryAvailability(redo: Bool) -> String? {
+        if let reason = agentModalReason { return reason }
+        guard redo ? canRedo : canUndo else { return redo ? "There is nothing to redo." : "There is nothing to undo." }
+        guard (redo ? history.redoOrigin : history.undoOrigin) == .agent else {
+            return redo ? "The next edit to redo is the person’s own: an agent redoes only its own edits."
+                : "The last edit is the person’s own: an agent undoes only its own edits."
+        }
+        return nil
+    }
+    /// Runs `body` as one agent history entry named `name`. When it throws, the document and selection are restored
+    /// to where they started and history gains nothing.
+    func agentTransaction<T>(_ name: String, _ body: () throws -> T) throws -> T {
+        if let reason = agentModalReason { throw LensWorksCommandRefusal(reason: reason) }
+        let selected = selectedLayerIDs, revision = history.currentRevision
+        let admitted = try document?.admittingMetadataMutation()
+        guard let token = history.beginInteraction(LensWorksCommandOrigin.agent.historyName(name), document: document, selection: activeLayerID,
+                                                   afterMetadataStorage: admitted?.metadataStorage, origin: .agent) else {
+            throw LensWorksCommandRefusal(reason: "Finish the current history transaction first.")
+        }
+        document = admitted
+        do {
+            let value = try body()
+            guard history.endInteraction(token, document: document, selection: activeLayerID) else {
+                throw LensWorksCommandRefusal(reason: "The batch no longer owns this document transaction.")
+            }
+            if history.currentRevision != revision { commandContextEpoch &+= 1 }
+            return value
+        } catch {
+            if let snapshot = history.cancelInteraction(token) {
+                document = snapshot.document; activeLayerID = snapshot.activeLayerID; selectedLayerIDs = selected
+                commandContextEpoch &+= 1
+            }
+            throw error
+        }
     }
     func commandIsCurrent(_ admission: LensWorksLayerAdmission) -> Bool {
         document == admission.document && activeLayerID == admission.selection && selectedLayerIDs == admission.selected && history.currentRevision == admission.revision && commandContextEpoch == admission.epoch && commandInteraction?.token == admission.interactionToken
@@ -125,7 +163,7 @@ extension EditorSession {
         let ownsEdit = commandInteraction == nil && admission.command.id != .beginRename
         var stringBytes=0
         if case .rename(_,let value)=admission.command { stringBytes=try LWSourceMetadataStorage.product(value.utf8.count,2) }
-        if ownsEdit { guard beginEdit(name,additionalMetadataBytes:stringBytes) else { throw ProjectError.tooLarge } }
+        if ownsEdit { guard beginEdit(name,additionalMetadataBytes:stringBytes,origin:admission.origin) else { throw ProjectError.tooLarge } }
         switch admission.command {
         case .visibility(let ids, let value):
             for index in document!.layers.indices where ids.contains(document!.layers[index].id) {
