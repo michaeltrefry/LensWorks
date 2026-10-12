@@ -4,10 +4,11 @@ import UniformTypeIdentifiers
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.isVisible == rhs.isVisible && lhs.transform == rhs.transform
-            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text && lhs.effects == rhs.effects
+            && lhs.liveSource == rhs.liveSource && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text && lhs.effects == rhs.effects
     }
     let id: UUID
     var asset: ImportedImage?
+    var liveSource: LWLiveSourceNode? = nil
     var transform: LayerTransform
     var origin: CGPoint { transform.origin }
     var name: String
@@ -40,7 +41,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.name = name
     }
 
-    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, effects: LayerEffects? = nil, text: LayerText? = nil) {
+    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, effects: LayerEffects? = nil, text: LayerText? = nil, liveSource: LWLiveSourceNode? = nil) {
         self.id = id
         self.asset = asset
         self.name = name
@@ -56,10 +57,32 @@ struct ImageLayer: Identifiable, Equatable {
         self.shape = shape
         self.effects = effects
         self.text = text
+        self.liveSource = liveSource
     }
 }
 
 struct CanvasDocument: Equatable {
+    /// Runtime topology ownership is shared by value snapshots, separate from
+    /// every live source's retained data and immutable pixel-provider ownership.
+    var metadataStorage:LWSourceMetadataStorage? = nil
+    static func == (a:Self,b:Self)->Bool {
+        a.id==b.id && a.width==b.width && a.height==b.height && a.resolution==b.resolution &&
+        a.layers==b.layers && a.guides==b.guides && a.selection==b.selection
+    }
+    func admittingMetadataMutation(layerCapacity:Int? = nil,additionalBytes:Int=0,force:Bool=false) throws -> Self {
+        guard force || layers.contains(where:{$0.liveSource != nil}) || metadataStorage != nil else { return self }
+        let capacity=layerCapacity ?? min(10000,max(layers.count+1,layers.count*2))
+        guard capacity>=layers.count,capacity<=10000 else { throw ProjectError.tooLarge }
+        var charge=try LWSourceMetadataStorage.sum(4096,LWSourceMetadataStorage.collectionBytes(count:capacity,stride:MemoryLayout<ImageLayer>.stride))
+        charge=try LWSourceMetadataStorage.sum(charge,LWSourceMetadataStorage.collectionBytes(count:max(guides.count+1,guides.count*2),stride:MemoryLayout<CanvasGuide>.stride))
+        // Immutable strings and shape/text payloads remain under the admitted
+        // decoded owner; new mutation generations do not retain predecessor
+        // topology owners and therefore do not form an accumulating owner chain.
+        for layer in layers { charge=try LWSourceMetadataStorage.sum(charge,LWSourceMetadataStorage.sum(256,LWSourceMetadataStorage.product(layer.name.utf8.count,2))) }
+        charge=try LWSourceMetadataStorage.sum(charge,additionalBytes)
+        let owner=try LWSourceMetadataStorage(bytes:charge,workingSet:metadataStorage?.workingSet ?? .sourceGraphs,payloadOwners:metadataStorage?.payloadOwners ?? [])
+        var copy=self;copy.metadataStorage=owner;return copy
+    }
     let id: UUID
     let width: Int
     let height: Int
@@ -99,10 +122,125 @@ enum NavigationTool: String, CaseIterable {
     var label: String { self == .type ? "Type (T)" : self == .eyedropper ? "Eyedropper (I)" : self == .marquee ? "Marquee (M)" : self == .lasso ? "Lasso (L)" : self == .wand ? "Magic (W) · Tab switches Wand and Object" : self == .brush ? "Brush (B) · Eraser (E)" : self == .spotHealing ? "Spot Healing Brush (J)" : self == .cloneStamp ? "Clone Stamp (S) · Option-click sets the source" : self == .blur ? "Smear (R)" : self == .gradient ? "Gradient (G)" : self == .shape ? "Shape (U) · Shift-U switches Rectangle/Ellipse" : self == .crop ? "Crop (C)" : self == .move ? "Move / Transform (V)" : self == .hand ? "Hand (H)" : "Zoom (Z)" }
 }
 
+/// A bounded read-only projection retains its dictionary/array allocation charge.
+struct LWSourceWorkspaceOwners {
+    struct Owners:RandomAccessCollection {
+        typealias Index=Int
+        private final class Storage {
+            let values:[LWFloatWorkspace]
+            let charge:LWFloatWorkingSet.Lease
+            init(values:[LWFloatWorkspace],charge:LWFloatWorkingSet.Lease) { self.values=values;self.charge=charge }
+        }
+        private let storage:Storage
+        fileprivate init(values:[LWFloatWorkspace],charge:LWFloatWorkingSet.Lease) { storage=Storage(values:values,charge:charge) }
+        var startIndex:Int { 0 }
+        var endIndex:Int { storage.values.count }
+        func index(after index:Int)->Int { index+1 }
+        func index(before index:Int)->Int { index-1 }
+        subscript(index:Int)->LWFloatWorkspace { storage.values[index] }
+    }
+    let values:Owners
+    init(values:[LWFloatWorkspace],charge:LWFloatWorkingSet.Lease) { self.values=Owners(values:values,charge:charge) }
+}
+
 @Observable
 final class EditorSession {
     var skipsInitialClipboardCanvasSize = false
     var document: CanvasDocument?
+    private(set) var sourceClosePending = false
+    @ObservationIgnored private var sourcePreviewTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored var releaseSourcePresentation: (() -> Void)?
+    @ObservationIgnored var sourcePresentationOwner: (() -> LWFloatWorkspace?)?
+    @ObservationIgnored private var sourceCloseOwners: [ObjectIdentifier: LWFloatWorkspace] = [:]
+    @ObservationIgnored private var sourceCloseCharges: [LWFloatWorkingSet.Lease] = []
+    /// The task remains registered until its actual asynchronous body has returned,
+    /// including detached workers joined by that body. Cancellation alone is not drain.
+    func makeSourcePreviewTask(_ operation: @escaping @MainActor @Sendable () async -> Void) throws -> Task<Void, Never> {
+        guard !sourceClosePending else { throw CancellationError() }
+        let charge = try LWFloatWorkingSet.sourceGraphs.reserve(512), id = UUID()
+        let task = Task { @MainActor [weak self] in
+            defer { self?.sourcePreviewTasks.removeValue(forKey: id); withExtendedLifetime(charge) {} }
+            await operation()
+        }
+        sourcePreviewTasks[id] = task
+        return task
+    }
+    var retainedSourcePreviewCount: Int { sourcePreviewTasks.count }
+    func sourceWorkspaceOwners() throws -> LWSourceWorkspaceOwners {
+        var capacity = 8
+        func count(_ document: CanvasDocument?) throws {
+            for layer in document?.layers ?? [] {
+                capacity = try LWSourceMetadataStorage.sum(capacity, LWSourceMetadataStorage.sum(2, layer.liveSource?.planeAssets.count ?? 0))
+            }
+        }
+        try count(document); try history.forEachRetainedDocument(count)
+        capacity = try LWSourceMetadataStorage.sum(capacity, sourceCloseOwners.count)
+        let bytes = try LWSourceMetadataStorage.sum(1024,LWSourceMetadataStorage.product(capacity,256))
+        let charge = try LWFloatWorkingSet.sourceGraphs.reserve(bytes)
+        var result: [ObjectIdentifier: LWFloatWorkspace] = [:]
+        func plane(_ value: LWFloatPlane?) { if let owner = value?.workspaceOwner { result[ObjectIdentifier(owner)] = owner } }
+        func visit(_ value: CanvasDocument?) {
+            for layer in value?.layers ?? [] {
+                plane(layer.asset?.linearPlane); plane(layer.mask?.asset.linearPlane)
+                if let node = layer.liveSource { for backing in node.planeAssets.values { plane(backing.plane) } }
+            }
+        }
+        visit(document); history.forEachRetainedDocument(visit)
+        plane(brushStroke?.sourcePreview); plane(warpStroke?.sourcePreview)
+        plane(filterEdit?.livePreviewSurface); plane(filterEdit?.liveDiagnosticSurface)
+        plane(hueSaturation?.livePreviewPlane);plane(levels?.livePreviewPlane)
+        if let owner = sourcePresentationOwner?() { result[ObjectIdentifier(owner)] = owner }
+        for (id, owner) in sourceCloseOwners { result[id] = owner }
+        return LWSourceWorkspaceOwners(values:Array(result.values),charge:charge)
+    }
+    /// Called only after Save/Don't Save confirmation. A failed drain leaves this
+    /// session blocked for explicit Close retry, with owned cleanup targets retained.
+    func beginConfirmedSourceClose() throws {
+        if !sourceClosePending {
+            let projection = try sourceWorkspaceOwners()
+            for owner in projection.values {
+                let id = ObjectIdentifier(owner)
+                if sourceCloseOwners[id] == nil {
+                    sourceCloseCharges.append(try LWFloatWorkingSet.sourceGraphs.reserve(256))
+                    sourceCloseOwners[id] = owner
+                }
+            }
+            sourceClosePending = true; commandContextEpoch &+= 1
+        }
+    }
+    func releaseConfirmedSourceProject(deadline: ContinuousClock.Instant) async throws {
+        try beginConfirmedSourceClose()
+        for task in sourcePreviewTasks.values { task.cancel() }
+        cancelFilter(); cancelHueSaturation(); cancelLevels(); cancelBrush()
+        while !sourcePreviewTasks.isEmpty {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw LWSourceCleanupFailure(operation:nil,cleanup:"Source previews are still draining; retry Close.") }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        try await effectsPreviews.cancelAndDrain(deadline: deadline)
+        guard ContinuousClock.now < deadline else { throw LWSourceCleanupFailure(operation:nil,cleanup:"Source Close deadline expired before presentation release; retry Close.") }
+        releaseSourcePresentation?()
+        effectsPreviews = EffectsPreviewCache(); distortPreviewCache.removeAll(); distortEffectsCache.removeAll()
+        clearProject()
+    }
+    func resumeAfterCheckedSourceClose() throws {
+        guard sourceClosePending, sourceCloseOwners.isEmpty, sourcePreviewTasks.isEmpty,
+              document == nil else { throw ProjectError.invalid }
+        sourceClosePending = false
+    }
+    func finishConfirmedSourceRetirement(protectedOwners: [LWSourceWorkspaceOwners], deadline: ContinuousClock.Instant? = nil) throws {
+        guard sourceClosePending, sourcePreviewTasks.isEmpty else { throw ProjectError.invalid }
+        for owner in sourceCloseOwners.values {
+            if let deadline, ContinuousClock.now >= deadline { throw LWSourceCleanupFailure(operation:nil,cleanup:"Native source retirement deadline expired; retry Close.") }
+            if !protectedOwners.contains(where: { $0.values.contains(where: { $0 === owner }) }) {
+                try owner.retireOwnedChildren()
+            }
+        }
+        if let deadline, ContinuousClock.now >= deadline { throw LWSourceCleanupFailure(operation:nil,cleanup:"Native source retirement exceeded its Close deadline; retry Close.") }
+        // A protected root is demonstrably retained by another live document; this
+        // session releases its reference without deleting that document's backing.
+        sourceCloseOwners.removeAll(); sourceCloseCharges.removeAll()
+    }
     var canvasFocusRequest = 0
     var showsSampleRing = true
     var adjustmentOriginal: LayerAdjustment?
@@ -150,7 +288,7 @@ final class EditorSession {
     private var fileRequestWaiters: [CheckedContinuation<Void, Never>] = []
     var canStartProjectOperation: Bool {
         _ = showsBusy // Re-evaluate in the UI when a long operation starts or ends.
-        return commandInteraction == nil && selectionAmountOperation == nil && colorRange == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && adjustmentEditingID == nil && !showsConversionSheet
+        return !sourceClosePending && commandInteraction == nil && selectionAmountOperation == nil && colorRange == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && adjustmentEditingID == nil && !showsConversionSheet
     }
     func waitForFileRequest() async {
         while !canStartProjectOperation {
@@ -439,7 +577,7 @@ final class EditorSession {
         let carried = selection.reduce(into: Set<UUID>()) { $0.formUnion(descendantIDs(of: $1)) }
         let targets = (document?.layers ?? []).filter { selection.contains($0.id) && !carried.contains($0.id) }.map(\.id)
         guard !targets.isEmpty else { return }
-        beginEdit(targets.count > 1 ? "Duplicate Layers" : "Duplicate Layer")
+        guard beginEdit(targets.count > 1 ? "Duplicate Layers" : "Duplicate Layer") else { return }
         // Stacked as Duplicate Layer stacks them: several together above the topmost original.
         duplicateLayers(targets)
         let copies = selectedLayerIDs.subtracting(selection)
@@ -467,7 +605,7 @@ final class EditorSession {
         if let corners = edit.corners { commitDistort(edit, corners: corners); return }
         if let group = edit.group {
             guard edit.draft.isValid else { return }
-            beginEdit("Transform Layers")
+            guard beginEdit("Transform Layers") else { return }
             for (id, original) in group.originals {
                 guard let index = document?.layers.firstIndex(where: { $0.id == id }) else { continue }
                 let moved = original.following(from: group.box, to: edit.draft)
@@ -482,7 +620,7 @@ final class EditorSession {
             return
         }
         guard edit.draft.isValid, let index = document?.layers.firstIndex(where: { $0.id == edit.layerID }) else { return }
-        beginEdit("Transform Layer")
+        guard beginEdit("Transform Layer") else { return }
         if let mask = document?.layers[index].mask, let old = document?.layers[index].transform {
             document?.layers[index].mask?.placement = mask.placement(movingLayer: old, to: edit.draft)
         }
@@ -612,7 +750,7 @@ final class EditorSession {
     var isModified: Bool { history.isModified }
     var canUseHistory: Bool {
         _ = showsBusy
-        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && transformEdit == nil && !showsConversionSheet
+        return !sourceClosePending && selectionAmountOperation == nil && colorRange == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && transformEdit == nil && !showsConversionSheet
     }
     var canUndo: Bool { canUseHistory && (history.canUndo || gradientEdit != nil) }
     var canRedo: Bool { canUseHistory && history.canRedo }
@@ -642,12 +780,23 @@ final class EditorSession {
     }
 
     /// Nestable transaction boundary; future tools can group a complete gesture.
-    func beginEdit(_ name: String) {
-        history.begin(name, document: document, selection: activeLayerID)
+    @discardableResult func beginEdit(_ name:String,layerCapacity:Int? = nil,additionalMetadataBytes:Int=0,forceSourceMetadata:Bool=false) -> Bool {
+        do {
+            let admitted=try document?.admittingMetadataMutation(layerCapacity:layerCapacity,additionalBytes:additionalMetadataBytes,force:forceSourceMetadata)
+            let emptyOwner:LWSourceMetadataStorage?
+            if document == nil,forceSourceMetadata {
+                let capacity=layerCapacity ?? 1;guard capacity>0,capacity<=10000 else { throw ProjectError.tooLarge }
+                emptyOwner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.sum(4096,
+                    LWSourceMetadataStorage.collectionBytes(count:capacity,stride:MemoryLayout<ImageLayer>.stride)))
+            } else { emptyOwner=nil }
+            history.begin(name,document:document,selection:activeLayerID,afterMetadataStorage:admitted?.metadataStorage ?? emptyOwner)
+            document=admitted;return true
+        } catch { brushError=error.localizedDescription;return false }
     }
 
     func endEdit() {
         let revision = history.currentRevision
+        if document?.metadataStorage == nil { document?.metadataStorage=history.pendingAfterMetadataStorage }
         history.end(document: document, selection: activeLayerID)
         if history.currentRevision != revision { commandContextEpoch &+= 1 }
     }
@@ -656,7 +805,7 @@ final class EditorSession {
     var canEditLayersForCommand: Bool { renamingLayerID == nil && canEditLayersWithoutRename }
     var canEditLayersWithoutRename: Bool {
         _ = showsBusy
-        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
+        return !sourceClosePending && selectionAmountOperation == nil && colorRange == nil && textDraft == nil && document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
     }
 
     func addBlankLayer() {
@@ -683,7 +832,7 @@ final class EditorSession {
             }
             if let topmost = document.layers.lastIndex(where: { isInside($0.id) }) { insertion = max(insertion, topmost + 1) }
         }
-        beginEdit("New Blank Layer")
+        guard beginEdit("New Blank Layer") else { return }
         defer { endEdit() }
         self.document?.layers.insert(layer, at: insertion)
         activeLayerID = layer.id
@@ -737,7 +886,7 @@ final class EditorSession {
               offsets.allSatisfy({ layers.indices.contains($0) }), (0...layers.count).contains(destination) else { return }
         // List order is top-to-bottom; the compositor stores bottom-to-top.
         layers.move(fromOffsets: offsets, toOffset: destination)
-        beginEdit("Reorder Layers")
+        guard beginEdit("Reorder Layers") else { return }
         defer { endEdit() }
         document?.layers = layers.reversed()
     }
@@ -754,7 +903,7 @@ final class EditorSession {
         guard let index = siblings.firstIndex(where: { $0.id == activeLayer.id }),
               let a = layers.firstIndex(where: { $0.id == activeLayer.id }),
               let b = layers.firstIndex(where: { $0.id == siblings[index + offset].id }) else { return }
-        beginEdit("Reorder Layers")
+        guard beginEdit("Reorder Layers") else { return }
         document?.layers.swapAt(a, b)
         endEdit()
     }
@@ -787,7 +936,13 @@ final class EditorSession {
         while !pendingImports.isEmpty {
           let request = pendingImports.removeFirst()
           let psdOnly = request.files.allSatisfy { PSDReader.matches($0.0) }
-          beginEdit(psdOnly ? "Import Photoshop File" : "Import Images")
+          let raw=request.files.contains { RawImporter.matches($0.0) }
+          let importCapacity=psdOnly ? 10000:min(10000,(document?.layers.count ?? 0)+request.files.count)
+          guard beginEdit(psdOnly ? "Import Photoshop File":"Import Images",layerCapacity:importCapacity,forceSourceMetadata:raw) else {
+              failures.append(brushError ?? "Source metadata admission was refused")
+              for (url,scoped) in request.files where scoped { url.stopAccessingSecurityScopedResource() }
+              request.completion.resume();continue
+          }
           // No document: the first successful image determines the canvas, regardless of drop point.
           let point = document == nil ? nil : request.point
           for (url, scoped) in request.files {
@@ -799,16 +954,21 @@ final class EditorSession {
                     return total + image.width * image.height
                 } ?? 0
                 if RawImporter.matches(url) {
-                    guard let size = RawImporter.pixelSize(url) else { throw ImageImportError.unreadable }
-                    guard size.width <= DocumentLimits.maxSide, size.height <= DocumentLimits.maxSide,
-                          size.width * size.height <= DocumentLimits.documentPixelBudget - usedPixels else { throw ImageImportError.tooLarge }
-                    guard let settings = await developRaw(url) else { continue }
-                    // Seconds of work: off the main actor, or pressing Import freezes the window.
-                    guard let developed = await RawImporter.Queue.shared.develop(url, settings: settings, limit: nil)
-                    else { throw ImageImportError.unreadable }
-                    let thumbnail = try PixelAdjust.thumbnail(of: developed)
-                    insert(ImportedImage(image: developed, thumbnail: thumbnail,
-                                         name: url.deletingPathExtension().lastPathComponent), centeredAt: point)
+                    // ImageIO cannot size every RAW the managed decoder develops (floating-point
+                    // LinearRaw DNG, for one), so its answer is only an early refusal; the decoded
+                    // extent is checked against the same limits.
+                    func admit(_ width: Int, _ height: Int) throws {
+                        guard width <= DocumentLimits.maxSide, height <= DocumentLimits.maxSide,
+                              width * height <= DocumentLimits.documentPixelBudget - usedPixels else { throw ImageImportError.tooLarge }
+                    }
+                    if let size = RawImporter.pixelSize(url) { try admit(size.width, size.height) }
+                    guard let physical = url.physicalFileURL else { throw ImageImportError.unreadable }
+                    let source = try LWCatalogNativePath(fileURL:physical)
+                    let (node, plane) = try await LWSourceDeveloper.shared.createPlane(original:source,rawHint:true)
+                    try admit(plane.width, plane.height)
+                    try Task.checkCancellation()
+                    let asset = try ImportedImage(plane:plane,name:url.deletingPathExtension().lastPathComponent)
+                    insert(asset, centeredAt:point, liveSource:node)
                 } else if UTType(filenameExtension: url.pathExtension)?.conforms(to: .svg) == true {
                     let asset = try await ImageImporter.shared.decodeSVG(url, fitting: document?.size,
                                                                          remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
@@ -850,8 +1010,8 @@ final class EditorSession {
         if !failures.isEmpty { importError = failures.joined(separator: "\n\n") }
     }
 
-    func insert(_ asset: ImportedImage, centeredAt point: CGPoint? = nil) {
-        beginEdit("Import Image")
+    func insert(_ asset: ImportedImage, centeredAt point: CGPoint? = nil, liveSource:LWLiveSourceNode? = nil) {
+        guard beginEdit("Import Image",layerCapacity:min(10000,(document?.layers.count ?? 0)+1),forceSourceMetadata:liveSource != nil) else { return }
         defer { endEdit() }
         if document == nil {
             document = CanvasDocument(width: asset.image.width, height: asset.image.height)
@@ -862,6 +1022,7 @@ final class EditorSession {
         var layer = ImageLayer(asset: asset, origin: CGPoint(
             x: floor(center.x - CGFloat(asset.image.width) / 2),
             y: floor(center.y - CGFloat(asset.image.height) / 2)))
+        layer.liveSource=liveSource
         layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
         if let parent = layer.parentID { collapsedGroupIDs.remove(parent) }
         self.document?.layers.append(layer)
@@ -914,7 +1075,7 @@ final class EditorSession {
     }
 
     func insertPhotoshop(_ imported: PSDImport, named: String, centeredAt point: CGPoint? = nil) throws {
-        beginEdit("Import Photoshop File")
+        guard beginEdit("Import Photoshop File",layerCapacity:10000) else { return }
         defer { endEdit() }
         var incoming = imported.layers
         let wrapping = document != nil
@@ -954,7 +1115,7 @@ final class EditorSession {
     func createDocument(width: Int, height: Int, emptyLayer: Bool = false) {
         guard commandInteraction == nil, !isProjectBusy, !isImporting, (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { return }
         commitTransform()
-        beginEdit("New Canvas")
+        guard beginEdit("New Canvas") else { return }
         defer { endEdit() }
         var document = CanvasDocument(width: width, height: height)
         let layer = emptyLayer ? ImageLayer(name: "Layer 1", blankSize: document.size) : nil

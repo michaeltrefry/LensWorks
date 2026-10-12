@@ -202,18 +202,18 @@ extension EditorSession {
                 refreshCanvasPreview?()
                 return
             }
-            beginEdit("Delete Guide")
+            guard beginEdit("Delete Guide") else { return }
             document?.guides.removeAll { $0.id == drag.id }
             endEdit()
             refreshCanvasPreview?()
             return
         }
         if drag.isNew {
-            beginEdit("New Guide")
+            guard beginEdit("New Guide") else { return }
             document?.guides.append(CanvasGuide(id: drag.id, axis: drag.axis, position: drag.position))
             endEdit()
         } else if drag.original != drag.position {
-            beginEdit("Move Guide")
+            guard beginEdit("Move Guide") else { return }
             if let index = document?.guides.firstIndex(where: { $0.id == drag.id }) {
                 document?.guides[index].position = drag.position
             }
@@ -229,7 +229,7 @@ extension EditorSession {
 
     func clearGuides() {
         guard canClearGuides else { return }
-        beginEdit("Clear Guides")
+        guard beginEdit("Clear Guides") else { return }
         document?.guides = []
         endEdit()
         refreshCanvasPreview?()
@@ -238,7 +238,7 @@ extension EditorSession {
     func addGuide(_ guide: CanvasGuide) {
         guard canEditGuides else { return }
         showsGuides = true
-        beginEdit("New Guide")
+        guard beginEdit("New Guide") else { return }
         document?.guides.append(guide)
         endEdit()
     }

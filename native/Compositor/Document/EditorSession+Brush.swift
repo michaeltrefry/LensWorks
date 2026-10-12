@@ -34,7 +34,7 @@ extension EditorSession {
     /// Tiled raster edit of the active layer's pixels or mask, within the shared pixel budgets.
     func makeRasterEdit(for layer: ImageLayer, settings: BrushSettings = BrushSettings(), growsMask: Bool = false) throws -> BrushStroke {
         guard let document else { throw ProjectError.tooLarge }
-        let stroke = try BrushStroke(layer: layer, mask: isMaskSelected, settings: settings, canvas: document.size, growsMask: growsMask)
+        let stroke = try BrushStroke(layer: layer, mask: isMaskSelected, settings: settings, canvas: document.size, useGPU:layer.liveSource == nil, growsMask: growsMask)
         let used = document.layers.filter { $0.id != layer.id }.reduce(0) { total, layer in
             let image = isMaskSelected ? layer.mask?.asset.image : layer.asset?.image
             return total + (image.map { $0.width * $0.height } ?? 0)
@@ -69,19 +69,34 @@ extension EditorSession {
             if isMaskSelected { settings.red = maskPaintWhite ? 1 : 0; settings.green = settings.red; settings.blue = settings.red }
             let stroke = try makeRasterEdit(for: layer, settings: settings, growsMask: tool == .brush)
             if let offset = sourceOffset {
-                guard let sample = cloneSample(document, for: stroke, offset: offset) else { return }
                 cloneOffset = offset
-                stroke.clone = sample
+                stroke.sourceCloneOffset=offset;stroke.sourceCloneSettings=cloneSettings;stroke.sourceIsClone=true
+                if layer.liveSource == nil { guard let sample=cloneSample(document,for:stroke,offset:offset) else { return };stroke.clone=sample }
             }
             // Blur paints a softened copy of the layer, in place, through the brush tip.
-            if tool == .blur {
+            if tool == .blur,layer.liveSource == nil {
                 guard let blur = blurSample(for: stroke) else { return }
                 stroke.clone = blur.sample
                 stroke.cloneRender = blur.render
             }
             stroke.isBlur = tool == .blur
+            if !stroke.isMask,let node=layer.liveSource {
+                let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs);stroke.sourceWorkspace=workspace
+                let map=try node.currentSpatialMap
+                if let coverage=try LWSourceSelectionPlane.capture(stroke.selectionClip,
+                    mapping:BrushRaster.pixelToDocument(layer.transform,width:map.developedWidth,height:map.developedHeight),
+                    width:map.developedWidth,height:map.developedHeight,workspace:workspace) {
+                    stroke.sourceSelectionPlane=try LWSourcePlaneAsset(coverage)
+                }
+                if tool == .cloneStamp,stroke.sourceCloneSettings.sampleAllLayers,let snapshot=projectSnapshot() {
+                    let captured=try LWSourceSampleComposite.capturePlane(snapshot,sourceLayer:layer.id,node:node,workspace:workspace)
+                    stroke.sourceComposite=captured.composite;stroke.sourcePlaneAssets=captured.assets
+                }
+                stroke.sourcePreview=layer.asset?.linearPlane
+            }
             brushStroke = stroke
             try stroke.append(point)
+            try refreshSourceBrushPreview(stroke)
             brushAnchor = point
             brushPointer = point
             lastBrushPoint = (point, layer.id, isMaskSelected)
@@ -93,7 +108,7 @@ extension EditorSession {
         guard let brushStroke else { return }
         brushPointer = point
         guard let painted = smoothed(point) else { return }
-        do { try brushStroke.append(painted); lastBrushPoint?.point = painted; brushRevision += 1 }
+        do { try brushStroke.append(painted);try refreshSourceBrushPreview(brushStroke);lastBrushPoint?.point = painted;brushRevision += 1 }
         catch { cancelBrush(); brushError = error.localizedDescription }
     }
     /// Where the brush actually is, with Smoothing on: it trails the pointer on a string, and only
@@ -118,6 +133,7 @@ extension EditorSession {
     }
     func cancelBrush() {
         warpStroke = nil
+        brushStroke?.sourcePreviewTask?.cancel()
         brushStroke = nil
         brushAnchor = nil
         brushPointer = nil
@@ -141,13 +157,92 @@ extension EditorSession {
                 try stroke.append(pointer)
             }
             try stroke.flush()
-            if stroke.settings.healing { try stroke.heal() }
-            if !stroke.patches.isEmpty { try commitPaintSnapshot(stroke) }
+            if !stroke.isMask,stroke.layer.liveSource != nil {
+                try scheduleLiveSourceStroke(stroke)
+            } else {
+                if stroke.settings.healing { try stroke.heal() }
+                if !stroke.patches.isEmpty { try commitPaintSnapshot(stroke) }
+            }
         } catch { brushError = error.localizedDescription }
         return true
     }
 
     func finishBrush() async { finishBrushImmediately() }
+
+    private func recordedSourceNode(_ stroke:BrushStroke) throws -> LWLiveSourceNode {
+        guard !stroke.recordedSourceDabs.isEmpty,let node=stroke.layer.liveSource else { throw ProjectError.invalid }
+        let kind:LWSourceRetouchStroke.Kind = stroke.settings.erasing ? .erase : stroke.isBlur ? .blur : stroke.sourceIsClone ? .clone : stroke.settings.healing ? .heal : .paint
+        let frame=try node.capturedFrame(transform:stroke.layer.transform)
+        let compositeBytes=try LWSourceMetadataStorage.product(stroke.sourceComposite?.payload.count ?? 0,2)
+        var changed=try node.metadataCopy(additionalBytes:LWSourceMetadataStorage.sum(compositeBytes,
+            LWSourceMetadataStorage.collectionBytes(count:stroke.sourcePlaneAssets.count+1,stride:MemoryLayout<LWSourcePlaneAsset>.stride+128)))
+        for (id,asset) in stroke.sourcePlaneAssets { guard changed.planeAssets[id]==nil else { throw ProjectError.invalid };changed.planeAssets[id]=asset }
+        let selectionID=stroke.sourceSelectionPlane.map { _ in UUID() }
+        if let selectionID,let asset=stroke.sourceSelectionPlane { changed.planeAssets[selectionID]=asset }
+        if let composite=stroke.sourceComposite { changed.sampleComposites.append(composite) }
+        func linear(_ value:CGFloat)->Float { let x=Double(value);return Float(x<=0.04045 ? x/12.92 : pow((x+0.055)/1.055,2.4)) }
+        guard let mode=SpotHealingMode.allCases.firstIndex(of:stroke.settings.healingMode),let heal=LWSourceRetouchStroke.HealMode(rawValue:mode) else { throw ProjectError.invalid }
+        let recorded=LWSourceRetouchStroke(sourceID:node.id,upstreamRevision:node.revision,captureFrame:frame,kind:kind,
+            seed:stroke.recordedSourceSeed,healMode:heal,
+            sampleAllLayers:stroke.sourceComposite != nil,aligned:stroke.sourceCloneSettings.aligned,sampleAllLayersCompositeRevision:stroke.sourceComposite?.revision,
+            blurRadius:Double(stroke.settings.blurRadius),radius:Double(stroke.settings.diameter/2),hardness:Double(stroke.settings.hardness),opacity:Double(stroke.settings.opacity),
+            points:stroke.recordedSourceDabs,sourceOffset:stroke.sourceCloneOffset,color:[linear(stroke.settings.red),linear(stroke.settings.green),linear(stroke.settings.blue),1],pointsAreDabs:true,selectionSourceCoverage:nil,selectionPlaneID:selectionID,selectionFrame:selectionID == nil ? nil:frame)
+        try changed.appendRetouch(recorded)
+        return changed
+    }
+    /// One retained preview job per stroke; newer final dabs coalesce behind it.
+    /// The complete developed float plane is immutable upstream for this operation.
+    private func refreshSourceBrushPreview(_ stroke:BrushStroke) throws {
+        guard !stroke.isMask,let original=stroke.layer.asset?.linearPlane,stroke.layer.liveSource != nil else { return }
+        stroke.sourcePreviewPending=true
+        guard stroke.sourcePreviewTask == nil else { return }
+        stroke.sourcePreviewPending=false
+        let complete=try recordedSourceNode(stroke)
+        guard let recorded=complete.retouch.last else { throw ProjectError.invalid }
+        let retainedNode=try complete.previewingRetouch(recorded)
+        let map=try complete.currentSpatialMap
+        let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+        stroke.sourcePreviewTask=try makeSourcePreviewTask { [weak self,weak stroke] in
+            let worker=Task.detached(priority:.userInitiated) {
+                try Task.checkCancellation();return try LWSourceRetouch.evaluate(retainedNode,developed:original,map:map,workspace:workspace)
+            }
+            let result=await withTaskCancellationHandler {
+                await worker.result
+            } onCancel: { workspace.cancellation.cancel();worker.cancel() }
+            guard let self,let stroke else { return }
+            stroke.sourcePreviewTask=nil
+            guard self.brushStroke === stroke,!Task.isCancelled else { return }
+            switch result {
+            case .success(let surface): stroke.sourcePreview=surface;self.brushRevision+=1
+            case .failure(let error): self.cancelBrush();self.brushError=error.localizedDescription;return
+            }
+            if stroke.sourcePreviewPending {
+                do { try self.refreshSourceBrushPreview(stroke) }
+                catch { self.cancelBrush();self.brushError=error.localizedDescription }
+            }
+        }
+    }
+    private func scheduleLiveSourceStroke(_ stroke:BrushStroke) throws {
+        guard let node=stroke.layer.liveSource else { throw ProjectError.invalid }
+        var changed=try recordedSourceNode(stroke)
+        guard let kind=changed.retouch.last?.kind else { throw ProjectError.invalid }
+        changed.revision=UUID();changed.sourceLineage.append(changed.revision);try changed.validate()
+        let epoch=commandContextEpoch
+        isProjectBusy=true
+        Task { @MainActor in
+            defer { isProjectBusy=false;brushRevision+=1 }
+            do {
+                let made=try await LWSourceDeveloper.shared.evaluatePlane(changed)
+                let asset=try ImportedImage(plane:made.surface,name:stroke.layer.name)
+                guard commandContextEpoch==epoch,let index=document?.layers.firstIndex(where:{$0.id==stroke.layer.id}),let current=document?.layers[index],
+                    current.liveSource==node,current.asset?.image === stroke.layer.asset?.image,current.transform==stroke.layer.transform,
+                    current.mask?.asset.image === stroke.layer.mask?.asset.image else { throw CancellationError() }
+                var updated=current;updated.asset=asset;updated.liveSource=changed
+                guard beginEdit(kind == .heal ? "Spot Healing" : kind == .clone ? "Clone Stamp" : kind == .erase ? "Erase" : kind == .blur ? "Blur" : "Brush Stroke") else { return }
+                document?.layers[index]=updated;endEdit()
+            } catch { brushError=error.localizedDescription }
+        }
+    }
 
     /// Install immutable tiles immediately, including the undo entry. The next
     /// stroke and other tools can start without awaiting full-image assembly.
@@ -164,7 +259,7 @@ extension EditorSession {
             mask = original.replacing(ImportedImage(image: try raster.makeImage(), thumbnail: try raster.thumbnail(),
                 name: original.asset.name, raster: raster))
         }
-        beginEdit(stroke.editName ?? (stroke.isMask ? "Paint Mask" : stroke.settings.erasing ? "Erase" : stroke.isBlur ? "Blur" : stroke.clone != nil ? "Clone Stamp" : stroke.settings.healing ? "Spot Healing" : "Brush Stroke"))
+        guard beginEdit(stroke.editName ?? (stroke.isMask ? "Paint Mask" : stroke.settings.erasing ? "Erase" : stroke.isBlur ? "Blur" : stroke.clone != nil ? "Clone Stamp" : stroke.settings.healing ? "Spot Healing" : "Brush Stroke")) else { return }
         if stroke.isMask {
             document?.layers[index].mask = current.mask.map { mask in
                 var painted = mask.replacing(result.asset)
@@ -202,7 +297,7 @@ extension EditorSession {
               let current = document?.layers[index], current.asset?.image === stroke.layer.asset?.image,
               current.transform == stroke.layer.transform,
               current.mask?.asset.image === stroke.layer.mask?.asset.image else { return }
-        beginEdit(name)
+        guard beginEdit(name) else { return }
         if stroke.isMask {
             let bounds = result.pixelBounds.offsetBy(dx: stroke.committedBounds.minX, dy: stroke.committedBounds.minY)
             document?.layers[index].mask = current.mask.map { mask in

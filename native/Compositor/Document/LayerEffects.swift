@@ -304,7 +304,7 @@ extension EditorSession {
               document?.layers[index].isGroup == false, document?.layers[index].asset != nil,
               document?.layers[index].effects != (effects.isEmpty ? nil : effects) else { return }
         finishOpacityEdit()
-        beginEdit(name)
+        guard beginEdit(name) else { return }
         document?.layers[index].effects = effects.isEmpty ? nil : effects
         endEdit()
     }

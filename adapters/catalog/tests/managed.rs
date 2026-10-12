@@ -585,7 +585,8 @@ fn managed_source_plan_float_and_original_preservation() {
         let worker = temp.path().join("fault-decode-worker");
         let template = r#"#!/usr/bin/python3
 import sys,json,struct,math,time,os
-i=json.load(sys.stdin);p=i['plan'];fault=FAULT
+r=sys.stdin.buffer.read();assert r[:8]==b'LWREQ003' and r[16]==0
+i=json.loads(r[17:17+struct.unpack('<Q',r[8:16])[0]]);p=i['plan'];fault=FAULT
 d={'source_revision':REV,'protocol':2,'kind':'float','mime':'application/x-lensworks-rgba-f32le','width':2,'height':2,'row_stride':'32','byte_length':'64','channels':4,'sample':'float32_le','color_space':'linear_srgb','alpha':'straight','orientation':'applied','source_identity':p['identity'],'original':p['original'],'original_revision':p['original_revision'],'plan_authority':p['authority']}
 d.update(json.loads(DETAIL))
 v=[0.0,2.0,-0.2,1.0]*4
@@ -641,11 +642,15 @@ h=json.dumps(d).encode();sys.stdout.buffer.write(b'LWFLT002'+struct.pack('<QQ',l
         let r = command("decode_full", fault_args.clone());
         let j = r["result"]["job"].as_str().unwrap();
         let until = Instant::now() + Duration::from_secs(10);
-        while !marker.exists() {
+        // The child creates the marker and then writes its pid; wait for the complete pid,
+        // not just the file, or an early read sees an empty marker.
+        let pid: libc::pid_t = loop {
+            if let Ok(pid) = std::fs::read_to_string(&marker).map(|text| text.trim().parse()) {
+                if let Ok(pid) = pid { break pid; }
+            }
             assert!(Instant::now() < until, "child didn't launch");
             std::thread::sleep(Duration::from_millis(5));
-        }
-        let pid: libc::pid_t = std::fs::read_to_string(&marker).unwrap().parse().unwrap();
+        };
         command("job_cancel", json!({"job":j}));
         let canceled = take(j);
         assert_eq!(canceled["error"]["code"], "canceled", "{canceled}");

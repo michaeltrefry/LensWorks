@@ -346,7 +346,7 @@ extension EditorSession {
         distortPreviewCache = [:]
         defer { distortEffectsCache = [:] }
         let ids = edit.group.map { Array($0.originals.keys) } ?? [edit.layerID]
-        beginEdit(edit.group == nil ? "Distort" : "Distort Layers")
+        guard beginEdit(edit.group == nil ? "Distort" : "Distort Layers") else { return }
         for id in ids {
             guard let index = document?.layers.firstIndex(where: { $0.id == id }), let layer = document?.layers[index],
                   let target = distortTarget(for: layer, edit: edit, shape: shape) else { continue }

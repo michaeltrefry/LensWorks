@@ -4,7 +4,7 @@ import Observation
 
 /// Filters from the Filter menu. Each runs on the active image layer, inside the selection if
 /// there is one, with a live preview and one undo step on OK.
-nonisolated enum FilterKind: String, CaseIterable, Sendable {
+nonisolated enum FilterKind: String, Codable, CaseIterable, Sendable {
     case gaussianBlur = "Gaussian Blur"
     case motionBlur = "Motion Blur"
     case addNoise = "Add Noise"
@@ -32,13 +32,13 @@ nonisolated enum FilterKind: String, CaseIterable, Sendable {
 
 /// Remove Background's two ways of working: Apple's own subject mask on its own, or that mask refined against the
 /// layer's detail, which recovers hair and fur but takes longer.
-nonisolated enum BackgroundQuality: String, CaseIterable, Sendable {
+nonisolated enum BackgroundQuality: String, Codable, CaseIterable, Sendable {
     case basic = "Basic"
     case advanced = "Advanced"
 }
 
 /// Every filter's settings; each filter reads only its own.
-nonisolated struct FilterSettings: Equatable, Sendable {
+nonisolated struct FilterSettings: Codable, Equatable, Sendable {
     /// Gaussian Blur radius in layer pixels (the blur's standard deviation), 0.1–250.
     var radius: Double = 1
     /// Motion Blur direction in degrees, counterclockwise from horizontal as in Photoshop, −90–90.
@@ -275,6 +275,8 @@ final class FilterEdit {
     let kind: FilterKind
     let layerID: UUID
     let original: ImportedImage
+    let liveSource: LWLiveSourceNode?
+    var sourceWhiteBalance: LWSourceWhiteBalance
     let transform: LayerTransform
     let selection: SelectionClip?
     var mapping: CGAffineTransform
@@ -284,6 +286,12 @@ final class FilterEdit {
     /// A filter reaching past the layer's edge — Content-Aware Fill over a selection, a blur spreading outwards —
     /// works on the layer's pixels padded out, and on the transform placing that larger grid.
     var grownImage: CGImage? = nil
+    /// Live RAW padding changes only the admitted grid descriptor; reference
+    /// pixels are produced through the tiled graph, never an RGBA8 context.
+    var grownPixelBounds: CGRect? = nil
+    @ObservationIgnored var livePreparedResult: LWSourceFilterPreparation.Result?
+    @ObservationIgnored var liveAdmission: LWDocumentEditAdmission?
+    let originalMask: LayerMask?
     var grownTransform: LayerTransform? = nil
     /// How far the padding reaches beyond the layer on every side, in layer pixels.
     var grownMargin: CGFloat = 0
@@ -293,7 +301,7 @@ final class FilterEdit {
     var previewError: String?
     var preparing = false
     /// Add Noise's grain, fixed while the panel is open so changing Amount doesn't reshuffle it.
-    let seed = UInt32.random(in: .min ... .max)
+    let seed: UInt32
     /// Camera Raw panel eyes. Off drops that group's amounts from the preview and from OK, without clearing the sliders.
     var showsCameraRawLight = true
     var showsCameraRawColor = true
@@ -338,6 +346,8 @@ final class FilterEdit {
     /// Histogram, or the vectorscope chosen from its context menu.
     var cameraRawScopeMode: CameraRawScopeMode = .histogram
     var cameraRawScope: CameraRawScope?
+    var livePreviewSurface:LWFloatPlane?
+    var liveDiagnosticSurface:LWFloatPlane?
     /// RGB of the pixel under the pointer, in the adjusted preview.
     var cameraRawReadout: (red: Int, green: Int, blue: Int)?
     /// Vignette on an empty layer: the canvas it frames and fills.
@@ -364,9 +374,16 @@ final class FilterEdit {
     init(kind: FilterKind, layer: ImageLayer, selection: SelectionClip?, settings: FilterSettings, growingTo area: CGRect? = nil) throws {
         guard let asset = layer.asset else { throw ProjectError.invalid }
         self.kind = kind
-        self.settings = settings.normalized
+        self.seed = layer.liveSource?.grainSeed ?? UInt32.random(in:.min ... .max)
+        self.liveSource = layer.liveSource
+        self.originalMask = layer.mask
+        self.sourceWhiteBalance = layer.liveSource?.whiteBalance ?? .asShot
+        var admittedSettings = settings
+        if kind == .cameraRaw, let source = layer.liveSource { admittedSettings.cameraRaw = source.settings }
+        self.settings = admittedSettings.normalized
         layerID = layer.id; original = asset; transform = layer.transform; self.selection = selection
-        let ready = try Self.prepared(kind: kind, from: asset.image, placed: layer.transform)
+        let ready = try Self.prepared(kind: layer.liveSource == nil ? kind : .cameraRaw, from: asset.image, placed: layer.transform)
+        try asset.validatePlaneRead()
         mapping = ready.mapping
         previewSource = ready.previewSource
         previewScale = ready.previewScale
@@ -403,6 +420,22 @@ final class FilterEdit {
         let target = bounds.union(extent).integral
         guard target != bounds else { return }
         guard target.width <= DocumentLimits.maxSideExtent, target.height <= DocumentLimits.maxSideExtent, target.width * target.height <= DocumentLimits.maxSurfaceExtent else { throw ProjectError.tooLarge }
+        if liveSource != nil {
+            let combined = (grownPixelBounds ?? bounds).union(target).integral
+            try LWFloatPlane.validateExtent(width: Int(combined.width), height: Int(combined.height))
+            let toDocument = BrushRaster.pixelToDocument(transform, width: original.image.width, height: original.image.height)
+            var expanded = transform
+            expanded.size = CGSize(width: combined.width * transform.size.width / bounds.width,
+                height: combined.height * transform.size.height / bounds.height)
+            let middle = CGPoint(x: combined.midX, y: combined.midY).applying(toDocument)
+            expanded.origin = CGPoint(x: middle.x - expanded.size.width / 2, y: middle.y - expanded.size.height / 2)
+            grownPixelBounds = combined; grownTransform = expanded
+            grownMargin = min(bounds.minX - combined.minX, bounds.minY - combined.minY,
+                combined.maxX - bounds.maxX, combined.maxY - bounds.maxY)
+            mapping = BrushRaster.pixelToDocument(expanded, width: Int(combined.width), height: Int(combined.height))
+            previewSourceVersion &+= 1; livePreparedResult = nil
+            return
+        }
         let context = try BrushRaster.context(width: Int(target.width), height: Int(target.height), mask: false)
         let inside = bounds.offsetBy(dx: -target.minX, dy: -target.minY)
         if let raster = original.raster { raster.draw(in: inside, context: context) }
@@ -423,7 +456,7 @@ final class FilterEdit {
 
     /// What the filter and its preview read: the full-size grid, and a copy no larger than `previewLimit` for
     /// everything but the filters that must be made at full size.
-    private static func prepared(kind: FilterKind, from source: CGImage, placed: LayerTransform) throws
+    static func prepared(kind: FilterKind, from source: CGImage, placed: LayerTransform) throws
         -> (mapping: CGAffineTransform, previewSource: CGImage, previewScale: CGFloat, previewMapping: CGAffineTransform) {
         let mapping = BrushRaster.pixelToDocument(placed, width: source.width, height: source.height)
         // Noise, grain and dither preview at full size: made on a smaller copy they would look coarser once enlarged.
@@ -431,8 +464,9 @@ final class FilterEdit {
             ? 1 : min(1, previewLimit / CGFloat(max(source.width, source.height)))
         guard factor < 1 else { return (mapping, source, 1, mapping) }
         let w = max(1, Int(CGFloat(source.width) * factor)), h = max(1, Int(CGFloat(source.height) * factor))
-        let context = try BrushRaster.context(width: w, height: h, mask: false)
-        BrushRaster.draw(source, in: CGRect(x: 0, y: 0, width: w, height: h), mask: false, context: context)
+        let floating=source.bitmapInfo.contains(.floatComponents)
+        let context = try floating ? LWLinearSurface.context(width:w,height:h,maximumBytes:LWSourceDeveloper.maximumResultBytes) : BrushRaster.context(width:w,height:h,mask:false)
+        BrushRaster.draw(source,in:CGRect(x:0,y:0,width:w,height:h),mask:false,context:context)
         guard let small = context.makeImage() else { throw ExportError.render }
         return (mapping, small, CGFloat(w) / CGFloat(source.width),
                 BrushRaster.pixelToDocument(placed, width: w, height: h))
@@ -458,6 +492,12 @@ final class FilterEdit {
                                                         showsGeometry: showsCameraRawGeometry, showsCalibration: showsCameraRawCalibration)
         }
         return value
+    }
+    var livePixelStage: LWSourcePixelStage {
+        let bounds = grownPixelBounds ?? CGRect(x: 0, y: 0, width: original.image.width, height: original.image.height)
+        return LWSourcePixelStage(inputWidth: original.image.width, inputHeight: original.image.height,
+            outputWidth: Int(bounds.width), outputHeight: Int(bounds.height), offsetX: Int(-bounds.minX),
+            offsetY: Int(-bounds.minY), distortion: kind == .lensCorrection ? settings.distortion : 0)
     }
     var previewJob: FilterJob {
         var job = FilterJob(kind: kind, image: previewSource, settings: renderSettings(), scale: previewScale, selection: selection,
@@ -508,6 +548,7 @@ extension EditorSession {
             let edit = try FilterEdit(kind: kind, layer: layer, selection: selection?.clip(canvas: document.size), settings: settings, growingTo: area)
             if fillsCanvas { edit.canvas = canvas }
             edit.startedEmpty = startedEmpty
+            if edit.liveSource != nil { edit.liveAdmission = try captureDocumentEditAdmission() }
             filterEdit = edit
             updateFilter(edit.settings, preview: true)
         } catch { brushError = error.localizedDescription }
@@ -535,15 +576,87 @@ extension EditorSession {
 
     /// Renders the newest settings; changes that arrive mid-render wait for it rather than
     /// cancelling it, so dragging a slider keeps the canvas updating.
+    func validateLiveSourceFilterAdmission(_ edit:FilterEdit) throws {
+        guard filterEdit === edit,let admission=edit.liveAdmission,let source=edit.liveSource,
+            let current=activeLayer,current.id == edit.layerID,current.liveSource == source,
+            current.asset?.image === edit.original.image,current.transform == edit.transform,
+            current.mask == edit.originalMask else { throw ProjectError.invalid }
+        try validateDocumentEditAdmission(admission)
+        try current.asset?.validatePlaneRead()
+    }
+
     private func renderFilterPreview(_ edit: FilterEdit) {
         guard filterEdit === edit, edit.previewTask == nil, let job = edit.pending else { return }
+        if edit.liveSource != nil {
+            do { try validateLiveSourceFilterAdmission(edit) }
+            catch { edit.pending=nil;edit.previewError=error.localizedDescription;return }
+        }
         edit.pending = nil
         let placement = edit.pendingTransform
         let sourceVersion = edit.previewSourceVersion
         edit.preparing = true
         edit.previewError = nil
-        edit.previewTask = Task { @MainActor [weak self, weak edit] in
-            let result = await Task.detached(priority: .userInitiated) { () -> (CGImage?, CameraRawScope?, String?) in
+        let source = edit.liveSource
+        let sourceWhiteBalance = edit.sourceWhiteBalance
+        let sourceTransform = edit.transform
+        let outputTransform = edit.grownTransform ?? edit.transform
+        let pixelStage = edit.livePixelStage
+        let sourceMask = document?.layers.first(where: { $0.id == edit.layerID })?.mask
+        do {
+        edit.previewTask = try makeSourcePreviewTask { [weak self, weak edit] in
+            let result: (CGImage?, CameraRawScope?, String?)
+            var retainedSurface:LWFloatPlane? = nil
+            var diagnosticSurface:LWFloatPlane? = nil
+            var preparedSource: LWSourceFilterPreparation.Result?
+            if var node = source, job.kind == .cameraRaw {
+                do {
+                    let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+                    let preview = try await withTaskCancellationHandler {
+                    node = try node.applyingDevelopment(settings:job.settings.cameraRaw,whiteBalance:sourceWhiteBalance,seed:job.seed,selection:job.selection,mapping:job.mapping,workspace:workspace)
+                    // The commit/export development graph on the preview grid (at most previewLimit).
+                    let made = try await LWSourceDeveloper.shared.evaluatePreviewPlane(node,maximumSide:Int(FilterEdit.previewLimit))
+                    try Task.checkCancellation()
+                    let diagnostic=try LWCameraRawDiagnostics.preview(made.surface,settings:job.settings.cameraRaw,
+                        clipping:job.cameraRawClipping,shadows:job.showsShadowClipping,highlights:job.showsHighlightClipping,
+                        point:job.visualizesPointColor,sharpenMask:job.showsSharpenMask,workspace:workspace)
+                    let diagnosticProvider=LWFloatPlaneImage(plane:diagnostic,cancellation:workspace.cancellation)
+                    let sourceProvider=LWFloatPlaneImage(plane:made.surface,cancellation:workspace.cancellation)
+                    let image=try diagnosticProvider.image()
+                    // Histogram/readout are bounded display diagnostics, never RAW reference pixels.
+                    let shown=try FilterEdit.prepared(kind:.cameraRaw,from:image,placed:sourceTransform).previewSource
+                    let scopeImage=try FilterEdit.prepared(kind:.cameraRaw,from:sourceProvider.image(),placed:sourceTransform).previewSource
+                    try diagnosticProvider.check();try sourceProvider.check()
+                    try workspace.cancellation.check(); try Task.checkCancellation()
+                    return (shown,CameraRawScope.make(scopeImage),made.surface,diagnostic)
+                    } onCancel: { workspace.cancellation.cancel() }
+                    retainedSurface=preview.2; diagnosticSurface=preview.3
+                    result=(preview.0,preview.1,nil)
+                } catch { retainedSurface=nil;diagnosticSurface=nil;result = (nil,nil,error.localizedDescription) }
+            } else if let source {
+                do {
+                    let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+                    let preview=try await withTaskCancellationHandler {
+                        let made = try await LWSourceFilterPreparation.prepare(source, kind: job.kind,
+                            settings: job.settings, seed: job.seed, selection: job.selection,
+                            inputTransform: sourceTransform, transform: outputTransform, stage: pixelStage, existingMask: sourceMask, workspace: workspace)
+                        try Task.checkCancellation()
+                        let visible: LWFloatPlane
+                        if let mask = made.mask {
+                            let coverage = mask.sampler()
+                            visible = try LWFloatCompositor.map(made.surface, workspace: workspace) { pixel, x, y in
+                                var value = pixel; value.w *= try coverage.pixel(x: x, y: y).x; return value
+                            }
+                        } else { visible = made.surface }
+                        let provider = LWFloatPlaneImage(plane: visible, cancellation: workspace.cancellation)
+                        let shown = try FilterEdit.prepared(kind: .cameraRaw, from: provider.image(), placed: made.transform).previewSource
+                        try provider.check();try workspace.cancellation.check();try Task.checkCancellation()
+                        return (shown,made)
+                    } onCancel: { workspace.cancellation.cancel() }
+                    preparedSource = preview.1; retainedSurface = preview.1.surface
+                    result = (preview.0, nil, nil)
+                } catch { preparedSource = nil; retainedSurface = nil; result = (nil, nil, error.localizedDescription) }
+            } else {
+            result = await Task.detached(priority: .userInitiated) { () -> (CGImage?, CameraRawScope?, String?) in
                 do {
                     if job.kind == .cameraRaw {
                         let made = try CameraRawScope.preview(job)
@@ -554,22 +667,34 @@ extension EditorSession {
                     return (nil, nil, error.localizedDescription)
                 }
             }.value
+            }
             guard let self, let edit, self.filterEdit === edit, !Task.isCancelled else { return }
             edit.previewTask = nil
             edit.preparing = false
+            if edit.liveSource != nil {
+                do { try self.validateLiveSourceFilterAdmission(edit) }
+                catch {
+                    edit.pending=nil;edit.livePreparedResult=nil;edit.livePreviewSurface=nil;edit.liveDiagnosticSurface=nil
+                    edit.preparedPreview=nil;edit.previewError=error.localizedDescription;return
+                }
+            }
             // Made before the layer grew for a bigger blur: it still shows, in the place it was made for, until the
             // render from the grown layer replaces it.
             let current = sourceVersion == edit.previewSourceVersion
             edit.previewError = result.2
             if let scope = result.1 { edit.cameraRawScope = scope }
+            edit.livePreviewSurface=retainedSurface
+            edit.liveDiagnosticSurface=diagnosticSurface
+            if current && job.settings == edit.renderSettings() { edit.livePreparedResult = preparedSource }
             if (edit.preview || edit.kind.isAutomatic), current || !edit.kind.isAutomatic {
                 edit.preparedPreview = result.0
-                edit.preparedTransform = placement
+                edit.preparedTransform = preparedSource?.transform ?? placement
                 edit.preparedSettings = current ? job.settings : nil
                 self.brushRevision += 1
             }
             self.renderFilterPreview(edit)
         }
+        } catch { edit.preparing=false;edit.previewError=error.localizedDescription;commandRefusal = error.localizedDescription }
     }
 
     func cancelFilter() {
@@ -607,7 +732,11 @@ extension EditorSession {
                 (edit.settings.tonalShadows == 0 && edit.settings.tonalMidtones == 0 && edit.settings.tonalHighlights == 0)))
             || (edit.kind == .exposure && edit.settings.exposure == ExposureSettings())
             || (edit.kind == .grain && edit.settings.grain.amount == 0)
-            || (edit.kind == .cameraRaw && rendered.cameraRaw.isIdentity) { cancelFilter(); return }
+            || (edit.kind == .cameraRaw && edit.liveSource == nil && rendered.cameraRaw.isIdentity) { cancelFilter(); return }
+        if edit.liveSource != nil {
+            await commitLiveSourceFilter(edit, rendered:rendered)
+            return
+        }
         edit.committing = true
         edit.previewTask?.cancel()
         if edit.kind != .cameraRaw { filterSettings = edit.settings }
@@ -649,12 +778,75 @@ extension EditorSession {
                                                       width: asset.image.width, height: asset.image.height) else { throw ExportError.render }
                 mask = owned.replacing(try LayerMask.asset(from: carried))
             }
-            beginEdit(edit.kind.rawValue)
+            guard beginEdit(edit.kind.rawValue) else { return }
             document?.layers[index] = ImageLayer(id: current.id, asset: asset, name: current.name, isVisible: current.isVisible,
                 transform: made.transform ?? current.transform, parentID: current.parentID, isGroup: false,
                 opacity: current.opacity, blendMode: current.blendMode, mask: mask, maskSourceID: current.maskSourceID,
                 effects: current.effects)
             endEdit()
+        } catch { brushError = error.localizedDescription }
+    }
+
+    private func commitLiveSourceFilter(_ edit: FilterEdit, rendered: FilterSettings) async {
+        guard var node = edit.liveSource, let old = activeLayer else { return }
+        do { try validateLiveSourceFilterAdmission(edit) }
+        catch { brushError=error.localizedDescription;return }
+        if edit.kind == .cameraRaw, node.settings == rendered.cameraRaw, node.whiteBalance == edit.sourceWhiteBalance {
+            cancelFilter(); return
+        }
+        edit.committing = true; edit.previewTask?.cancel(); isProjectBusy = true
+        defer { filterEdit = nil; isProjectBusy = false; brushRevision += 1 }
+        do {
+            let previous = node
+            let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+            try await withTaskCancellationHandler {
+            let result: (surface: LWFloatPlane, map: LWSourceSpatialMap)
+            var preparedMask: LWFloatPlane?
+            var preparedTransform: LayerTransform?
+            if edit.kind == .cameraRaw {
+                node = try node.applyingDevelopment(settings: rendered.cameraRaw, whiteBalance: edit.sourceWhiteBalance,
+                    seed: edit.seed, selection: edit.selection, mapping: edit.mapping, workspace: workspace)
+                result = try await LWSourceDeveloper.shared.evaluatePlane(node)
+            } else {
+                let prepared: LWSourceFilterPreparation.Result
+                if edit.kind.isAutomatic, edit.preparedSettings == rendered, let cached = edit.livePreparedResult {
+                    prepared = cached
+                } else {
+                    prepared = try await LWSourceFilterPreparation.prepare(node, kind: edit.kind, settings: rendered,
+                        seed: edit.seed, selection: edit.selection, inputTransform: edit.transform, transform: edit.grownTransform ?? edit.transform,
+                        stage: edit.livePixelStage, existingMask: old.mask, workspace: workspace)
+                }
+                node = prepared.node; result = (prepared.surface, prepared.map); preparedMask = prepared.mask; preparedTransform = prepared.transform
+            }
+            try Task.checkCancellation()
+            try validateLiveSourceFilterAdmission(edit)
+            guard filterEdit === edit, let index = document?.layers.firstIndex(where:{$0.id == edit.layerID}),
+                let current = document?.layers[index], current.liveSource == previous,
+                current.asset?.image === edit.original.image, current.transform == edit.transform,
+                current.mask == old.mask, activeLayerID == edit.layerID else { throw CancellationError() }
+            node.coordinateMap = result.map.geometry
+            let asset = try ImportedImage(plane:result.surface, name:current.asset?.name ?? current.name)
+            var changed = current; changed.asset = asset; changed.liveSource = node
+            changed.transform = preparedTransform ?? edit.grownTransform ?? current.transform
+            if let preparedMask {
+                let maskAsset = try ImportedImage(maskPlane: preparedMask, name: "Retained subject mask")
+                changed.mask = current.mask.map { $0.replacing(maskAsset) } ?? LayerMask(asset: maskAsset)
+                changed.mask?.isEnabled = true; isMaskSelected = true
+            } else if var mask = current.mask, !mask.isLinked {
+                // An unlinked mask keeps its document placement when the source
+                // grid is padded/cropped; it is not implicitly rescaled with it.
+                if mask.placement == nil { mask.placement = current.transform }
+                changed.mask = mask
+            } else {
+                changed.mask = try LWSourceMaskReconcile.reconcilePlane(current.mask, previous: previous,
+                    next: result.map, transform: current.transform, workspace: workspace)
+            }
+            if edit.kind != .cameraRaw { filterSettings = rendered }
+            try workspace.cancellation.check(); try Task.checkCancellation()
+            guard beginEdit(edit.kind.rawValue) else { return }
+            document?.layers[index] = changed
+            endEdit()
+            } onCancel: { workspace.cancellation.cancel() }
         } catch { brushError = error.localizedDescription }
     }
 
@@ -687,7 +879,7 @@ extension EditorSession {
                   let layer = document?.layers[index], layer.asset?.image === edit.original.image,
                   layer.transform == edit.transform else { return }
             let asset = try LayerMask.asset(from: made)
-            beginEdit(edit.kind.rawValue)
+            guard beginEdit(edit.kind.rawValue) else { return }
             document?.layers[index].mask = layer.mask.map { $0.replacing(asset) } ?? LayerMask(asset: asset)
             document?.layers[index].mask?.isEnabled = true
             isMaskSelected = true

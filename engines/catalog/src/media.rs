@@ -2,7 +2,7 @@ mod full;
 mod psd;
 pub use full::{
     ColorCalibration, DecodeError, DecodeLimits, DecodeStatus, RenderProvenance, RenderedImage,
-    decode_full, decode_full_limited, decode_with_white_point, decoder_versions, linear_profile,
+    decode_full, decode_full_limited, decode_with_white_point, decode_with_white_point_rows, decode_with_white_point_rows_cancellable, LinearRowSink, RenderedPlane, decoder_versions, linear_profile,
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -290,3 +290,5 @@ fn cr2_preview(file: &mut File) -> Result<(Vec<u8>, RawTags)> {
     }
     bail!("CR2 has no supported bounded embedded JPEG preview")
 }
+
+pub(crate) use full::{decode_with_white_point_held_rows,decode_with_white_point_held_source};

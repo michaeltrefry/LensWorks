@@ -817,6 +817,8 @@ final class LensWorksCatalog {
     private(set) var activeFolder: LWApplicationDtoFolder?
     private(set) var selectionCount: Int64 = 0
     private(set) var versionNext: String?
+    /// Only the latest working-version listing publishes; an earlier one finishing later would show a stale list.
+    @ObservationIgnored private var versionRefreshGeneration: UInt64 = 0
     private(set) var versionDiscoveryPending = false
     private(set) var versionsHighWater = 0
     private(set) var versionDiscoveryScanned = 0
@@ -2459,6 +2461,7 @@ final class LensWorksCatalog {
     func createWorkingVersion(workspace: ProjectWorkspace) async {
         guard !closingRequested, let selected = selectedAsset, let catalogPath, !isBusy, workspace.canSwitch else { return }
         let scope = captureScope(), selectedID = selected.id
+        let sourceEpoch = catalogSelectionEpoch, sourceQuery = queryOwner, sourcePage = pageAuthority, sourceOwner = selectionOwner
         let busy = beginBusy(); defer { finishBusy(busy) }
         do {
             track(workspace)
@@ -2475,13 +2478,27 @@ final class LensWorksCatalog {
             try checkScope(scope)
             guard outputDirectory == output, selectedAsset?.id == selectedID else { throw CancellationError() }
             let rasterTypes = ["png", "jpg", "jpeg", "tif", "tiff", "heic", "heif", "webp", "bmp", "gif"]
-            guard rasterTypes.contains(URL(fileURLWithPath: asset.originalPath).pathExtension.lowercased()) else { error = "Live RAW editing is not available in this build."; return }
+            let isRasterOriginal = rasterTypes.contains(URL(fileURLWithPath: asset.originalPath).pathExtension.lowercased())
+            guard try isRasterOriginal || RawImporter.matches(asset.originalURL) else { error = "The original format is not supported by an admitted editor decoder."; return }
             let available = await LensWorksVersionStore.shared.sourceAvailable(asset.originalPath, native: asset.nativeOriginal)
             try checkScope(scope)
             guard outputDirectory == output, selectedAsset?.id == selectedID else { throw CancellationError() }
             guard available else { error = "The original photo is offline. Reconnect its location before creating a working version."; return }
             guard workspace.canSwitch else { error = "Finish the current edit before creating a working version."; return }
             let originalURL = try asset.originalURL
+            var capturedSourceAuthority: Data?
+            if RawImporter.matches(originalURL) {
+                guard let key = asset.key else { throw LensWorksManagedError.protocolViolation("Missing native RAW variant authority.") }
+                let recipe = try await service.variant(key)
+                try checkScope(scope)
+                guard catalogSelectionEpoch == sourceEpoch, queryOwner == sourceQuery,
+                    pageAuthority == sourcePage, selectionOwner == sourceOwner, selectedAsset?.id == selectedID,
+                    selectedAsset?.metadataRevision == asset.metadataRevision else { throw CancellationError() }
+                let authority = LWSourceCatalogAuthority(key:key, metadataRevision:asset.metadataRevision, variant:recipe)
+                try authority.validate()
+                let encodedAuthority=try LWSourceMetadataStorage.encode(authority,maximumBytes:1024*1024,catalogCodec:true)
+                capturedSourceAuthority=try encodedAuthority.copyData(ownedBy:encodedAuthority.owner)
+            }
             let tab = workspace.addTab()
             await tab.session.importImages([originalURL])
             // This independently admitted document remains usable if catalog scope changed.
@@ -2489,6 +2506,16 @@ final class LensWorksCatalog {
             try checkScope(scope)
             guard outputDirectory == output, selectedAsset?.id == selectedID else { throw CancellationError() }
             guard tab.session.document != nil else { error = tab.session.importError ?? "The photo could not be opened."; return }
+            if let layer = tab.session.activeLayer, var node = layer.liveSource,
+                let index = tab.session.document?.layers.firstIndex(where:{ $0.id == layer.id }) {
+                // Captured native full-key/metadata CAS remains separate from document history.
+                guard catalogSelectionEpoch == sourceEpoch, queryOwner == sourceQuery,
+                    pageAuthority == sourcePage, selectionOwner == sourceOwner, selectedAsset?.metadataRevision == asset.metadataRevision,
+                    let capturedSourceAuthority else { throw CancellationError() }
+                try node.admitMetadataMutation(additionalBytes:LWSourceMetadataStorage.sum(LWSourceMetadataStorage.product(capturedSourceAuthority.count,2),256))
+                node.catalogAuthority = capturedSourceAuthority
+                tab.session.document?.layers[index].liveSource = node
+            }
             let id = UUID()
             let name = URL(fileURLWithPath: asset.originalPath).deletingPathExtension().lastPathComponent + " – Edit"
             let project = URL(fileURLWithPath: output).appendingPathComponent("\(name)-\(id.uuidString.prefix(8)).comp")
@@ -2597,7 +2624,8 @@ final class LensWorksCatalog {
 
     func refreshVersions(after: String? = nil) async {
         guard !closingRequested else { return }
-        let epoch = catalogEpoch, selected = selectedAsset, output = outputDirectory, catalog = catalogPath
+        versionRefreshGeneration &+= 1
+        let epoch = catalogEpoch, selected = selectedAsset, output = outputDirectory, catalog = catalogPath, generation = versionRefreshGeneration
         do {
             if let output {
                 let discovery = try await index.discover(output)
@@ -2608,7 +2636,7 @@ final class LensWorksCatalog {
             guard catalogEpoch == epoch, outputDirectory == output, selectedAsset?.id == selected?.id else { return }
             guard let catalog, let selected else { versions = []; versionNext = nil; return }
             let page = try await index.versions(catalog: catalog, photo: selected.photoID, variant: selected.key?.variant_id ?? "master", after: after)
-            guard catalogEpoch == epoch, outputDirectory == output, selectedAsset?.id == selected.id else { return }
+            guard catalogEpoch == epoch, outputDirectory == output, selectedAsset?.id == selected.id, versionRefreshGeneration == generation else { return }
             versions = page.versions; versionNext = page.next; versionsHighWater = max(versionsHighWater, versions.count)
             if !page.errors.isEmpty { error = "Some working versions could not be read. Their files remain unchanged.\n" + page.errors.joined(separator: "\n") }
         } catch {

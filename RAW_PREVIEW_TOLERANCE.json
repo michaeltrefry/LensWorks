@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "per_channel_max_abs": 0.005,
+  "compared": "Camera Raw preview of a live RAW layer, developed on the preview grid (decoded source reduced by exact area average, longest side 2048), vs. the full-resolution export development reduced to the same grid by the same area average; premultiplied extended linear sRGB float RGBA, per channel. Fixtures within the preview limit take the identical full-size path and agree to float rounding (< 1e-6). Larger fixtures differ only because development is nonlinear (tone curve and clamps) and does not commute with resampling: measured 0.0034 and 0.0028 on the procedural 2200x1240 and 2100x1180 (orientation 6) fixtures, whose white block meets the gradient over a 128 px ramp.",
+  "test": "native/CompositorTests/LiveRawAcceptanceTests.swift previewAndFullResolutionAgreeAndExportIsNotTheBrowsePreview"
+}

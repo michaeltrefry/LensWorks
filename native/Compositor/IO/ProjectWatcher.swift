@@ -35,11 +35,22 @@ final class ProjectWatcher {
         [url.path, url.appendingPathComponent("manifest.json").path, url.appendingPathComponent("LensWorks.json").path, url.appendingPathComponent("images", isDirectory: true).path]
     }
 
-    private func arm() {
-        sources.cancelAll()
+    /// Watches every path that exists, keeping a source whose path still names the same file: cancelling a source
+    /// discards an event it has not delivered yet, so only a path that now names a different file (or none) is
+    /// replaced. Returns whether a path gained a new source; changes made to it before it was watched went unseen.
+    @discardableResult
+    private func arm() -> Bool {
+        var armedNew = false
         for path in watchedPaths {
+            var status = stat()
+            let identity = stat(path, &status) == 0 ? SourceBox.Identity(device: status.st_dev, inode: status.st_ino) : nil
+            if let identity, sources.identity(of: path) == identity { continue }
+            sources.cancel(path)
+            guard identity != nil else { continue }
             let descriptor = open(path, O_EVTONLY)
             guard descriptor >= 0 else { continue }
+            var opened = stat()
+            guard fstat(descriptor, &opened) == 0 else { close(descriptor); continue }
             let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor,
                 eventMask: [.write, .extend, .delete, .rename, .link, .attrib], queue: .main)
             source.setEventHandler { [weak self] in
@@ -47,34 +58,46 @@ final class ProjectWatcher {
             }
             source.setCancelHandler { close(descriptor) }
             source.resume()
-            sources.append(source)
+            sources.set(path, source, identity: SourceBox.Identity(device: opened.st_dev, inode: opened.st_ino))
+            armedNew = true
         }
+        return armedNew
     }
 
-    /// The dispatch sources, kept outside the actor so `deinit` can cancel them from any context.
+    /// The dispatch sources by path, kept outside the actor so `deinit` can cancel them from any context.
     private nonisolated final class SourceBox: @unchecked Sendable {
+        struct Identity: Equatable { let device: dev_t; let inode: ino_t }
         private let lock = NSLock()
-        private var list: [DispatchSourceFileSystemObject] = []
-        var count: Int { lock.withLock { list.count } }
-        func append(_ source: DispatchSourceFileSystemObject) { lock.withLock { list.append(source) } }
+        private var entries: [String: (source: DispatchSourceFileSystemObject, identity: Identity)] = [:]
+        var count: Int { lock.withLock { entries.count } }
+        func identity(of path: String) -> Identity? { lock.withLock { entries[path]?.identity } }
+        func set(_ path: String, _ source: DispatchSourceFileSystemObject, identity: Identity) {
+            lock.withLock { entries[path] = (source, identity) }
+        }
+        func cancel(_ path: String) { lock.withLock { entries.removeValue(forKey: path) }?.source.cancel() }
         func cancelAll() {
-            let cancelled = lock.withLock { let l = list; list.removeAll(); return l }
+            let cancelled = lock.withLock { let l = entries.values.map(\.source); entries.removeAll(); return l }
             for source in cancelled { source.cancel() }
         }
     }
 
     private func noteEvent() {
         // Re-arm by path once the writer has finished swapping files, retrying briefly while the package
-        // is mid-replacement and a path does not exist yet.
+        // is mid-replacement and a path does not exist yet. A path watched anew may already have changed
+        // unseen, so that reports again (the owner compares content, so a needless report changes nothing).
         rearm?.cancel()
         rearm = Task { @MainActor [weak self] in
             for _ in 0..<20 {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard let self, !Task.isCancelled else { return }
-                self.arm()
+                if self.arm() { self.scheduleDelivery() }
                 if self.sources.count == self.watchedPaths.count { return }
             }
         }
+        scheduleDelivery()
+    }
+
+    private func scheduleDelivery() {
         delivery?.cancel()
         delivery = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.coalescing)

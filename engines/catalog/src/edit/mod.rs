@@ -21,7 +21,7 @@ pub(crate) mod geometry;
 mod render;
 pub(crate) use render::verify_original_fingerprint;
 pub use render::{
-    EditedLinearImage, OriginalRequest, PreparedLinearInput, RenderPurpose, decode_original,
+    EditedLinearImage, OriginalRequest, PreparedLinearInput, RenderPurpose, decode_original, decode_original_rows, decode_original_source, decode_original_source_rows,
     prepare_linear_proxy, render_recipe, renderer_identity,
 };
 use serde::{Deserialize, Serialize};

@@ -70,7 +70,7 @@ extension ImageLayer {
     }
     var hierarchyRecord: ProjectLayerRecord {
         ProjectLayerRecord(id: id, name: name, isVisible: isVisible, transform: transform,
-            imageFile: asset == nil ? nil : "\(id.uuidString).png", parentID: parentID, isGroup: isGroup, opacity: opacity, blendMode: blendMode, maskFile: mask == nil ? nil : "\(id.uuidString).mask.png", maskEnabled: mask?.isEnabled, maskSourceID: maskSourceID, adjustment: adjustment, maskPlacement: mask?.placement, maskLinked: mask?.isLinked)
+            imageFile: asset == nil ? nil : "\(id.uuidString)." + (asset?.linear == nil ? "png" : "f32"), parentID: parentID, isGroup: isGroup, opacity: opacity, blendMode: blendMode, maskFile: mask == nil ? nil : "\(id.uuidString).mask.png", maskEnabled: mask?.isEnabled, maskSourceID: maskSourceID, adjustment: adjustment, maskPlacement: mask?.placement, maskLinked: mask?.isLinked, liveSource:liveSource)
     }
 }
 nonisolated extension ProjectLayerRecord {
@@ -204,7 +204,7 @@ extension EditorSession {
             layers.append(child)
         }
         guard (try? LayerHierarchy.validate(layers.map(\.hierarchyRecord))) != nil else { return }
-        beginEdit("Group Layers")
+        guard beginEdit("Group Layers") else { return }
         self.document?.layers = layers
         activeLayerID = group.id
         if let parent { collapsedGroupIDs.remove(parent) }
@@ -231,7 +231,7 @@ extension EditorSession {
         Self.releaseDetachedClipping(in: &layers)
         guard (try? LayerHierarchy.validate(layers.map(\.hierarchyRecord))) != nil else { return }
         finishOpacityEdit()
-        beginEdit("Ungroup Layers")
+        guard beginEdit("Ungroup Layers") else { return }
         self.document?.layers = layers
         selectLayers(childIDs, primary: children.first?.id)
         collapsedGroupIDs.remove(group.id)
@@ -261,7 +261,7 @@ extension EditorSession {
         let insertion = layers.firstIndex(where: { $0.id == activeLayerID }).map { $0 + 1 } ?? layers.count
         layers.insert(group, at: insertion)
         guard (try? LayerHierarchy.validate(layers.map(\.hierarchyRecord))) != nil else { return }
-        beginEdit("New Folder")
+        guard beginEdit("New Folder") else { return }
         self.document?.layers = layers
         activeLayerID = group.id
         if let parent = group.parentID { collapsedGroupIDs.remove(parent) }
@@ -296,7 +296,7 @@ extension EditorSession {
         Self.adoptClipping(id, in: &layers)
         Self.releaseDetachedClipping(in: &layers)
         guard (try? LayerHierarchy.validate(layers.map(\.hierarchyRecord))) != nil else { return false }
-        beginEdit("Move Layer")
+        guard beginEdit("Move Layer") else { return false }
         document?.layers = layers
         activeLayerID = id
         if let parent { collapsedGroupIDs.remove(parent) }

@@ -1,14 +1,15 @@
 import SwiftUI
+import Combine
 
 struct JPEGExportSheet: View {
     let raster: ExportRaster
     let session: EditorSession
-    let finish: (Data?) -> Void
+    let finish: (JPEGFileResult?) -> Void
     @State private var options: JPEGOptions
     /// The quality of the last export, which the next one starts from.
     private static let qualityKey = "jpegExportQuality"
 
-    init(raster: ExportRaster, session: EditorSession, finish: @escaping (Data?) -> Void) {
+    init(raster: ExportRaster, session: EditorSession, finish: @escaping (JPEGFileResult?) -> Void) {
         self.raster = raster
         self.session = session
         self.finish = finish
@@ -18,7 +19,7 @@ struct JPEGExportSheet: View {
         }
         _options = State(initialValue: start)
     }
-    @State private var result: JPEGResult?
+    @State private var result: JPEGFileResult?
     /// The preview's zoom, 1 being 100%; nil fits the whole image.
     @State private var zoom: Double?
     @Environment(\.displayScale) private var displayScale
@@ -74,13 +75,16 @@ struct JPEGExportSheet: View {
                 Spacer()
                 if let error { Text(error).foregroundStyle(.red) }
                 else if readyOptions == options, let result {
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(result.data.count), countStyle: .file)).monospacedDigit()
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(result.file.byteCount), countStyle: .file)).monospacedDigit()
                 } else { Text("Updating…").foregroundStyle(.secondary) }
                 Button("Cancel") { DialogColorSwatch.closePicker(session); finish(nil) }.configuredNativeShortcut(.escape)
                 Button("Export…") {
                     DialogColorSwatch.closePicker(session)
-                    UserDefaults.standard.set(options.quality, forKey: Self.qualityKey)
-                    finish(result?.data)
+                    do {
+                        guard let result else { return };try result.check()
+                        UserDefaults.standard.set(options.quality, forKey: Self.qualityKey)
+                        finish(result)
+                    } catch { self.error=error.localizedDescription;self.result=nil;readyOptions=nil }
                 }
                     .configuredNativeShortcut(.return)
                     .disabled(result == nil || readyOptions != options || error != nil)
@@ -96,13 +100,17 @@ struct JPEGExportSheet: View {
             }
         } }
         .onDisappear { session.previewZoom = nil }
+        .onReceive(NotificationCenter.default.publisher(for:LWJPEGPreviewImage.failureNotification).receive(on:RunLoop.main)) { notice in
+            guard let failed=notice.object as? LWJPEGPreviewImage,failed === result?.previewOwner else { return }
+            do { try failed.check() } catch { self.error=error.localizedDescription;result=nil;readyOptions=nil }
+        }
         .task(id: options) {
             let requested = options
             error = nil
             do {
                 try await Task.sleep(for: .milliseconds(200))
-                let encoded = try await ImageExporter.shared.jpeg(raster, options: requested)
-                try Task.checkCancellation()
+                let encoded = try await ImageExporter.shared.jpegFile(raster, options: requested)
+                try Task.checkCancellation();try encoded.check()
                 result = encoded
                 readyOptions = requested
             } catch is CancellationError {

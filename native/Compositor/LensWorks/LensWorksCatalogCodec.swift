@@ -12,6 +12,9 @@ nonisolated enum LWCatalogCodec {
     static func encode<Value: Encodable>(_ value: Value) throws -> Data {
         let kinds = NumberKinds(floating: [])
         let encoder = JSONEncoder()
+        // Deterministic bytes: retained source authority is compared by its encoding,
+        // and Foundation's unsorted key order differs between processes.
+        encoder.outputFormatting = [.sortedKeys]
         encoder.userInfo[.lwNumberKinds] = kinds
         var data = try encoder.encode(value)
         let paths = kinds.paths

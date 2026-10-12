@@ -4,7 +4,18 @@ import CoreGraphics
 actor CanvasResizer {
     static let shared = CanvasResizer()
 
-    func resize(_ snapshot: ProjectSnapshot, to options: CanvasSizeOptions) throws -> ProjectSnapshot {
+    func resize(_ snapshot: ProjectSnapshot, to options: CanvasSizeOptions) async throws -> ProjectSnapshot {
+        let needsFloatFill=options.fill != nil && (options.width > snapshot.manifest.width || options.height > snapshot.manifest.height)
+            && (snapshot.manifest.layers.contains(where: { $0.liveSource != nil }) || snapshot.images.values.contains(where: { $0.linearPlane != nil }))
+        let workspace:LWFloatWorkspace?=needsFloatFill ? try LWFloatWorkspace(workingSet:.sourceGraphs):nil
+        return try await withTaskCancellationHandler {
+            let result=try resizeOwned(snapshot,to:options,workspace:workspace)
+            try workspace?.cancellation.check();try Task.checkCancellation()
+            return result
+        } onCancel: { workspace?.cancellation.cancel() }
+    }
+    private func resizeOwned(_ snapshot: ProjectSnapshot, to options: CanvasSizeOptions,
+        workspace:LWFloatWorkspace?) throws -> ProjectSnapshot {
         guard (1...DocumentLimits.maxSide).contains(options.width), (1...DocumentLimits.maxSide).contains(options.height),
               (0...8).contains(options.anchor) else { throw ProjectError.tooLarge }
         let old = snapshot.manifest
@@ -13,22 +24,20 @@ actor CanvasResizer {
             throw ProjectError.invalid
         }
         guard options.width != old.width || options.height != old.height || offset != .zero else { return snapshot }
-        var manifest = ProjectManifest(resolution: old.resolution, documentID: old.documentID,
-            width: options.width, height: options.height, activeLayerID: old.activeLayerID, layers: [],
-            guides: old.guides?.map { $0.offset(x: offset.x, y: offset.y) })
+        var manifest = try old.metadataCopy()
+        manifest.width = options.width; manifest.height = options.height; manifest.layers = []
+        manifest.guides = old.guides?.map { $0.offset(x:offset.x,y:offset.y) }
         for layer in old.layers {
+            try Task.checkCancellation();try workspace?.cancellation.check()
             var transform = layer.transform
             transform.origin.x += offset.x
             transform.origin.y += offset.y
             guard transform.isValid else { throw ProjectError.tooLarge }
-            manifest.layers.append(ProjectLayerRecord(id: layer.id, name: layer.name,
-                isVisible: layer.isVisible, transform: transform, imageFile: layer.imageFile, parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.maskFile, maskEnabled: layer.maskEnabled, maskSourceID: layer.maskSourceID, adjustment: layer.adjustment,
-                maskPlacement: layer.maskPlacement.map { placement -> LayerTransform in
-                    var moved = placement
-                    moved.origin.x += offset.x
-                    moved.origin.y += offset.y
-                    return moved
-                }, maskLinked: layer.maskLinked, shape: layer.shape, text: layer.text))
+            var moved = layer; moved.transform = transform
+            moved.maskPlacement = layer.maskPlacement.map { placement in
+                var result = placement; result.origin.x += offset.x; result.origin.y += offset.y; return result
+            }
+            manifest.layers.append(moved)
         }
         var images = snapshot.images
         // A colored extension is separate bottom-layer content. The old canvas
@@ -40,7 +49,19 @@ actor CanvasResizer {
             guard [color.red, color.green, color.blue].allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
                 throw ProjectError.invalid
             }
-            let asset = try autoreleasepool {
+            let asset: ImportedImage
+            if old.layers.contains(where: { $0.liveSource != nil }) || snapshot.images.values.contains(where: { $0.linearPlane != nil }) {
+                guard let workspace else { throw ProjectError.invalid }
+                let linear = try LWLinearSurface.readColor(red:Double(color.red),green:Double(color.green),blue:Double(color.blue))
+                let blank = try LWFloatCompositor.clearPlane(width:options.width,height:options.height,workspace:workspace)
+                let made = try LWFloatCompositor.map(blank,workspace:workspace) { _,x,y in
+                    let pixel=CGPoint(x:CGFloat(x)+0.5,y:CGFloat(y)+0.5)
+                    if CGRect(origin:offset,size:CGSize(width:old.width,height:old.height)).contains(pixel) { return .zero }
+                    return SIMD4(linear.x,linear.y,linear.z,1)
+                }
+                asset = try ImportedImage(plane:made,name:"Canvas Extension")
+                try workspace.cancellation.check()
+            } else { asset = try autoreleasepool {
                 let space = CGColorSpace(name: CGColorSpace.sRGB)!
                 guard let context = CGContext(data: nil, width: options.width, height: options.height,
                     bitsPerComponent: 8, bytesPerRow: options.width * 4, space: space,
@@ -61,13 +82,13 @@ actor CanvasResizer {
                 thumb.draw(image, in: CGRect(x: 0, y: 0, width: tw, height: th))
                 guard let thumbnail = thumb.makeImage() else { throw ExportError.render }
                 return ImportedImage(image: image, thumbnail: thumbnail, name: "Canvas Extension")
-            }
+            } }
             let id = UUID()
             images[id] = asset
             manifest.layers.insert(ProjectLayerRecord(id: id, name: "Canvas Extension", isVisible: true,
                 transform: LayerTransform(origin: .zero, size: CGSize(width: options.width, height: options.height)),
-                imageFile: "\(id.uuidString).png"), at: 0)
+                imageFile: "\(id.uuidString)." + (asset.linearPlane == nil ? "png":"plane"),planeArchiveReference:asset.planeArchiveReference), at: 0)
         }
-        return ProjectSnapshot(manifest: manifest, images: images, masks: snapshot.masks)
+        return ProjectSnapshot(manifest: manifest, images: images, masks: snapshot.masks, workingVersion:snapshot.workingVersion)
     }
 }

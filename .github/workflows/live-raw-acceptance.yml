@@ -1,0 +1,57 @@
+name: Live RAW acceptance
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions: {contents: read}
+jobs:
+  live-raw:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - name: Select the provisioned Python 3.12.13 interpreter
+        run: |
+          test -x /opt/homebrew/opt/python@3.12/bin/python3.12
+          echo /opt/homebrew/opt/python@3.12/libexec/bin >> "$GITHUB_PATH"
+      - name: Verify the provisioned source-pinned Apple-silicon native route
+        run: ./scripts/ci/provision_s47_native_prerequisites.sh
+      - name: Build the app with its installed decode helpers
+        # build-native.sh installs PhotoCatalogWorker and LensWorksDecodeWorker into
+        # .build/xcode-app; the hosted unit tests develop RAW through those helpers.
+        run: |
+          ./scripts/build-native.sh
+          xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-app CODE_SIGN_IDENTITY=-
+          test -x .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/LensWorksDecodeWorker
+      - name: Run every S08 live RAW suite
+        # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
+        # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
+        timeout-minutes: 60
+        run: |
+          suites=(FloatCameraRawTests TiledFloatCameraRawTests TiledFloatAdmissionTests FloatCoreImageProviderTests
+            FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
+            LiveRawSampleAllAdmissionTests LiveRawAcceptanceTests)
+          only=(); for suite in "${suites[@]}"; do only+=("-only-testing:CompositorTests/$suite"); done
+          ./scripts/ci/xcodebuild_test.sh LiveRawAcceptance.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app -parallel-testing-enabled NO \
+            "${only[@]}"
+      - name: Refuse a run that executed fewer S08 tests than expected
+        if: always()
+        # Swift Testing argument cases count individually. Raise S08_EXPECTED_TESTS when tests are added;
+        # a filter typo, a skipped suite or an empty bundle executes fewer and fails here.
+        env: {S08_EXPECTED_TESTS: "226"}
+        run: |
+          test -d LiveRawAcceptance.xcresult
+          xcrun xcresulttool get test-results summary --path LiveRawAcceptance.xcresult --format json > s08-summary.json
+          python3 - <<'PY'
+          import json, os, sys
+          summary = json.load(open("s08-summary.json"))
+          executed = summary["passedTests"] + summary["failedTests"]
+          expected = int(os.environ["S08_EXPECTED_TESTS"])
+          print(f"S08 executed {executed} tests (passed {summary['passedTests']}, failed {summary['failedTests']}, skipped {summary['skippedTests']}); expected at least {expected}")
+          sys.exit(0 if executed > 0 and executed >= expected else 1)
+          PY
+      - name: Upload live RAW test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: live-raw-acceptance, path: LiveRawAcceptance.xcresult, if-no-files-found: ignore, retention-days: 7}

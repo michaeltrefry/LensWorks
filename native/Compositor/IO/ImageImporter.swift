@@ -10,6 +10,11 @@ nonisolated struct ImportedImage: @unchecked Sendable {
     let thumbnail: CGImage
     let name: String
     var raster: RasterSnapshot? = nil
+    /// Original-derived working surface; its CGImage is float too.
+    var linear: LWLinearSurface? = nil
+    var linearPlane: LWFloatPlane? = nil
+    var planeImage: LWFloatPlaneImage? = nil
+    var planeArchiveReference: LWFloatPlaneArchive.Reference? = nil
 }
 
 nonisolated enum ImageImportError: LocalizedError {
