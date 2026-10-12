@@ -66,6 +66,13 @@ nonisolated extension LWFloatPlane.Manifest {
     }
 }
 
+/// Residency a working set may evict when another consumer needs the bytes (a cache).
+nonisolated protocol LWFloatReclaimable: AnyObject, Sendable {
+    /// Releases at least `bytes` of charged residency if it holds that much. Called without the
+    /// working set's lock; must not reserve from the working set with reclaim enabled.
+    func reclaim(bytes: Int)
+}
+
 /// One shared admission for tile samples, decoded backing, output and operation scratch.
 /// Owners release their charge only when the corresponding buffers cease to be retained.
 nonisolated final class LWFloatWorkingSet: @unchecked Sendable {
@@ -76,18 +83,43 @@ nonisolated final class LWFloatWorkingSet: @unchecked Sendable {
     let limit: Int
     private let lock = NSLock()
     private var retained = 0
+    private var peak = 0
     /// Exact admitted-byte accounting only; no process RSS or retirement grant.
     var retainedBytes:Int { lock.withLock { retained } }
+    /// Highest admitted residency since creation or the last `resetPeak`.
+    var peakRetainedBytes:Int { lock.withLock { peak } }
+    func resetPeak() { lock.withLock { peak = retained } }
     init(limit: Int = maximumBytes) throws {
         guard limit > 0, limit <= Self.maximumBytes else { throw ProjectError.tooLarge }
         self.limit = limit
     }
-    func reserve(_ bytes: Int) throws -> Lease {
-        try lock.withLock {
-            guard bytes >= 0, bytes <= limit - retained else { throw ProjectError.tooLarge }
-            retained += bytes
+    /// Admits `bytes`. When they do not fit, reclaimable residency (caches registered with
+    /// `register`) is evicted first, so a cache never refuses a working-set consumer it could make
+    /// room for. `reclaim: false` is for a reclaimable owner charging itself while it holds its own lock.
+    func reserve(_ bytes: Int, reclaim: Bool = true) throws -> Lease {
+        if let lease = admit(bytes) { return lease }
+        guard reclaim, bytes >= 0, bytes <= limit else { throw ProjectError.tooLarge }
+        // Reclaimers run without this lock: releasing their leases takes it.
+        for target in lock.withLock({ reclaimers.compactMap(\.target) }) {
+            let shortfall = lock.withLock { bytes - (limit - retained) }
+            guard shortfall > 0 else { break }
+            target.reclaim(bytes: shortfall)
+        }
+        guard let lease = admit(bytes) else { throw ProjectError.tooLarge }
+        return lease
+    }
+    private func admit(_ bytes: Int) -> Lease? {
+        lock.withLock {
+            guard bytes >= 0, bytes <= limit - retained else { return nil }
+            retained += bytes; peak = max(peak, retained)
             return Lease(owner: self, bytes: bytes)
         }
+    }
+    private final class WeakReclaimer { weak var target: LWFloatReclaimable?; init(_ t: LWFloatReclaimable) { target = t } }
+    private var reclaimers: [WeakReclaimer] = []
+    /// Registers residency that may be evicted to admit another consumer. Held weakly.
+    func register(_ target: LWFloatReclaimable) {
+        lock.withLock { reclaimers.removeAll { $0.target == nil }; reclaimers.append(WeakReclaimer(target)) }
     }
     func withScratch<Value>(bytes: Int, _ body: () throws -> Value) throws -> Value {
         let lease = try reserve(bytes)
@@ -203,7 +235,7 @@ nonisolated struct LWFloatPlane: Sendable {
     /// Read any admitted global rectangle. The output and one decoded backing tile
     /// are charged together before allocation; no full-plane Data is constructed.
     func checkCancellation() throws { try backing.checkCancellation(); try Task.checkCancellation() }
-    func read(_ range: LWFloatRange) throws -> LWFloatTile {
+    @_optimize(speed) func read(_ range: LWFloatRange) throws -> LWFloatTile {
         try checkCancellation()
         let bytes = try range.validate(frameWidth: width, frameHeight: height)
         let (charge, overflow) = bytes.addingReportingOverflow(Self.tileSide * Self.tileSide * 16 * 2)
@@ -220,17 +252,10 @@ nonisolated struct LWFloatPlane: Sendable {
             let left = max(range.x, entry.range.x), right = min(range.x + range.width, entry.range.x + entry.range.width)
             let top = max(range.y, entry.range.y), bottom = min(range.y + range.height, entry.range.y + entry.range.height)
             guard data.count == entry.range.width * entry.range.height * 16 else { throw ProjectError.invalid }
-            try data.withUnsafeBytes { raw in
-                for y in top..<bottom { for x in left..<right {
-                    let source = ((y - entry.range.y) * entry.range.width + x - entry.range.x) * 16
-                    func word(_ channel: Int) -> Float {
-                        Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: source + channel * 4, as: UInt32.self)))
-                    }
-                    let pixel = SIMD4(word(0), word(1), word(2), word(3))
-                    guard pixel.x.isFinite, pixel.y.isFinite, pixel.z.isFinite, pixel.w.isFinite, (0...1).contains(pixel.w) else { throw ProjectError.invalid }
-                    pixels[(y - range.y) * range.width + x - range.x] = pixel
-                } }
+            let valid = data.withUnsafeBytes { raw in
+                pixels.withUnsafeMutableBufferPointer { Self.decode(raw, entry: entry.range, rows: top..<bottom, columns: left..<right, into: $0, range: range) }
             }
+            guard valid else { throw ProjectError.invalid }
         } }
         // The temporary decode/entry buffers retire here. Published immutable
         // samples own a separate exact allocation charge through every escaped
@@ -241,6 +266,34 @@ nonisolated struct LWFloatPlane: Sendable {
         return LWFloatTile(range:range,frameWidth:width,frameHeight:height,surface:surface)
     }
     func read(range: LWFloatRange) throws -> LWFloatTile { try read(range) }
+    /// Copies and validates (finite, alpha in [0, 1]) the part of one stored tile inside `range`.
+    @_optimize(speed) private static func decode(_ raw: UnsafeRawBufferPointer, entry: LWFloatRange, rows: Range<Int>, columns: Range<Int>,
+        into pixels: UnsafeMutableBufferPointer<SIMD4<Float>>, range: LWFloatRange) -> Bool {
+        let count = columns.count
+        guard count > 0, let source = raw.baseAddress, let target = pixels.baseAddress else { return true }
+        var y = rows.lowerBound
+        while y < rows.upperBound {
+            let row = target + ((y - range.y) * range.width + columns.lowerBound - range.x)
+            let from = source + ((y - entry.y) * entry.width + columns.lowerBound - entry.x) * 16
+            if UInt32(1).littleEndian == 1 {
+                UnsafeMutableRawPointer(row).copyMemory(from: from, byteCount: count * 16)
+            } else {
+                var i = 0
+                while i < count * 4 {
+                    let word = Float(bitPattern: UInt32(littleEndian: from.loadUnaligned(fromByteOffset: i * 4, as: UInt32.self)))
+                    UnsafeMutableRawPointer(row).storeBytes(of: word, toByteOffset: i * 4, as: Float.self); i += 1
+                }
+            }
+            var x = 0
+            while x < count {
+                let p = row[x]
+                guard p.x.isFinite, p.y.isFinite, p.z.isFinite, p.w.isFinite, p.w >= 0, p.w <= 1 else { return false }
+                x += 1
+            }
+            y += 1
+        }
+        return true
+    }
     /// Copy immutable content and its identity with one backing tile resident.
     /// Used when a package is opened into graph-owned storage or staged for save.
     func copy(directory: URL, workspace: LWFloatWorkspace? = nil) throws -> Self {
@@ -276,7 +329,7 @@ nonisolated struct LWFloatPlane: Sendable {
         private let defaultEdge: Edge
         private var tiles: [(index: Int, tile: LWFloatTile)] = []
         fileprivate init(plane: LWFloatPlane, edge: Edge) { self.plane = plane; defaultEdge = edge }
-        func pixel(x inputX: Int, y inputY: Int, edge requestedEdge: Edge? = nil) throws -> SIMD4<Float> {
+        @_optimize(speed) func pixel(x inputX: Int, y inputY: Int, edge requestedEdge: Edge? = nil) throws -> SIMD4<Float> {
             try plane.checkCancellation()
             let edge = requestedEdge ?? defaultEdge
             let x: Int, y: Int
@@ -352,7 +405,7 @@ nonisolated struct LWFloatPlane: Sendable {
             try surface.validate(maximumBytes:try range.validate(frameWidth:width,frameHeight:height))
             try appendPixels(surface.pixels,surfaceWidth:surface.width,surfaceHeight:surface.height,at:range)
         }
-        private func appendPixels<C:Collection>(_ pixels:C,surfaceWidth:Int,surfaceHeight:Int,at range:LWFloatRange) throws where C.Element == SIMD4<Float> {
+        @_optimize(speed) private func appendPixels<C:Collection>(_ pixels:C,surfaceWidth:Int,surfaceHeight:Int,at range:LWFloatRange) throws where C.Element == SIMD4<Float> {
             try Task.checkCancellation()
             guard !sealed,range == nextRange,surfaceWidth == range.width,surfaceHeight == range.height else { throw ProjectError.invalid }
             let bytes=try range.validate(frameWidth:width,frameHeight:height)
@@ -361,15 +414,20 @@ nonisolated struct LWFloatPlane: Sendable {
             let lease=try workingSet.reserve(charge)
             defer { withExtendedLifetime(lease) {} }
             var data=Data(count:bytes)
-            data.withUnsafeMutableBytes { raw in
-                var offset=0
-                for pixel in pixels { for channel in 0..<4 {
-                    raw.storeBytes(of:pixel[channel].bitPattern.littleEndian,toByteOffset:offset,as:UInt32.self);offset+=4
-                } }
-            }
+            data.withUnsafeMutableBytes { raw in Self.encode(pixels, into: raw) }
             let file=String(format:"%08d.f32",entries.count)
             let entry=Entry(range:range,file:file,bytes:bytes,sha256:Self.digest(data))
             try backing.write(data,entry:entry);entries.append(entry)
+        }
+        /// Little-endian float32 samples (the host's own layout on Apple silicon). A separate optimized function:
+        /// this runs for every sample of every plane.
+        @_optimize(speed) private static func encode<C:Collection>(_ pixels: C, into raw: UnsafeMutableRawBufferPointer) where C.Element == SIMD4<Float> {
+            if UInt32(1).littleEndian == 1,
+               pixels.withContiguousStorageIfAvailable({ raw.copyMemory(from: UnsafeRawBufferPointer($0)) }) != nil { return }
+            var offset = 0
+            for pixel in pixels { for channel in 0..<4 {
+                raw.storeBytes(of: pixel[channel].bitPattern.littleEndian, toByteOffset: offset, as: UInt32.self); offset += 4
+            } }
         }
         func finish() throws -> LWFloatPlane {
             guard !sealed, nextRange == nil else { throw ProjectError.invalid }

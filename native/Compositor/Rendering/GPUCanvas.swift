@@ -17,6 +17,9 @@ import QuartzCore
     let queue: MTLCommandQueue
     let context: CIContext
     let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    /// Blending stays in encoded sRGB, as on the Core Graphics canvas; the extended space keeps
+    /// float frames' values outside [0, 1] instead of clamping them before display conversion.
+    let workingSpace = CGColorSpace(name: CGColorSpace.extendedSRGB)!
 
     private struct Key: Hashable {
         let id: ObjectIdentifier
@@ -26,12 +29,47 @@ import QuartzCore
         /// Held so the identifier can't be reused by another object while the texture is kept.
         let source: AnyObject
         let image: CIImage
+        /// Texture memory this entry holds.
+        let bytes: Int
         var used: Int
+        /// Order of last use across all entries, for least-recently-used eviction within a frame.
+        var touched = 0
         /// Frames it's kept after its last use.
         var keep: Int
     }
     private var textures: [Key: Entry] = [:]
     private var frame = 0
+    /// Declared texture-cache residency (RENDERER_PRECISION_CONTRACT.json). Inserting past it
+    /// evicts least-recently-used textures; a frame still draws from the CIImages it already holds.
+    var textureBudgetBytes = 512 * 1024 * 1024
+    private(set) var peakTextureBytes = 0
+    /// Texture bytes the cache holds now.
+    var residentTextureBytes: Int { textures.values.reduce(0) { $0 + $1.bytes } + strokes.values.reduce(0) { $0 + $1.texture.bytes } }
+    private var clock = 0
+    private func admit(_ key: Key, _ entry: Entry) {
+        var entry = entry
+        clock += 1; entry.touched = clock
+        textures[key] = entry
+        enforceBudget(keeping: key)
+    }
+    /// Evicts down to the budget: least-recently-used layer textures first (never `keeping`), then stroke
+    /// textures the current frame has not drawn, oldest first. Only what the current frame is drawing
+    /// (the newest texture and live strokes) can hold the cache above its budget.
+    private func enforceBudget(keeping: Key? = nil) {
+        var total = residentTextureBytes
+        while total > textureBudgetBytes,
+              let victim = textures.filter({ $0.key != keeping }).min(by: { $0.value.touched < $1.value.touched })?.key {
+            total -= textures.removeValue(forKey: victim)?.bytes ?? 0
+        }
+        while total > textureBudgetBytes,
+              let victim = strokes.filter({ $0.value.used < frame }).min(by: { $0.value.used < $1.value.used })?.key {
+            total -= strokes.removeValue(forKey: victim)?.texture.bytes ?? 0
+        }
+        peakTextureBytes = max(peakTextureBytes, total)
+    }
+    static func bytes(_ image: CIImage, mask: Bool) -> Int {
+        Int(image.extent.width) * Int(image.extent.height) * (mask ? 1 : 4)
+    }
     /// Textures not used for this many frames are let go.
     private let keepFrames = 90
 
@@ -41,6 +79,7 @@ import QuartzCore
         let texture: MTLTexture
         let image: CIImage
         var written: [CGPoint: ObjectIdentifier] = [:]
+        var bytes: Int { texture.width * texture.height * (texture.pixelFormat == .r8Unorm ? 1 : 4) }
         init(texture: MTLTexture, image: CIImage) {
             self.texture = texture
             self.image = image
@@ -52,7 +91,7 @@ import QuartzCore
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         self.queue = queue
-        context = CIContext(mtlCommandQueue: queue, options: [.workingColorSpace: space, .cacheIntermediates: false])
+        context = CIContext(mtlCommandQueue: queue, options: [.workingColorSpace: workingSpace, .cacheIntermediates: false])
         // Once the canvas stops redrawing, what its last frame didn't use goes; frames alone would never count past it.
         idle = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -98,6 +137,7 @@ import QuartzCore
         let found: CIImage?
         if var entry = textures[key] {
             entry.used = frame
+            clock += 1; entry.touched = clock
             entry.keep = max(entry.keep, keep)
             textures[key] = entry
             found = entry.image
@@ -110,7 +150,7 @@ import QuartzCore
                               to: Self.size(image.width, image.height, level: level), mask: mask)
             } else { made = nil }
             guard let made else { return nil }
-            textures[key] = Entry(source: image, image: made, used: frame, keep: keep)
+            admit(key, Entry(source: image, image: made, bytes: Self.bytes(made, mask: mask), used: frame, keep: keep))
             found = made
         }
         guard transient, level > 0, let found else { return found }
@@ -153,7 +193,9 @@ import QuartzCore
             buffer.waitUntilCompleted()
             entry = StrokeTexture(texture: texture, image: image)
         }
+        let isNew = strokes[id] == nil
         strokes[id] = (stroke, entry, frame)
+        if isNew { enforceBudget() }
         let writes = TileWrites(renderer: self, into: entry.texture, mask: stroke.isMask)
         for patch in stroke.patches {
             let key = patch.rect.origin, identity = ObjectIdentifier(patch.image)
@@ -217,6 +259,7 @@ import QuartzCore
         let keep = drawing || level > 0 ? keepFrames : 0
         if var entry = textures[key] {
             entry.used = frame
+            clock += 1; entry.touched = clock
             entry.keep = max(entry.keep, keep)
             textures[key] = entry
             return entry.image
@@ -229,7 +272,7 @@ import QuartzCore
                           to: Self.size(raster.width, raster.height, level: level), mask: raster.isMask)
         } else { made = nil }
         guard let made else { return nil }
-        textures[key] = Entry(source: raster, image: made, used: frame, keep: keep)
+        admit(key, Entry(source: raster, image: made, bytes: Self.bytes(made, mask: raster.isMask), used: frame, keep: keep))
         return made
     }
 
@@ -312,9 +355,40 @@ import QuartzCore
         return wrap(texture, mask: mask)
     }
 
+    /// The display boundary: working samples converted to `target`'s extended color space in a half-float
+    /// texture. Values above 1 (HDR/RAW latitude) and below 0 (out-of-gamut wide colors) are kept for the
+    /// system's EDR and gamut mapping rather than clamped here.
+    ///
+    /// `headroom`: the screen's current EDR headroom (`maximumExtendedDynamicRangeColorComponentValue`, linear,
+    /// 1 on an SDR screen). Components above it saturate at it here, per channel, as the display would clip them;
+    /// that also keeps any value inside half float's range, where a larger one would become infinity. Negative
+    /// (out-of-gamut) components are kept for the system's gamut mapping. Nil leaves values as they are.
+    func render(_ image: CIImage, to texture: MTLTexture, commandBuffer: MTLCommandBuffer, size: CGSize, target: LWDisplayTarget,
+                headroom: CGFloat? = nil) {
+        var shown = image
+        if let headroom, headroom.isFinite, headroom >= 1 {
+            // The working space is encoded extended sRGB: clamp at the headroom's encoded value.
+            let top = CGFloat(LWDisplayTarget.encode(Double(min(headroom, 65504))))
+            shown = image.applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: -65504, y: -65504, z: -65504, w: 0),
+                "inputMaxComponents": CIVector(x: top, y: top, z: top, w: 1)])
+        }
+        context.render(shown, to: texture, commandBuffer: commandBuffer,
+                       bounds: CGRect(x: 0, y: 0, width: size.width, height: size.height), colorSpace: target.colorSpace)
+    }
+
+    /// An offscreen texture in the canvas drawable's format.
+    func displayTexture(width: Int, height: Int) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: LWDisplayTarget.pixelFormat,
+                                                                  width: width, height: height, mipmapped: false)
+        descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
+        descriptor.storageMode = .shared
+        return device.makeTexture(descriptor: descriptor)
+    }
+
     /// Draws `image` into `layer`'s next drawable, in step with the Core Animation transaction it's drawn in, so it
     /// lands on the same frame as the overlays above it.
-    func present(_ image: CIImage,in layer:CAMetalLayer,validateBeforePresentation:(() throws -> Void)? = nil) throws -> Bool {
+    func present(_ image: CIImage,in layer:CAMetalLayer,headroom:CGFloat? = nil,validateBeforePresentation:(() throws -> Void)? = nil) throws -> Bool {
         guard let drawable=layer.nextDrawable(),let buffer=queue.makeCommandBuffer() else { return false }
         defer { endFrame() }
         let size = layer.drawableSize
@@ -322,8 +396,8 @@ import QuartzCore
         // frame is turned over to land top row first.
         let upright = drawable.texture.usage.contains(.renderTarget)
             ? image.transformed(by: CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)) : image
-        context.render(upright, to: drawable.texture, commandBuffer: buffer,
-                       bounds: CGRect(x: 0, y: 0, width: size.width, height: size.height), colorSpace: space)
+        render(upright, to: drawable.texture, commandBuffer: buffer, size: size,
+               target: LWDisplayTarget(colorSpace: layer.colorspace) ?? .extendedSRGB, headroom: headroom)
         buffer.commit()
         if let validateBeforePresentation {
             // Provider callbacks may run after scheduling and outside the originating Task.
@@ -351,8 +425,10 @@ final class MetalCanvasView: NSView {
     override func makeBackingLayer() -> CALayer {
         let layer = CAMetalLayer()
         layer.device = GPUCanvasRenderer.shared?.device
-        layer.pixelFormat = .bgra8Unorm
-        layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        // Half float in an extended space: the canvas shows float documents' values outside [0, 1].
+        layer.pixelFormat = LWDisplayTarget.pixelFormat
+        layer.colorspace = LWDisplayTarget.extendedSRGB.colorSpace
+        layer.wantsExtendedDynamicRangeContent = true
         // Core Image writes the frame with a compute pass.
         layer.framebufferOnly = false
         layer.presentsWithTransaction = true
@@ -363,6 +439,38 @@ final class MetalCanvasView: NSView {
     override var isOpaque: Bool { false }
     // Clicks go to the canvas behind it.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Wide-gamut screens take Display P3; others extended sRGB. Both are extended ranges.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDisplayTarget()
+    }
+
+    private var screenObservers: [NSObjectProtocol] = []
+    /// A window moved between two screens of the same scale changes no backing property, yet the new screen
+    /// may have another gamut or headroom: follow the window's screen changes too.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        for observer in screenObservers { NotificationCenter.default.removeObserver(observer) }
+        screenObservers = []
+        guard let window else { return }
+        let update: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.updateDisplayTarget() } }
+        screenObservers = [
+            NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main, using: update),
+            NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: update)]
+        updateDisplayTarget()
+    }
+
+    /// The display target for `screen`.
+    static func target(for screen: NSScreen?) -> LWDisplayTarget { screen?.canRepresent(.p3) == true ? .extendedDisplayP3 : .extendedSRGB }
+
+    func updateDisplayTarget() {
+        let target = Self.target(for: window?.screen)
+        if LWDisplayTarget(colorSpace: metalLayer.colorspace) != target { metalLayer.colorspace = target.colorSpace }
+    }
+
+    /// The screen's EDR headroom now. It changes with brightness and other content, so it is read for every frame.
+    var headroom: CGFloat { max(1, window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1) }
 
     /// Sizes the drawable to the view in screen pixels.
     func fit(scale: CGFloat) {
@@ -585,5 +693,30 @@ nonisolated enum GPUAdjustment {
             if cubes.count > 16 { cubes.removeLast() }
         }
         return data
+    }
+}
+
+/// Where working samples are converted for display. Both targets are extended-range color spaces
+/// rendered into half-float textures, so nothing is clamped to [0, 1] before the system's own
+/// EDR and gamut mapping.
+nonisolated enum LWDisplayTarget: CaseIterable, Sendable {
+    case extendedSRGB, extendedDisplayP3
+    static let pixelFormat = MTLPixelFormat.rgba16Float
+    var colorSpace: CGColorSpace {
+        switch self {
+        case .extendedSRGB: CGColorSpace(name: CGColorSpace.extendedSRGB)!
+        case .extendedDisplayP3: CGColorSpace(name: CGColorSpace.extendedDisplayP3)!
+        }
+    }
+    /// The sign-mirrored sRGB transfer both targets use.
+    static func encode(_ x: Double) -> Double {
+        let a = abs(x), y = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1 / 2.4) - 0.055
+        return x < 0 ? -y : y
+    }
+    init?(colorSpace: CGColorSpace?) {
+        guard let name = colorSpace?.name else { return nil }
+        if name == CGColorSpace.extendedSRGB { self = .extendedSRGB }
+        else if name == CGColorSpace.extendedDisplayP3 { self = .extendedDisplayP3 }
+        else { return nil }
     }
 }

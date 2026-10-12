@@ -23,8 +23,20 @@ final class CanvasView: NSView {
     /// The text being typed, rendered as the layer will hold it, remade only when its style changes.
     private var floatFrameProvider: LWFloatPlaneImage?
     private var floatFrameWorkspace: LWFloatWorkspace?
+    /// Tiles of the float document at full resolution and at the reduced pyramid levels, kept across frames
+    /// within a declared budget; a frame that only pans or zooms re-evaluates nothing it already holds. One
+    /// cache serves every canvas, so open tabs never multiply its share of the source-graph working set; its
+    /// tiles and plans are kept per document, and it gives tiles back when other source graphs need the bytes.
+    private static let sharedFloatTiles: LWDocumentTileRenderer? = try? LWDocumentTileRenderer()
+    private var floatTiles: LWDocumentTileRenderer? { Self.sharedFloatTiles }
+    /// The document this canvas last planned in the shared cache.
+    private var floatTilesDocument: UUID?
+    /// The charge for the assembled visible region the current frame draws from.
+    private var floatFrameLease: LWFloatWorkingSet.Lease?
     func releaseSourceFrame() {
-        floatFrameProvider = nil; floatFrameWorkspace = nil
+        floatFrameProvider = nil; floatFrameWorkspace = nil; floatFrameLease = nil
+        if let document = floatTilesDocument { floatTiles?.purge(document: document) }
+        floatTilesDocument = nil
         draftTextCache = nil; draftEffects = nil; draftEffectsSource = nil
         strokeSurface = nil; cloneTipCache = nil; clonePreviewCache = nil
         displayedState = nil; gpuView?.isHidden = true; needsDisplay = true
@@ -2633,7 +2645,7 @@ extension CanvasView {
         }
         let provider = floatFrameProvider
         do {
-            let shown = try renderer.present(frame,in:view.metalLayer,validateBeforePresentation:provider.map { retained in { try retained.check() } })
+            let shown = try renderer.present(frame,in:view.metalLayer,headroom:view.headroom,validateBeforePresentation:provider.map { retained in { try retained.check() } })
             if shown,view.isHidden { view.isHidden = false }
             return shown
         } catch { session.brushError=error.localizedDescription; return hideGPUView(dirtyRect) }
@@ -2715,7 +2727,7 @@ extension CanvasView {
         // From 200% the document's own pixels are composited one to one and enlarged as crisp squares.
         let crisp = viewport.zoom >= Self.crispZoom
         let placement = GPUPlacement(mapping: crisp ? .identity : mapping, scale: crisp ? 1 : perPixel, renderer: renderer)
-        guard var layers = gpuLayers(document, placement: placement) else { return nil }
+        guard var layers = gpuLayers(document, placement: placement, visible: full.applying(mapping.inverted())) else { return nil }
         if crisp { layers = layers.cropped(to: pixels).samplingNearest().transformed(by: mapping) }
         frame = layers.cropped(to: rect).composited(over: frame)
         // The document's edge: a one-pixel line centered on it.
@@ -2732,6 +2744,47 @@ extension CanvasView {
     /// The layers composited as `drawLayers` composites them, over nothing. Nil when a layer needs the Core Graphics
     /// canvas.
     private func liveFloatCanvasImage(_ document:CanvasDocument) throws -> CGImage {
+        let (snapshot, owner) = try liveFloatSnapshot(document)
+        defer { withExtendedLifetime(owner) {} }
+        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+        let plane = try LWFloatCompositor.renderPlane(snapshot,workspace: workspace)
+        let provider = LWFloatPlaneImage(plane: plane,cancellation: workspace.cancellation), image = try provider.image()
+        try provider.check(); floatFrameProvider = provider; floatFrameWorkspace = workspace; return image
+    }
+
+    /// The visible part of the float document, in the coordinates of `CIImage(cgImage:)` of the whole
+    /// document (`visible` is in those coordinates too), evaluated through the shared tile cache at the
+    /// pyramid level `scale` (display pixels per document pixel) calls for. However large the document and
+    /// however far out the view is zoomed, the frame holds at most `LWDocumentTileRenderer.frameBudgetBytes`
+    /// and evaluation proceeds one tile block at a time; the whole document is never rendered at once.
+    /// Empty when no part of the document is visible.
+    private func liveFloatCanvasRegion(_ document:CanvasDocument, visible:CGRect, scale:CGFloat) throws -> CIImage {
+        guard let tiles = floatTiles else { throw ProjectError.tooLarge }
+        guard !visible.isNull, !visible.isEmpty,
+              [visible.minX, visible.minY, visible.maxX, visible.maxY].allSatisfy(\.isFinite) else { return CIImage.empty() }
+        let width = Int(document.size.width.rounded()), height = Int(document.size.height.rounded())
+        // Two pixels of margin for the frame's interpolation at the region's edge.
+        let shown = visible.insetBy(dx: -2, dy: -2).intersection(CGRect(x: 0, y: 0, width: width, height: height)).integral
+        guard !shown.isNull, shown.width >= 1, shown.height >= 1 else { return CIImage.empty() }
+        // Core Image's y runs up from the document's last row.
+        let region = LWFloatRange(x: Int(shown.minX), y: height - Int(shown.maxY), width: Int(shown.width), height: Int(shown.height))
+        let (snapshot, owner) = try liveFloatSnapshot(document)
+        defer { withExtendedLifetime(owner) {} }
+        guard snapshot.manifest.width == width, snapshot.manifest.height == height else { throw ProjectError.invalid }
+        if let previous = floatTilesDocument, previous != document.id { tiles.purge(document: previous) }
+        floatTilesDocument = document.id
+        let view = try tiles.view(region, scale: Double(scale), plan: tiles.plan(snapshot))
+        floatFrameLease = view.charge
+        guard let color = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) else { throw ProjectError.invalid }
+        let f = CGFloat(view.scale)
+        return CIImage(bitmapData: view.data, bytesPerRow: view.region.width * 8,
+                       size: CGSize(width: view.region.width, height: view.region.height), format: .RGBAh, colorSpace: color)
+            .transformed(by: CGAffineTransform(scaleX: f, y: f))
+            .transformed(by: CGAffineTransform(translationX: CGFloat(view.region.x) * f,
+                                               y: CGFloat(height) - CGFloat(view.region.y + view.region.height) * f))
+    }
+
+    private func liveFloatSnapshot(_ document:CanvasDocument) throws -> (ProjectSnapshot, ProjectSnapshot) {
         guard let original=session.projectSnapshot(),original.manifest.documentID == document.id else { throw ProjectError.invalid }
         let projected=try original.metadataProjection(workingSet:.sourceGraphs)
         var manifest=projected.manifest,images=projected.images
@@ -2763,15 +2816,15 @@ extension CanvasView {
                 manifest.layers[i].transform=edit.preparedTransform ?? edit.grownTransform ?? edit.transform
             }
         }
-        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
-        let plane = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: images, masks: original.masks),workspace: workspace)
-        let provider = LWFloatPlaneImage(plane: plane,cancellation: workspace.cancellation), image = try provider.image()
-        try provider.check(); floatFrameProvider = provider; floatFrameWorkspace = workspace; return image
+        return (ProjectSnapshot(manifest: manifest, images: images, masks: original.masks), projected)
     }
 
-    private func gpuLayers(_ document: CanvasDocument, placement: GPUPlacement) -> CIImage? {
+    private func gpuLayers(_ document: CanvasDocument, placement: GPUPlacement, visible: CGRect) -> CIImage? {
         if document.layers.contains(where:{$0.liveSource != nil || $0.asset?.linear != nil || $0.asset?.linearPlane != nil}),session.maskAloneLayer == nil {
-            do { return CIImage(cgImage:try liveFloatCanvasImage(document)).transformed(by:placement.mapping) }
+            do {
+                floatFrameLease = nil
+                return try liveFloatCanvasRegion(document, visible: visible, scale: placement.scale).transformed(by: placement.mapping)
+            }
             catch { session.brushError=error.localizedDescription;return nil }
         }
         handOffTextEffects(document)

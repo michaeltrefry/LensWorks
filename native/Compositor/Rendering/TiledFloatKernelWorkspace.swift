@@ -15,7 +15,7 @@ nonisolated struct LWFloatKernelWorkspace {
         self.makeBuilder = makeBuilder; self.makeScratchDirectory = makeScratchDirectory; self.fileOwner = fileOwner
     }
 
-    func map(_ source: LWFloatPlane,
+    @_optimize(speed) func map(_ source: LWFloatPlane,
              _ operation: (SIMD4<Float>, Int, Int, LWFloatPlane.Sampler) throws -> SIMD4<Float>) throws -> LWFloatPlane {
         let builder = try makeBuilder(source.width, source.height)
         guard builder.workingSet === source.workingSet else { throw ProjectError.invalid }
@@ -43,7 +43,7 @@ nonisolated struct LWFloatKernelWorkspace {
         return try builder.finish()
     }
 
-    func rgb(_ source: LWFloatPlane,
+    @_optimize(speed) func rgb(_ source: LWFloatPlane,
              _ operation: (FloatImageAdjustmentPixels.RGB, Int, Int) throws -> FloatImageAdjustmentPixels.RGB) throws -> LWFloatPlane {
         try map(source) { pixel, x, y, _ in
             guard pixel.w > 0 else { return pixel }
@@ -407,12 +407,12 @@ nonisolated extension LWFloatKernelWorkspace {
     /// Same global retained operator, backed by bounded provider reads rather
     /// than a dependency-ROI array that can exceed native admission at full size.
     func coreImage(_ source:LWFloatPlane,gaussianSigma:Double?,
-        motionRadius:Double,motionAngle:Double)throws->LWFloatPlane {
+        motionRadius:Double,motionAngle:Double,origin:CGPoint = .zero)throws->LWFloatPlane {
         guard gaussianSigma.map({$0.isFinite && $0>=0}) ?? true,
             motionRadius.isFinite,motionRadius>=0,motionAngle.isFinite else { throw ProjectError.invalid }
         // CIMotionBlur needs a rendered apron around each tile (see LWFloatCoreImage.render).
         let apron=gaussianSigma == nil ? min(1024,Int(motionRadius.rounded(.up))+16) : 0
-        return try LWFloatCoreImage.render(source,makeBuilder:makeBuilder,cancellation:fileOwner?.cancellation,apron:apron) { input in
+        return try LWFloatCoreImage.render(source,makeBuilder:makeBuilder,cancellation:fileOwner?.cancellation,apron:apron,origin:origin) { input in
             let edges=input.clampedToExtent()
             if let sigma=gaussianSigma { return edges.applyingGaussianBlur(sigma:sigma) }
             return edges.applyingFilter("CIMotionBlur",parameters:[kCIInputRadiusKey:motionRadius,kCIInputAngleKey:motionAngle])

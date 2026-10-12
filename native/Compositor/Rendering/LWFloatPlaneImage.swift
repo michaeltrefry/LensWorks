@@ -78,7 +78,7 @@ nonisolated final class LWFloatPlaneImage: @unchecked Sendable {
         cachedTiles[column] = tile; return tile
     }
 
-    func copy(into output: UnsafeMutableRawPointer, position: off_t, count: Int) throws -> Int {
+    @_optimize(speed) func copy(into output: UnsafeMutableRawPointer, position: off_t, count: Int) throws -> Int {
         cacheLock.lock(); defer { cacheLock.unlock() }
         try check()
         _ = try plane.globalExtent.validate(frameWidth: plane.width, frameHeight: plane.height)
