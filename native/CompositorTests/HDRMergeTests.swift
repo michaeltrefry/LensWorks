@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import CryptoKit
 import CoreGraphics
+import ImageIO
 import simd
 @testable import Compositor
 
@@ -52,8 +53,7 @@ nonisolated struct HDRBracketFixture {
     var subjectRegion: [LWHDRRegion] { frames.map { LWHDRRegion(minX: $0.subject_bounds[0], minY: $0.subject_bounds[1], maxX: $0.subject_bounds[2], maxY: $0.subject_bounds[3]) } }
     func hashes() throws -> [String] { try files.map { try LensWorksCatalog.sha256($0) } }
     static func develop(_ url: URL) async throws -> LWHDRFrame {
-        let (_, plane) = try await LWSourceDeveloper.shared.createPlane(original: try LWCatalogNativePath(fileURL: url), rawHint: RawImporter.matches(url))
-        return try LWHDRFrame(width: plane.width, height: plane.height, pixels: Array(try plane.read(plane.globalExtent).surface.pixels))
+        try await LensWorksCatalog.developHDRFrame(original: try LWCatalogNativePath(fileURL: url), url: url)
     }
     func developed() async throws -> [LWHDRFrame] {
         var frames: [LWHDRFrame] = []
@@ -72,6 +72,12 @@ struct HDRMergeTests {
         let before = try fixture.hashes()
         #expect(before == fixture.frames.map(\.sha256))
         let frames = try await fixture.developed()
+        // The production loader refuses a bracket one byte over the memory budget, with the numbers.
+        let needed = frames[0].width * frames[0].height * (3 * 6 + 32), first = fixture.files[0]
+        await #expect(throws: LWHDRMergeError.tooLarge(frames: 3, width: frames[0].width, height: frames[0].height, neededBytes: needed, budgetBytes: needed - 1)) {
+            _ = try await LensWorksCatalog.developHDRFrame(original: try LWCatalogNativePath(fileURL: first), url: first, frames: 3, budget: needed - 1)
+        }
+        #expect(try await LensWorksCatalog.developHDRFrame(original: try LWCatalogNativePath(fileURL: first), url: first, frames: 3, budget: needed).samples == frames[0].samples)
         let result = try LWHDRMerger.merge(frames)
         #expect(result.referenceIndex == 1)
         #expect(result.offsets.allSatisfy { $0 == LWHDROffset(x: 0, y: 0) }, "\(result.offsets)")
@@ -81,7 +87,7 @@ struct HDRMergeTests {
         // The subject's red channel clips in the +1 EV frame; the merge keeps the reference subject unclipped.
         let width = result.width
         func center(_ frame: Int) -> Int { let b = fixture.frames[frame].subject_bounds; return (b[1] + b[3]) / 2 * width + (b[0] + b[2]) / 2 }
-        let brightClip = LWHDRMerger.clipLevel(frames[2])
+        let brightClip = LWHDRMerger.clipLevel(frames[2]).max()
         #expect(frames[2].pixels[center(2)].x >= brightClip)
         #expect(abs(result.radiance[center(1)].x - frames[1].pixels[center(1)].x) / frames[1].pixels[center(1)].x < 0.02)
         // Expected dynamic range: the merge holds the full reference range, records values above
@@ -134,12 +140,19 @@ struct HDRMergeTests {
         let frames = try await fixture.developed()
         let result = try LWHDRMerger.merge(frames)
         let scale = LWHDRDNGWriter.normalization(result)
-        let provenance = LWHDRMergeProvenance(documentID: UUID().uuidString, catalogPath: nil, deghost: true, referenceIndex: result.referenceIndex,
+        let provenance = LWHDRMergeProvenance(documentID: UUID().uuidString, deghost: true, referenceIndex: result.referenceIndex,
             baselineExposure: Double(-log2(scale)), sources: fixture.files.indices.map { i in
-                .init(catalogImageID: "image-\(i)", assetID: "asset-\(i)", variantID: "master", filePath: fixture.files[i].path,
+                .init(catalogImageID: "image-\(i)", assetID: "asset-\(i)", variantID: "master", fileName: fixture.files[i].lastPathComponent,
                       sha256: fixture.frames[i].sha256, relativeExposureEV: log2(result.exposures[i]), offset: result.offsets[i], profile: nil) })
         let dng = fixture.root.appendingPathComponent("merged.dng")
         try LWHDRDNGWriter.encode(result, provenance: provenance, reference: ["tiff:Make": "S47 & <Co>"]).write(to: dng)
+        // The streamed write Merge to HDR… uses is the same file, and never replaces one.
+        let streamed = fixture.root.appendingPathComponent("streamed.dng")
+        try LWHDRDNGWriter.write(result, provenance: provenance, reference: ["tiff:Make": "S47 & <Co>"], to: streamed)
+        #expect(try Data(contentsOf: streamed) == Data(contentsOf: dng))
+        try Data("existing".utf8).write(to: streamed)
+        #expect(throws: POSIXError.self) { try LWHDRDNGWriter.write(result, provenance: provenance, to: streamed) }
+        #expect(try Data(contentsOf: streamed) == Data("existing".utf8))
         let inspection = try LWDNGInspection(Data(contentsOf: dng))
         #expect(inspection.tags[262] == [34892] && inspection.tags[339] == [3, 3, 3] && inspection.tags[258] == [32, 32, 32])
         #expect(inspection.tags[50706] == [1, 4, 0, 0] && inspection.width == result.width && inspection.height == result.height)
@@ -163,12 +176,196 @@ struct HDRMergeTests {
     }
 }
 
+/// Synthetic brackets for the pure merge: a static scene whose radiance rises along x on a
+/// log scale, exposed at `stops` and clipped at each channel's `saturation`.
+nonisolated enum HDRSyntheticBracket {
+    static func radiance(_ x: Int, width: Int, low: Float, high: Float) -> Float { low * pow(high / low, Float(x) / Float(width - 1)) }
+    static func frame(width: Int = 64, height: Int = 64, stops: Float, low: Float = 0.002, high: Float = 0.9,
+                      saturation: SIMD3<Float> = SIMD3(repeating: 1)) throws -> LWHDRFrame {
+        var pixels: [SIMD4<Float>] = []
+        for _ in 0..<height {
+            for x in 0..<width {
+                let value = radiance(x, width: width, low: low, high: high) * exp2(stops)
+                pixels.append(SIMD4(min(value, saturation.x), min(value, saturation.y), min(value, saturation.z), 1))
+            }
+        }
+        return try LWHDRFrame(width: width, height: height, pixels: pixels)
+    }
+}
+
+extension HDRMergeTests {
+    private func expectScene(_ result: LWHDRMergeResult, stops: [Float]) {
+        let reference = stops[result.referenceIndex]
+        for (index, stop) in stops.enumerated() {
+            #expect(abs(Float(log2(result.exposures[index])) - (stop - reference)) < 0.02, "exposure \(index): \(result.exposures)")
+        }
+        var worst: Float = 0
+        for x in 0..<result.width {
+            let expected = HDRSyntheticBracket.radiance(x, width: result.width, low: 0.002, high: 0.9) * exp2(reference)
+            let merged = result.radiance[(result.height / 2) * result.width + x]
+            worst = max(worst, abs(merged.x - expected) / expected, abs(merged.y - expected) / expected, abs(merged.z - expected) / expected)
+        }
+        #expect(worst < 0.01, "worst relative radiance error \(worst)")
+    }
+    @Test func aTwoFrameBracketMerges() throws {
+        let stops: [Float] = [0, 2]
+        let result = try LWHDRMerger.merge(try stops.map { try HDRSyntheticBracket.frame(stops: $0) })
+        #expect(result.exposures.count == 2 && result.radiance.count == 64 * 64)
+        expectScene(result, stops: stops)
+    }
+    @Test func aNineFrameBracketMerges() throws {
+        let stops: [Float] = [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+        #expect(stops.count == LWHDRMerger.maximumFrames)
+        let result = try LWHDRMerger.merge(try stops.map { try HDRSyntheticBracket.frame(stops: $0) })
+        #expect(result.referenceIndex == 4 && result.exposures.count == 9)
+        expectScene(result, stops: stops)
+    }
+    @Test func oneFrameIsTooFew() throws {
+        let frame = try HDRSyntheticBracket.frame(stops: 0)
+        #expect(throws: LWHDRMergeError.tooFewFrames) { try LWHDRMerger.merge([frame]) }
+    }
+    @Test func tenFramesAreTooMany() throws {
+        let frames = try (0..<10).map { try HDRSyntheticBracket.frame(stops: Float($0) / 2 - 2) }
+        #expect(throws: LWHDRMergeError.tooManyFrames) { try LWHDRMerger.merge(frames) }
+    }
+    @Test func framesOfDifferentSizesAreRefused() throws {
+        let frames = [try HDRSyntheticBracket.frame(width: 64, height: 64, stops: 0), try HDRSyntheticBracket.frame(width: 64, height: 60, stops: 1)]
+        #expect(throws: LWHDRMergeError.sizeMismatch) { try LWHDRMerger.merge(frames) }
+    }
+    @Test func framesWithoutSharedWellExposedPixelsAreRefused() throws {
+        let black = try LWHDRFrame(width: 64, height: 64, pixels: [SIMD4<Float>](repeating: SIMD4(0, 0, 0, 1), count: 64 * 64))
+        #expect(throws: LWHDRMergeError.insufficientOverlap) { try LWHDRMerger.merge([try HDRSyntheticBracket.frame(stops: 0), black]) }
+    }
+
+    /// The exposure estimate reads every pixel of a small frame and a regular grid of a large one.
+    @Test func largeFramesEstimateExposureFromASampledGrid() {
+        #expect(LWHDRMerger.exposureGrid(width: 64, height: 64) == (1, 64 * 64))
+        #expect(LWHDRMerger.exposureGrid(width: 2000, height: 2000) == (1, 4_000_000))
+        for (width, height, step) in [(6000, 4000, 2), (8192, 5464, 3), (11648, 8736, 5)] {
+            let grid = LWHDRMerger.exposureGrid(width: width, height: height)
+            #expect(grid.step == step)
+            // Exactly the pixels a stride over x and y visits, and a few million of them.
+            #expect(grid.samples == stride(from: 0, to: width, by: step).underestimatedCount * stride(from: 0, to: height, by: step).underestimatedCount)
+            #expect(grid.samples >= 4_000_000 && grid.samples <= 8_000_000)
+        }
+    }
+
+    /// White-balanced RAW development leaves each channel saturating at its own level. Where only
+    /// the brighter frame's green is saturated (below that frame's red maximum), the merge must
+    /// not blend that frame in.
+    @Test func aChannelSaturatedBelowTheFrameMaximumGetsNoWeight() throws {
+        let saturation = SIMD3<Float>(2.0, 1.0, 1.5)
+        let dark = try HDRSyntheticBracket.frame(stops: 0, low: 0.01, high: 0.9, saturation: saturation)
+        let bright = try HDRSyntheticBracket.frame(stops: 2, low: 0.01, high: 0.9, saturation: saturation)
+        #expect(LWHDRMerger.clipLevel(bright) == 0.98 * saturation)
+        let result = try LWHDRMerger.merge([dark, bright], options: LWHDRMergeOptions(deghost: true, align: false))
+        #expect(result.referenceIndex == 0 && abs(result.exposures[1] - 4) < 0.05)
+        var checked = 0
+        for x in 0..<64 {
+            let scene = HDRSyntheticBracket.radiance(x, width: 64, low: 0.01, high: 0.9)
+            // Only green is saturated in the bright frame: 4 × scene is past 1.0 but below 1.5 and 2.0.
+            guard scene * 4 > 1.05, scene * 4 < 1.4 else { continue }
+            let merged = result.radiance[32 * 64 + x]
+            #expect(abs(merged.y - scene) / scene < 0.01, "x \(x): green \(merged.y) for scene \(scene)")
+            #expect(abs(merged.x - scene) / scene < 0.01 && abs(merged.z - scene) / scene < 0.01)
+            checked += 1
+        }
+        #expect(checked >= 3)
+    }
+
+    /// The budget's unit is bytes per pixel: 6 per frame plus 32 shared (docs/HDR_MERGE.md, "Memory").
+    @Test func theMemoryBudgetAdmitsOrdinaryBracketsAndRefusesOversizedOnesWithTheNumbers() throws {
+        let budget = LWHDRMerger.minimumBudgetBytes
+        #expect(budget == 6 * 1024 * 1024 * 1024 && LWHDRMerger.budgetBytes >= budget)
+        #expect(LWHDRMerger.workingBytes(frames: 5, width: 8192, height: 5464) == 8192 * 5464 * (5 * 6 + 32))
+        // 45 MP and 61 MP camera files, 3 through 9 frames, on the 16 GB Mac's budget.
+        for frames in [3, 5, 9] {
+            try LWHDRMerger.admit(frames: frames, width: 8192, height: 5464, budget: budget)
+            try LWHDRMerger.admit(frames: frames, width: 9504, height: 6336, budget: budget)
+        }
+        try LWHDRMerger.admit(frames: 5, width: 11648, height: 8736, budget: budget)  // 102 MP × 5
+        #expect(throws: LWHDRMergeError.tooLarge(frames: 9, width: 11648, height: 8736, neededBytes: 11648 * 8736 * 86, budgetBytes: budget)) {
+            try LWHDRMerger.admit(frames: 9, width: 11648, height: 8736, budget: budget)
+        }
+        let message = LWHDRMergeError.tooLarge(frames: 9, width: 11648, height: 8736, neededBytes: 11648 * 8736 * 86, budgetBytes: budget).localizedDescription
+        #expect(message.contains("9 photos") && message.contains("102 MP") && message.contains("8.8 GB") && message.contains("6.4 GB"), "\(message)")
+        #expect(LWHDRMerger.workingBytes(frames: 2, width: .max / 2, height: 4) == .max)
+    }
+
+    /// The blocker: a frame above ~16 MP could not be read through the 512 MiB float working set
+    /// in one piece. The production loader reads bounded row strips (349 rows at this width).
+    @Test func aTwentyFourMegapixelFrameLoadsThroughTheMergeLoader() async throws {
+        let width = 6000, height = 4000
+        func level(_ x: Int, _ y: Int) -> UInt8 { UInt8((y * 7 + x / 64) & 255) }
+        let physical = try #require(realpath(FileManager.default.temporaryDirectory.path, nil)); defer { free(physical) }
+        let root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWHDR-large-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false); defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("large.png")
+        do {
+            var bytes = Data(count: width * height * 4)
+            bytes.withUnsafeMutableBytes { raw in
+                for y in 0..<height { for block in 0..<((width + 63) / 64) {
+                    let x = block * 64
+                    memset(raw.baseAddress! + (y * width + x) * 4, Int32(level(x, y)), min(64, width - x) * 4)
+                } }
+            }
+            let space = try #require(CGColorSpace(name: CGColorSpace.sRGB)), provider = try #require(CGDataProvider(data: bytes as CFData))
+            let image = try #require(CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                space: space, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+            let destination = try #require(CGImageDestinationCreateWithURL(file as CFURL, "public.png" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, image, nil)
+            #expect(CGImageDestinationFinalize(destination))
+        }
+        #expect(width * height * 32 > LWFloatWorkingSet.maximumBytes, "a whole-extent read of this frame cannot be admitted")
+        let frame = try await LensWorksCatalog.developHDRFrame(original: try LWCatalogNativePath(fileURL: file), url: file)
+        #expect(frame.width == width && frame.height == height && frame.samples.count == width * height * 3)
+        func linear(_ value: UInt8) -> Float { let v = Float(value) / 255; return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        // Rows on both sides of the strip seams (349 rows per strip), and the frame's corners.
+        var worst: Float = 0
+        for y in [0, 1, 348, 349, 350, 697, 698, 2000, 3489, 3490, 3999] {
+            for x in [0, 63, 64, 3000, 5999] {
+                let pixel = frame.pixels[y * width + x], expected = linear(level(x, y))
+                worst = max(worst, abs(pixel.x - expected), abs(pixel.y - expected), abs(pixel.z - expected))
+            }
+        }
+        #expect(worst < 2e-3, "worst sample error \(worst)")
+    }
+
+    @Test func detachedWorkIsCancelledWithItsCaller() async throws {
+        let started = ContinuousClock.now
+        let task = Task { try await LensWorksCatalog.detached { () -> Bool in
+            // Bounded: without cancellation this returns, it never hangs the suite.
+            for _ in 0..<500 { try Task.checkCancellation(); usleep(10_000) }
+            return true
+        } }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(ContinuousClock.now - started < .seconds(3))
+    }
+
+    @Test func aMergedFileNeverReplacesAnExistingOne() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LWHDR-move-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false); defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("existing".utf8).write(to: folder.appendingPathComponent("shot-HDR.dng"))
+        let first = folder.appendingPathComponent(".partial-1"), second = folder.appendingPathComponent(".partial-2")
+        try Data("first".utf8).write(to: first); try Data("second".utf8).write(to: second)
+        #expect(try LensWorksCatalog.moveWithoutReplacing(first, into: folder, stem: "shot-HDR").lastPathComponent == "shot-HDR-2.dng")
+        #expect(try LensWorksCatalog.moveWithoutReplacing(second, into: folder, stem: "shot-HDR").lastPathComponent == "shot-HDR-3.dng")
+        #expect(try Data(contentsOf: folder.appendingPathComponent("shot-HDR.dng")) == Data("existing".utf8))
+        #expect(try Data(contentsOf: folder.appendingPathComponent("shot-HDR-2.dng")) == Data("first".utf8))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == ["shot-HDR-2.dng", "shot-HDR-3.dng", "shot-HDR.dng"])
+    }
+}
+
 /// AC1 and AC3 through the real catalog: one new linked catalog item, unchanged sources,
 /// and an editor document with live RAW development that accepts layers.
 @Suite(.serialized)
 @MainActor
 struct HDRMergeCatalogTests {
-    @Test func mergeCreatesOneLinkedFloatDNGCatalogItemThatOpensWithRawControlsAndLayers() async throws {
+    /// A catalog over the generated bracket's folder with its three photos imported.
+    private func withBracketCatalog(_ body: (LensWorksCatalog, HDRBracketFixture, [LensWorksCatalogAsset], UserDefaults) async throws -> Void) async throws {
         let fixture = try HDRBracketFixture.make(); defer { try? FileManager.default.removeItem(at: fixture.root) }
         let photos = fixture.root.appendingPathComponent("Photos")
         let worker = try #require(ProcessInfo.processInfo.environment["LW_CATALOG_TEST_WORKER"], "Explicit retained fixture helper is required.")
@@ -181,10 +378,35 @@ struct HDRMergeCatalogTests {
         await model.connect(fixture.root.appendingPathComponent("Catalog").path, create: true)
         do {
             if let error = model.error { throw LensWorksCatalogError.message(error) }
-            let before = try fixture.hashes()
             try await model.startImport(photos.path); try await model.waitImport(terminal: true)
             #expect(model.assets.count == 3)
-            let sources = model.assets
+            try await body(model, fixture, model.assets, defaults)
+            try await model.close()
+        } catch {
+            try? await model.close()
+            throw error
+        }
+    }
+    private func selectAll(_ model: LensWorksCatalog, _ sources: [LensWorksCatalogAsset]) async {
+        await model.select(sources[0])
+        for row in sources.dropFirst() { await model.select(row, extending: true) }
+    }
+    /// Files in the bracket's folder tree that the fixture did not put there.
+    private func leftovers(_ fixture: HDRBracketFixture) throws -> [String] {
+        let photos = fixture.root.appendingPathComponent("Photos"), known = Set(fixture.files.map(\.lastPathComponent))
+        return try FileManager.default.contentsOfDirectory(atPath: photos.path).filter { !known.contains($0) }.sorted()
+    }
+
+    @Test func mergeCreatesOneLinkedFloatDNGCatalogItemThatOpensWithRawControlsAndLayers() async throws {
+        try await withBracketCatalog { model, fixture, sources, defaults in
+            let photos = fixture.root.appendingPathComponent("Photos")
+            let before = try fixture.hashes()
+            // Photos the catalog has not imported, beside the sources and in a subfolder: a merge adds neither.
+            try FileManager.default.createDirectory(at: photos.appendingPathComponent("Sub"), withIntermediateDirectories: false)
+            try FileManager.default.copyItem(at: fixture.files[0], to: photos.appendingPathComponent("uncataloged-beside.png"))
+            try FileManager.default.copyItem(at: fixture.files[0], to: photos.appendingPathComponent("Sub/uncataloged-below.png"))
+            let checkpointKey = "LensWorks.importSource." + (try #require(model.catalogPath))
+            let checkpoint = try #require(defaults.data(forKey: checkpointKey))
             await model.select(sources[0])
             #expect(model.hdrMergeAvailability() == "Select two or more bracketed photos.")
             for row in sources.dropFirst() { await model.select(row, extending: true) }
@@ -193,14 +415,17 @@ struct HDRMergeCatalogTests {
             let outcome = try await model.mergeSelectionToHDR(deghost: true)
             #expect(model.error == nil, "\(model.error ?? "")")
             #expect(try fixture.hashes() == before)
-            try await model.browse(text: nil)
-            #expect(model.assets.count == 4)
+            #expect(model.assets.count == 4 && model.searchText.isEmpty && model.activeFolder == nil, "\(model.assets.map(\.filename))")
+            #expect(defaults.data(forKey: checkpointKey) == checkpoint, "the folder-import resume source is not replaced")
+            #expect(try leftovers(fixture) == ["Sub", outcome.dng.lastPathComponent, "uncataloged-beside.png"].sorted())
             let merged = try #require(model.assets.first { $0.filename == outcome.dng.lastPathComponent })
             #expect(!sources.contains { $0.id == merged.id })
-            #expect(model.selectedAsset?.id == merged.id)
+            #expect(model.selectedAsset?.id == merged.id && outcome.asset.id == merged.id)
+            #expect(!model.isMergingHDR && model.hdrMergeCancelReason != nil)
 
-            // The catalog item's own original is a linear float DNG carrying the link to all three sources.
+            // The catalog item's own original is a linear float DNG whose XMP names all three sources.
             let original = try await model.service.originalLocation(try #require(merged.key)).localFileURL()
+            #expect(original.resolvingSymlinksInPath().path == outcome.dng.resolvingSymlinksInPath().path)
             let inspection = try LWDNGInspection(Data(contentsOf: original))
             #expect(inspection.tags[262] == [34892] && inspection.tags[339] == [3, 3, 3] && inspection.tags[258] == [32, 32, 32])
             let link = try inspection.provenance()
@@ -210,9 +435,30 @@ struct HDRMergeCatalogTests {
                 let row = try #require(sources.first { $0.id == source.catalogImageID })
                 let file = try await model.service.originalLocation(try #require(row.key)).localFileURL()
                 let hash = try LensWorksCatalog.sha256(file)
-                #expect(source.filePath == file.path && source.sha256 == hash)
+                #expect(source.fileName == file.lastPathComponent && source.sha256 == hash)
             }
             #expect(link.deghost && link == outcome.provenance)
+            // The file is meant to be shared: its XMP holds no local path.
+            let packet = String(decoding: try #require(inspection.xmp), as: UTF8.self)
+            #expect(!packet.contains(fixture.root.path) && !packet.contains(NSHomeDirectory()) && !packet.contains("catalogPath"))
+
+            // The link on the catalog side: the merged item's recorded sources, read back through the model.
+            let linked = try await model.hdrMergeSources(of: merged)
+            #expect(linked.count == 3 && Set(linked.map(\.imageID)) == Set(sources.map(\.id)))
+            for source in linked {
+                let row = try #require(sources.first { $0.id == source.imageID })
+                #expect(source.assetID == row.key?.asset_id && source.variantID == row.key?.variant_id && source.filename == row.filename)
+            }
+            #expect(try await model.hdrMergeSources(of: sources[0]).isEmpty)
+            // It is durable catalog-side state, not session state: a second index connection reads it.
+            let reopened = LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("Index.sqlite3"))
+            #expect(try await reopened.sources(catalog: try #require(model.catalogPath), image: merged.id) == linked)
+            // Following the link selects the three sources.
+            try await model.selectHDRMergeSources(of: merged)
+            #expect(model.selectionCount == 3 && model.selection == Set(sources.map(\.id)))
+            #expect(sources.contains { $0.id == model.selectedPhotoID })
+            await model.select(merged)
+            #expect(model.selectedAsset?.id == merged.id && model.selectionCount == 1)
 
             // AC3: it opens in the editor as a live RAW source with RAW controls and accepts a layer.
             let output = fixture.root.appendingPathComponent("Versions")
@@ -234,10 +480,106 @@ struct HDRMergeCatalogTests {
             #expect(session.document?.layers.count == 2)
             #expect(session.document?.layers.contains { $0.liveSource != nil } == true)
             #expect(try fixture.hashes() == before)
-            try await model.close()
-        } catch {
-            try? await model.close()
-            throw error
+        }
+    }
+
+    /// The merged photo is identified by where its original is, not by its file name, and the
+    /// user's browse scope is left as it was even when the merged photo is outside it.
+    @Test func aSameNamedPhotoInAnotherCatalogedFolderIsNotMistakenForTheMerge() async throws {
+        try await withBracketCatalog { model, fixture, sources, _ in
+            // The name the merge will take already exists, cataloged, in another folder.
+            let name = fixture.files[1].deletingPathExtension().lastPathComponent + "-HDR.dng"
+            let other = fixture.root.appendingPathComponent("Other")
+            try FileManager.default.createDirectory(at: other, withIntermediateDirectories: false)
+            let small = try LWHDRMerger.merge([try HDRSyntheticBracket.frame(stops: 0), try HDRSyntheticBracket.frame(stops: 2)])
+            let record = LWHDRMergeProvenance(documentID: UUID().uuidString, deghost: true, referenceIndex: small.referenceIndex, baselineExposure: 0, sources: [
+                .init(catalogImageID: "elsewhere", assetID: "elsewhere", variantID: "master", fileName: "elsewhere.png", sha256: "", relativeExposureEV: 0, offset: LWHDROffset(x: 0, y: 0), profile: nil)])
+            let decoyFile = other.appendingPathComponent(name)
+            try LWHDRDNGWriter.encode(small, provenance: record).write(to: decoyFile)
+            try await model.startImport(other.path); try await model.waitImport(terminal: true)
+            #expect(model.assets.count == 4)
+            let decoy = try #require(model.assets.first { $0.filename == name })
+            await selectAll(model, sources)
+            #expect(model.selectionCount == 3)
+            // The user is looking at the other folder, where only the same-named photo shows.
+            let folder = try await model.folder(at: other.path)
+            try await model.browse(folder: folder, recursive: true)
+            #expect(model.assets.map(\.id) == [decoy.id] && model.selectionCount == 3 && model.hdrMergeAvailability() == nil)
+
+            let outcome = try await model.mergeSelectionToHDR()
+            #expect(outcome.dng.lastPathComponent == name && outcome.dng.deletingLastPathComponent().lastPathComponent == "Photos")
+            #expect(outcome.asset.id != decoy.id && !sources.contains { $0.id == outcome.asset.id })
+            let admitted = try await model.service.originalLocation(try #require(outcome.asset.key)).localFileURL()
+            #expect(admitted.resolvingSymlinksInPath().path == outcome.dng.resolvingSymlinksInPath().path)
+            // The browse scope, search text and visible page are the user's own.
+            #expect(model.activeFolder?.id.value == folder.id.value && model.searchText.isEmpty && model.browseOptions.text == nil)
+            #expect(model.assets.map(\.id) == [decoy.id])
+            // The merged photo is the selected photo all the same, and it is what opens.
+            #expect(model.selectedAsset?.id == outcome.asset.id && model.selectionCount == 1)
+            // Each same-named photo resolves by its own location.
+            #expect(try await model.recentCatalogRow(original: decoyFile)?.image_id == decoy.id)
+            #expect(try await model.recentCatalogRow(original: outcome.dng)?.image_id == outcome.asset.id)
+            #expect(try await model.recentCatalogRow(original: other.appendingPathComponent("absent-HDR.dng")) == nil)
+            #expect(try await model.hdrMergeSources(of: outcome.asset).count == 3)
+            #expect(try await model.hdrMergeSources(of: decoy).isEmpty)
+            let output = fixture.root.appendingPathComponent("Versions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            let workspace = ProjectWorkspace()
+            await model.createWorkingVersion(workspace: workspace)
+            #expect(model.error == nil, "\(model.error ?? "")")
+            #expect(workspace.current.controller.workingVersion?.photoID == outcome.asset.photoID)
+            #expect(workspace.current.session.document?.size == CGSize(width: outcome.result.width, height: outcome.result.height))
+        }
+    }
+
+    @Test func aCancelledOrFailedMergeLeavesNoFileAndNoCatalogItem() async throws {
+        try await withBracketCatalog { model, fixture, sources, _ in
+            let before = try fixture.hashes()
+            await selectAll(model, sources)
+            // The selection changes between the command and the merge reading it.
+            try await model.index.setSelection(owner: model.selectionOwnerForCommands, rows: [LensWorksSelectedRow(imageID: sources[0].id, key: try #require(sources[0].key))], replace: true)
+            do { _ = try await model.mergeSelectionToHDR(); Issue.record("A changed selection merged.") }
+            catch { #expect(error.localizedDescription == "The selection changed while Merge to HDR was starting. Try again.") }
+            #expect(!model.isMergingHDR && !model.isBusy)
+            await selectAll(model, sources)
+            #expect(model.selectionCount == 3)
+
+            // The Cancel command while the merge is working.
+            let running = Task { try await model.mergeSelectionToHDR() }
+            while !model.isMergingHDR { await Task.yield() }
+            #expect(model.hdrMergeCancelReason == nil && model.hdrMergeAvailability() == "A merge to HDR is already running.")
+            model.cancelHDRMerge()
+            await #expect(throws: CancellationError.self) { _ = try await running.value }
+            #expect(!model.isMergingHDR && !model.isBusy && model.error == nil)
+            #expect(model.status == "Merge to HDR canceled. Nothing was added to the catalog.")
+            #expect(try leftovers(fixture).isEmpty)
+
+            // A failure after the DNG is in place and before the catalog has it.
+            var written: [URL] = []
+            model.hdrMergeWrittenFixture = { url in
+                written.append(url)
+                #expect(FileManager.default.fileExists(atPath: url.path))
+                throw LensWorksCatalogError.message("fixture failure after the write")
+            }
+            do { _ = try await model.mergeSelectionToHDR(); Issue.record("The fixture failure was swallowed.") }
+            catch { #expect(error.localizedDescription == "fixture failure after the write") }
+            #expect(written.count == 1)
+            #expect(try leftovers(fixture).isEmpty)
+
+            // The Cancel command at that same point.
+            model.hdrMergeWrittenFixture = { url in written.append(url); model.cancelHDRMerge() }
+            await #expect(throws: CancellationError.self) { _ = try await model.mergeSelectionToHDR() }
+            #expect(written.count == 2)
+            #expect(try leftovers(fixture).isEmpty)
+            #expect(model.assets.count == 3 && !model.isImporting)
+            #expect(try fixture.hashes() == before)
+
+            // Nothing is left that stops the next merge.
+            model.hdrMergeWrittenFixture = nil
+            let outcome = try await model.mergeSelectionToHDR()
+            #expect(model.assets.count == 4)
+            #expect(try leftovers(fixture) == [outcome.dng.lastPathComponent])
         }
     }
 }

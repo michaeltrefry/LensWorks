@@ -6,6 +6,8 @@ struct LensWorksCatalogWorkspace: View {
     let applicationDelegate: CompositorApplicationDelegate
     private var catalog: LensWorksCatalog { applicationDelegate.catalog }
     private var workspace: ProjectWorkspace { applicationDelegate.workspace }
+    /// The selected photo's recorded HDR merge sources (empty for any other photo).
+    @State private var hdrSources: (photo: String, sources: [LensWorksDerivedSource]) = ("", [])
     @State private var groupName = ""
     @State private var editingGroup: LWApplicationOrganizationCollection?
     @State private var groupPrompt = false
@@ -322,6 +324,13 @@ struct LensWorksCatalogWorkspace: View {
                         if let asset = catalog.selectedAsset {
                             Divider()
                             Text(asset.filename).font(.headline).lineLimit(2)
+                                .task(id: asset.id + "/" + String(catalog.catalogEpoch) + "/" + String(catalog.isMergingHDR)) {
+                                    let found = (try? await catalog.hdrMergeSources(of: asset)) ?? []
+                                    if !Task.isCancelled { hdrSources = (asset.id, found) }
+                                }
+                            if hdrSources.photo == asset.id, !hdrSources.sources.isEmpty {
+                                LensWorksHDRSourcesView(catalog: catalog, asset: asset, sources: hdrSources.sources)
+                            }
                             LensWorksCatalogRecipeControls(catalog: catalog)
                             originalAvailability(asset)
                             Button("Large Preview") { largePhoto = asset }

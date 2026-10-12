@@ -14,7 +14,7 @@
     "adapter": "adapters/catalog",
     "ownership": "LensWorks-owned regular source",
     "source_manifest": "engines/catalog/SOURCE_PROVENANCE.json",
-    "source_digest": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+    "source_digest": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
     "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211"
   },
   "Sparkle": {

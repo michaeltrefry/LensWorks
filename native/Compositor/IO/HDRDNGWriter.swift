@@ -1,14 +1,17 @@
 import Foundation
 
-/// Where a merged HDR photo came from, embedded in the DNG's XMP packet so the link
-/// to its source catalog photos travels with the file (E4: generated files use the
-/// ordinary media workflow and link to their source catalog photos).
+/// Where a merged HDR photo came from, embedded in the DNG's XMP packet so the record
+/// of its sources travels with the file. The catalog keeps its own copy of the link
+/// (LensWorksCatalogIndex.recordSources), which is what the app reads. The packet
+/// names each source by file name only and names no catalog: the file is meant to
+/// be shared, so it carries no local path.
 nonisolated struct LWHDRMergeProvenance: Codable, Equatable, Sendable {
     struct Source: Codable, Equatable, Sendable {
         let catalogImageID: String
         let assetID: String
         let variantID: String
-        let filePath: String
+        /// The source's file name; never a path.
+        let fileName: String
         let sha256: String
         /// Exposure relative to the reference frame, in stops.
         let relativeExposureEV: Double
@@ -17,7 +20,6 @@ nonisolated struct LWHDRMergeProvenance: Codable, Equatable, Sendable {
         let profile: String?
     }
     let documentID: String
-    let catalogPath: String?
     let deghost: Bool
     let referenceIndex: Int
     /// Stops a renderer adds to the stored (normalized) samples to reproduce the reference exposure.
@@ -33,7 +35,7 @@ nonisolated struct LWHDRMergeProvenance: Codable, Equatable, Sendable {
         }
         let ingredients = sources.map { s in
             """
-                <rdf:li rdf:parseType="Resource" stRef:filePath="\(esc(s.filePath))" lwhdr:catalogImageID="\(esc(s.catalogImageID))" lwhdr:assetID="\(esc(s.assetID))" lwhdr:variantID="\(esc(s.variantID))" lwhdr:sha256="\(esc(s.sha256))" lwhdr:relativeExposureEV="\(s.relativeExposureEV)" lwhdr:offsetX="\(s.offset.x)" lwhdr:offsetY="\(s.offset.y)"\(s.profile.map { " lwhdr:profile=\"\(esc($0))\"" } ?? "")/>
+                <rdf:li rdf:parseType="Resource" stRef:filePath="\(esc(s.fileName))" lwhdr:catalogImageID="\(esc(s.catalogImageID))" lwhdr:assetID="\(esc(s.assetID))" lwhdr:variantID="\(esc(s.variantID))" lwhdr:sha256="\(esc(s.sha256))" lwhdr:relativeExposureEV="\(s.relativeExposureEV)" lwhdr:offsetX="\(s.offset.x)" lwhdr:offsetY="\(s.offset.y)"\(s.profile.map { " lwhdr:profile=\"\(esc($0))\"" } ?? "")/>
             """
         }.joined(separator: "\n")
         let copied = reference.sorted { $0.key < $1.key }.map { " \($0.key)=\"\(esc($0.value))\"" }.joined()
@@ -41,7 +43,7 @@ nonisolated struct LWHDRMergeProvenance: Codable, Equatable, Sendable {
         <?xpacket begin="\u{FEFF}" id="W5M0MpCehiHzreSzNTczkc9d"?>
         <x:xmpmeta xmlns:x="adobe:ns:meta/">
          <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-          <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/" xmlns:lwhdr="\(Self.namespace)" xmp:CreatorTool="\(esc(creatorTool))" xmpMM:DocumentID="xmp.did:\(esc(documentID))" xmpMM:InstanceID="xmp.iid:\(esc(documentID))" lwhdr:deghost="\(deghost)" lwhdr:referenceIndex="\(referenceIndex)" lwhdr:baselineExposure="\(baselineExposure)"\(catalogPath.map { " lwhdr:catalogPath=\"\(esc($0))\"" } ?? "")\(copied)>
+          <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/" xmlns:lwhdr="\(Self.namespace)" xmp:CreatorTool="\(esc(creatorTool))" xmpMM:DocumentID="xmp.did:\(esc(documentID))" xmpMM:InstanceID="xmp.iid:\(esc(documentID))" lwhdr:deghost="\(deghost)" lwhdr:referenceIndex="\(referenceIndex)" lwhdr:baselineExposure="\(baselineExposure)"\(copied)>
            <xmpMM:Ingredients>
             <rdf:Bag>
         \(ingredients)
@@ -69,13 +71,13 @@ nonisolated struct LWHDRMergeProvenance: Codable, Equatable, Sendable {
                   let path = attr(item, "filePath", "http://ns.adobe.com/xap/1.0/sType/ResourceRef#"), let hash = attr(item, "sha256"),
                   let ev = attr(item, "relativeExposureEV").flatMap(Double.init), let x = attr(item, "offsetX").flatMap(Int.init),
                   let y = attr(item, "offsetY").flatMap(Int.init) else { throw LWHDRDNGError.missingProvenance }
-            return Source(catalogImageID: image, assetID: asset, variantID: variant, filePath: path, sha256: hash,
+            return Source(catalogImageID: image, assetID: asset, variantID: variant, fileName: path, sha256: hash,
                 relativeExposureEV: ev, offset: LWHDROffset(x: x, y: y), profile: attr(item, "profile"))
         }
         guard let documentID = attr(description, "DocumentID", "http://ns.adobe.com/xap/1.0/mm/")?.replacingOccurrences(of: "xmp.did:", with: ""),
               let deghost = attr(description, "deghost").flatMap(Bool.init), let reference = attr(description, "referenceIndex").flatMap(Int.init),
               let baseline = attr(description, "baselineExposure").flatMap(Double.init), !sources.isEmpty else { throw LWHDRDNGError.missingProvenance }
-        return Self(documentID: documentID, catalogPath: attr(description, "catalogPath"), deghost: deghost, referenceIndex: reference,
+        return Self(documentID: documentID, deghost: deghost, referenceIndex: reference,
             baselineExposure: baseline, sources: sources)
     }
 }
@@ -102,27 +104,44 @@ nonisolated enum LWHDRDNGWriter {
 
     static func normalization(_ result: LWHDRMergeResult) -> Float {
         var peak: Float = 0
-        for v in result.radiance { peak = max(peak, v.x, v.y, v.z) }
+        for value in result.samples { peak = max(peak, value) }
         return peak > 0 && peak.isFinite ? 1 / peak : 1
     }
 
+    /// The whole file in memory, for callers that want the bytes. Merge to HDR… uses `write`.
     static func encode(_ result: LWHDRMergeResult, provenance: LWHDRMergeProvenance, reference: [String: String] = [:]) throws -> Data {
-        let scale = normalization(result)
-        var pixels = Data(capacity: result.radiance.count * 12)
-        for v in result.radiance {
-            for c in [v.x, v.y, v.z] {
-                guard c.isFinite else { throw LWHDRDNGError.invalid }
-                var bits = (max(0, c) * scale).bitPattern.littleEndian
-                withUnsafeBytes(of: &bits) { pixels.append(contentsOf: $0) }
-            }
+        var file = Data()
+        try serialize(result, provenance: provenance, reference: reference) { file.append($0.bindMemory(to: UInt8.self)) }
+        return file
+    }
+
+    /// Writes the file at `url`, which must not exist, a block at a time: the sample strip is
+    /// scaled from the result straight to disk, with no whole-file buffer. An existing file is
+    /// never replaced. On a throw (disk full, cancellation) the partial file is left for the caller to remove.
+    static func write(_ result: LWHDRMergeResult, provenance: LWHDRMergeProvenance, reference: [String: String] = [:], to url: URL) throws {
+        let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO, userInfo: [NSFilePathErrorKey: url.path]) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        try serialize(result, provenance: provenance, reference: reference) { block in
+            try Task.checkCancellation()
+            try handle.write(contentsOf: Data(block))
         }
+        try handle.close()
+    }
+
+    /// Emits the file in order: the header, IFD and tag data, then the sample strip in blocks.
+    private static func serialize(_ result: LWHDRMergeResult, provenance: LWHDRMergeProvenance, reference: [String: String],
+                                  emit: (UnsafeRawBufferPointer) throws -> Void) throws {
+        let scale = normalization(result)
+        let pixelBytes = result.samples.count * MemoryLayout<Float>.stride
         let xmp = Data(provenance.xmp(reference: reference).utf8)
+        guard pixelBytes < Int(UInt32.max) else { throw LWHDRDNGError.invalid }
         let width = UInt32(result.width), height = UInt32(result.height)
         let entries: [(UInt16, Value)] = [
             (254, .long([0])), (256, .long([width])), (257, .long([height])),
             (258, .short([32, 32, 32])), (259, .short([1])), (262, .short([34892])),
             (273, .long([0])), (274, .short([1])), (277, .short([3])),
-            (278, .long([height])), (279, .long([UInt32(pixels.count)])), (284, .short([1])),
+            (278, .long([height])), (279, .long([UInt32(pixelBytes)])), (284, .short([1])),
             (305, .ascii("LensWorks Merge to HDR")),
             (339, .short([3, 3, 3])), (700, .byte(Array(xmp))),
             (50706, .byte([1, 4, 0, 0])), (50707, .byte([1, 4, 0, 0])),
@@ -142,20 +161,33 @@ nonisolated enum LWHDRDNGWriter {
         var pixelOffset = 8 + ifdSize + extra.count
         let padding = (4 - pixelOffset % 4) % 4
         pixelOffset += padding
-        guard pixelOffset + pixels.count < Int(UInt32.max) else { throw LWHDRDNGError.invalid }
+        guard pixelOffset + pixelBytes < Int(UInt32.max) else { throw LWHDRDNGError.invalid }
         if let strip = entries.firstIndex(where: { $0.0 == 273 }) { encodedEntries[strip] = encoded(.long([UInt32(pixelOffset)])) }
-        var file = Data([0x49, 0x49, 42, 0])
-        func put<T: FixedWidthInteger>(_ value: T) { var le = value.littleEndian; withUnsafeBytes(of: &le) { file.append(contentsOf: $0) } }
+        var header = Data([0x49, 0x49, 42, 0])
+        func put<T: FixedWidthInteger>(_ value: T) { var le = value.littleEndian; withUnsafeBytes(of: &le) { header.append(contentsOf: $0) } }
         put(UInt32(8)); put(UInt16(entries.count))
         for (index, entry) in entries.enumerated() {
             let item = encodedEntries[index]
             put(entry.0); put(item.type); put(item.count)
             if item.bytes.count > 4 { put(UInt32(extraOffsets[index])) }
-            else { file.append(item.bytes); file.append(Data(repeating: 0, count: 4 - item.bytes.count)) }
+            else { header.append(item.bytes); header.append(Data(repeating: 0, count: 4 - item.bytes.count)) }
         }
         put(UInt32(0))
-        file.append(extra); file.append(Data(repeating: 0, count: padding)); file.append(pixels)
-        return file
+        header.append(extra); header.append(Data(repeating: 0, count: padding))
+        try header.withUnsafeBytes { try emit($0) }
+        // Little-endian IEEE floats: the in-memory layout on every Mac LensWorks runs on (arm64).
+        var block = [Float](repeating: 0, count: min(result.samples.count, 1 << 18))
+        var offset = 0
+        while offset < result.samples.count {
+            let count = min(block.count, result.samples.count - offset)
+            for index in 0..<count {
+                let value = result.samples[offset + index]
+                guard value.isFinite else { throw LWHDRDNGError.invalid }
+                block[index] = max(0, value) * scale
+            }
+            try block.withUnsafeBytes { try emit(UnsafeRawBufferPointer(rebasing: $0[0..<(count * MemoryLayout<Float>.stride)])) }
+            offset += count
+        }
     }
 
     private enum Value { case byte([UInt8]), ascii(String), short([UInt16]), long([UInt32]), rational([Double]), srational([Double]) }

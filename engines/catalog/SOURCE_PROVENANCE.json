@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+  "source_digest": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1969,8 +1969,8 @@
     {
       "path": "src/application.rs",
       "mode": "100644",
-      "bytes": 144031,
-      "sha256": "aebc2c88485dafe6227a0601ca0b663df605cff5f7a804548a06d37dcd311a69"
+      "bytes": 144302,
+      "sha256": "3b55ae78107a56a13fde9b8926dceb8f8fb0fdaf89aab2658d31e3dab4d06fec"
     },
     {
       "path": "src/application/backup.rs",
@@ -3103,8 +3103,8 @@
     {
       "path": "src/filesystem_worker/import.rs",
       "mode": "100644",
-      "bytes": 58630,
-      "sha256": "28d015e792586176b935fbb41276ec7841e17815ba6068cefa49cf3eb4492e82"
+      "bytes": 63662,
+      "sha256": "24ca46300828eb322d3c5457fea6d7748e93dcef5b91fa0e50730012697eef75"
     },
     {
       "path": "src/filesystem_worker/lightroom_artifacts.rs",
@@ -3223,8 +3223,8 @@
     {
       "path": "src/import_preparation.rs",
       "mode": "100644",
-      "bytes": 78063,
-      "sha256": "2b3ab02ec2e5fe7c92a060ea9c7cbd5fef4ae90b1068350d39c9e41890770d97"
+      "bytes": 78354,
+      "sha256": "e5bbcd3748672d1589ecae42bc086353d6ff62d599d94d4998cdc0d04c1da2b4"
     },
     {
       "path": "src/import_readiness.rs",

@@ -235,8 +235,28 @@ impl Owner {
                         "import owner already active"
                     );
                     canceled(cancel)?;
-                    let source = source.to_path()?.canonicalize()?;
-                    ensure!(source.is_dir(), "import source must be a directory");
+                    // A regular file imports alone: the walk yields only that file.
+                    // Its import root is the deepest admitted original root that
+                    // holds it, so a file inside a known tree registers no new
+                    // root; otherwise the root is the file's own folder.
+                    let requested = source.to_path()?.canonicalize()?;
+                    let source = if requested.is_file() {
+                        let folder = requested
+                            .parent()
+                            .context("import source file has no folder")?;
+                        original_roots
+                            .iter()
+                            .filter_map(|root| root.to_path().ok()?.canonicalize().ok())
+                            .filter(|root| folder.starts_with(root))
+                            .max_by_key(|root| root.components().count())
+                            .unwrap_or_else(|| folder.to_path_buf())
+                    } else {
+                        requested.clone()
+                    };
+                    ensure!(
+                        source.is_dir(),
+                        "import source must be a directory or a regular file"
+                    );
                     ensure!(
                         !source.starts_with(catalog_root) && !catalog_root.starts_with(&source),
                         "catalog and originals must be separate directories"
@@ -266,7 +286,7 @@ impl Owner {
                         source_directory,
                         source_identity,
                         lock,
-                        walk: walkdir::WalkDir::new(&source)
+                        walk: walkdir::WalkDir::new(&requested)
                             .follow_links(false)
                             .max_open(16)
                             .into_iter(),
@@ -1652,6 +1672,113 @@ mod tests {
             )?,
             protocol::Value::Finished
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn a_regular_file_source_imports_only_that_file_under_its_folder_root() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let merged = fixture.originals.join("merged.dng");
+        fs::write(&merged, b"merged")?;
+        fs::write(fixture.originals.join("beside.jpg"), b"beside")?;
+        fs::create_dir(fixture.originals.join("sub"))?;
+        fs::write(fixture.originals.join("sub").join("below.jpg"), b"below")?;
+        let mut owner = Owner::default();
+        let transfer = LeaseId::new();
+        let mut step = 0;
+        match call(
+            &mut owner,
+            &fixture,
+            &transfer,
+            &mut step,
+            protocol::Action::Begin {
+                source: NativePath::from_path(&merged),
+            },
+        )? {
+            protocol::Value::Begun { source } => assert_eq!(source.to_path()?, fixture.originals),
+            value => anyhow::bail!("unexpected begin: {value:?}"),
+        }
+        assert_eq!(
+            next_header(&mut owner, &fixture, &transfer, &mut step)?,
+            merged
+        );
+        let grant = match call(
+            &mut owner,
+            &fixture,
+            &transfer,
+            &mut step,
+            protocol::Action::ValidateFile,
+        )? {
+            protocol::Value::FileValidated { grant } => grant,
+            value => anyhow::bail!("unexpected file validation: {value:?}"),
+        };
+        ensure!(matches!(
+            call(
+                &mut owner,
+                &fixture,
+                &transfer,
+                &mut step,
+                protocol::Action::ReleaseFile { grant }
+            )?,
+            protocol::Value::FileReleased { .. }
+        ));
+        // Neither the photo beside it nor the one in a subfolder is walked.
+        loop {
+            match call(
+                &mut owner,
+                &fixture,
+                &transfer,
+                &mut step,
+                protocol::Action::Next,
+            )? {
+                protocol::Value::WalkFinished => break,
+                protocol::Value::DirectoryEnd { .. } => {}
+                value => anyhow::bail!("a single-file import walked further: {value:?}"),
+            }
+        }
+        ensure!(matches!(
+            call(
+                &mut owner,
+                &fixture,
+                &transfer,
+                &mut step,
+                protocol::Action::Finish
+            )?,
+            protocol::Value::Finished
+        ));
+
+        // A file below an admitted root imports under that root: no root is added.
+        // Outside every admitted root it imports under its own folder, which is admitted.
+        let below = fixture.originals.join("sub").join("below.jpg");
+        for (mut roots, root) in [
+            (fixture.originals(), fixture.originals.clone()),
+            (Vec::new(), fixture.originals.join("sub")),
+        ] {
+            let transfer = LeaseId::new();
+            let begin = fixture.request(
+                &transfer,
+                0,
+                protocol::Action::Begin {
+                    source: NativePath::from_path(&below),
+                },
+            );
+            let cancel = AtomicBool::new(false);
+            match owner
+                .call_managed(&fixture.catalog, &[], &mut roots, &begin, &cancel)?
+                .value
+            {
+                protocol::Value::Begun { source } => assert_eq!(source.to_path()?, root),
+                value => anyhow::bail!("unexpected begin below a root: {value:?}"),
+            }
+            assert_eq!(roots, vec![NativePath::from_path(&root)]);
+            let abort = fixture.request(&transfer, 1, protocol::Action::Abort);
+            ensure!(matches!(
+                owner
+                    .call_managed(&fixture.catalog, &[], &mut roots, &abort, &cancel)?
+                    .value,
+                protocol::Value::Aborted
+            ));
+        }
         Ok(())
     }
 }

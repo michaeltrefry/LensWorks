@@ -2307,9 +2307,14 @@ impl Actor {
                     // canonical Begin reply becomes C's SQL identity.
                     path
                 } else {
+                    // A regular file imports alone; its folder is the original root.
                     let path = std::fs::canonicalize(path).map_err(|e| native(e.into()))?;
-                    core!(o.service.ensure_original_separate(&path));
-                    core!(o.service.register_original_root(&path));
+                    let root = match path.parent() {
+                        Some(parent) if path.is_file() => parent,
+                        _ => path.as_path(),
+                    };
+                    core!(o.service.ensure_original_separate(root));
+                    core!(o.service.register_original_root(root));
                     path
                 };
                 let import_lock = if managed_import {

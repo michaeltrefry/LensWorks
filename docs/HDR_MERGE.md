@@ -1,10 +1,10 @@
 # Merge to HDR (S43 / sc-25321)
 
-**Merge to HDR…** (registered command `catalog.hdr.merge`, catalog toolbar) merges 2–9 selected catalog photos into one new linear floating-point DNG. It is unavailable, and says why, unless a catalog is open, no other catalog action or import is running, and 2–9 photos are selected.
+**Merge to HDR…** (registered command `catalog.hdr.merge`, catalog toolbar) merges 2–9 selected catalog photos into one new linear floating-point DNG. It is unavailable, and says why, unless a catalog is open, no other catalog action, import or merge is running, and 2–9 photos are selected. While a merge runs, the toolbar shows its progress and **Cancel Merge to HDR** (`catalog.hdr.cancel`). Cancelling stops the work and leaves no file. Once the merged photo is being added to the catalog the merge can no longer be cancelled, and the command says so.
 
 ## Pipeline
 
-1. **Development.** Each source original is developed by the editor's own managed source development (`LWSourceDeveloper.createPlane`), RAW or raster, to extended-linear sRGB float. Originals are read only. Their SHA-256 is taken before development and checked again before the import; if any source changed, the DNG is deleted and nothing is imported.
+1. **Development.** Each source original is developed by the editor's own managed source development (`LWSourceDeveloper.createPlane`), RAW or raster, to extended-linear sRGB float. The developed plane is read in row strips of about 32 MiB into the merge's own frame storage (packed RGB half floats, 6 bytes per pixel), so a frame of any size passes through the 512 MiB float working set a strip at a time. Originals are read only. Their SHA-256 is taken before development and checked again before the DNG is put in place; if any source changed, nothing is written or imported.
 2. **Reference.** The reference is the frame with the median mean luminance, so the middle exposure of a bracket.
 3. **Alignment.** Each frame gets an integer translation found with median-threshold bitmaps (Ward 2003). Two searches run:
    - a coarse-to-fine pyramid search over up to six levels: ±1 at the coarsest level, then ±2 at each finer level, for large handheld shifts;
@@ -14,22 +14,57 @@
 4. **Exposure.** Each frame's linear exposure relative to the reference is the median of log2(Y_frame / Y_ref) over pixels that are well exposed in both frames. The median ignores the minority of pixels that moved. Frames that share too few well-exposed pixels are refused.
 5. **Weights.** Weight = hat(peak / clip) × exposure.
    - hat(t) = 1 − (2t − 1)^12.
-   - clip = 0.98 × max(1, the frame's brightest channel).
-   - A pixel gets weight 0 where any channel is clipped or its luminance is below 0.2 % of clip.
+   - clip is per channel: 0.98 × max(1, that channel's brightest sample in the frame). White-balanced RAW development leaves highlights unclipped, so a saturated sensor's channels reach different levels (each scaled by its white-balance gain); one level taken from the brightest channel would treat a pixel whose green is saturated, but below the red maximum, as well exposed. peak / clip is the largest of the three channel ratios.
+   - A pixel gets weight 0 where any channel reaches its clip or its luminance is below 0.2 % of the clip's luminance.
+   - The clip level is estimated from the developed frame, not read from the sensor's white level, which the developed plane does not carry. Two cases it does not detect: a source whose development scales sensor saturation below 1.0 (a DNG with negative BaselineExposure), and a frame in which a saturated strongly coloured subject raises a channel's maximum above the level where neutral highlights saturate.
    - A pixel no frame can supply takes its value from the darkest frame if it is clipped, from the brightest frame if it is in shadow, and from the reference when deghosting is on.
 6. **Deghosting (default on).** Each non-reference frame gets a motion mask. A pixel is masked when either:
    - both frames are valid and their radiances differ by more than 0.75 stop; or
    - the reference is clipped or underexposed there, and the frame breaks the lower or upper bound that the clipped or underexposed reference implies.
 
-   The mask is dilated by 2 px and feathered by 2 px. Masked weight is removed, so the reference frame alone supplies the region where something moved.
-7. **DNG.** The output is written beside the first source as `<reference>-HDR.dng`, with `-2`, `-3`… added if that name is taken. The format is an uncompressed DNG 1.4 LinearRaw file with 3 × 32-bit IEEE float samples (SampleFormat 3).
+   The mask is dilated by 2 px and feathered by 2 px. Masked weight is removed, so the reference frame alone supplies the region where something moved. Each mask is built for one frame, folded into that frame's weights and released.
+7. **DNG.** The output goes beside the first source as `<reference>-HDR.dng`, with `-2`, `-3`… added if that name is taken. It is streamed to a hidden temporary name and then moved into place with an exclusive rename, so an existing file is never replaced and a failed or cancelled write leaves nothing. The format is an uncompressed DNG 1.4 LinearRaw file with 3 × 32-bit IEEE float samples (SampleFormat 3).
    - **Color.** The camera space is linear sRGB D65: ColorMatrix1 is XYZ→sRGB, ForwardMatrix1 is Bradford sRGB→XYZ D50, AsShotNeutral is 1,1,1 and CalibrationIlluminant1 is D65.
    - **Samples.** Samples are normalized so the brightest channel is 1.0. BaselineExposure = log2(peak radiance) restores the reference exposure in renderers that apply it.
    - **XMP.** The XMP packet holds the provenance:
-     - `xmpMM:Ingredients`, one per source, with `stRef:filePath`, catalog image, asset and variant IDs, SHA-256, relative exposure (EV), alignment offset and embedded profile name;
+     - `xmpMM:Ingredients`, one per source, with `stRef:filePath` (the source's file name only), catalog image, asset and variant IDs, SHA-256, relative exposure (EV), alignment offset and embedded profile name;
      - the deghost setting and the reference index;
      - the reference frame's Make, Model, Lens and DateTimeOriginal.
-8. **Catalog.** The source folder is re-imported through the ordinary folder import, which leaves already-cataloged files unchanged. The one new DNG becomes the new catalog item and is selected. The menu command then creates a working version, so the merge opens in the editor as a live RAW source with Camera Raw controls under editable layers. The link from the merged item to its sources is the ingredient record inside its own original (`LWDNGInspection.provenance()`).
+
+     The file is meant to be shared, so the packet holds no local path: no source folder, no catalog path.
+8. **Catalog.** Only the written file is imported, through the engine's single-file import route (`ImportStart` with a regular file as its source: the file's folder is the import root, and nothing else in it or below it is walked). Other photos in that folder that the catalog has not imported stay out of the catalog, and the folder-import resume source is not replaced. The new catalog photo is found by its original's location, never by file name alone, and becomes the selected photo; the browse scope, filters and search text stay as they were, even when the merged photo falls outside them. If the import ends without admitting the file, the file is removed.
+9. **Link.** The merged photo's sources are recorded against it in the catalog: the LensWorks catalog index (`derived_sources`: catalog, merged photo, position, source image, asset and variant IDs, source file name) holds them, and `LensWorksCatalog.hdrMergeSources(of:)` reads them back. The photo details show "HDR merge of N photos" with the source names, and **Select HDR Source Photos** (`catalog.hdr.selectSources`) makes the sources the catalog selection. The DNG's XMP carries the same record so it travels with the file.
+10. **Editing.** The toolbar command then creates a working version, so the merge opens in the editor as a live RAW source with Camera Raw controls under editable layers.
+
+## Memory
+
+The merge holds, per pixel:
+
+| What | Bytes per pixel |
+| --- | --- |
+| Each loaded frame (packed RGB half floats) | 6 |
+| Radiance sum, which becomes the result in place | 12 |
+| Weight total and flags | 5 |
+| One frame's motion-mask scratch | 9 |
+| Alignment scratch the allocator still holds after it is freed | about 6 |
+
+Working memory is budgeted as pixels × (6 × frames + 32). The exposure estimate reads a regular grid of at most about 8 million pixels, and the DNG is streamed to disk from the result, so neither adds a per-pixel buffer.
+
+The 32 is measured, not only counted: a release build of the merger and writer on generated 8192 × 5464 (44.8 MP) brackets had a peak memory footprint of 2.20 GB with 3 frames, 2.74 GB with 5 and 3.82 GB with 9, which is 31.1 to 31.3 bytes per pixel above the frames. macOS keeps freed large blocks in the process, so the peak is the sum of what the merge ever holds at once plus that retained scratch. Those merges took 12 s, 22 s and 47 s on one core, and each write about 3 s. The figures exclude source development, which runs in the decode helper and the 512 MiB float working set.
+
+The budget is 3/8 of physical memory and never less than 6 GiB, the figure for the product-minimum 16 GB Mac. `LWHDRMerger.admit` checks it as soon as the first photo's dimensions are known, before any frame is loaded, and refuses with the photo count, the dimensions, the memory needed and the budget. Catalog rows carry no pixel dimensions, so the command cannot be disabled for this in advance.
+
+On the 16 GB Mac's 6 GiB budget the largest brackets admitted are:
+
+| Frames | Bytes per pixel | Largest frame |
+| --- | --- | --- |
+| 2 | 44 | 146 MP |
+| 3 | 50 | 128 MP |
+| 5 | 62 | 103 MP |
+| 7 | 74 | 87 MP |
+| 9 | 86 | 74 MP |
+
+A 9-frame bracket of 45 MP files is budgeted at 3.8 GB and a 5-frame bracket at 2.8 GB.
 
 ## Ghosting metric
 

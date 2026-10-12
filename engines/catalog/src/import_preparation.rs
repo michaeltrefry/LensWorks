@@ -206,9 +206,17 @@ impl Preparation {
         catalog.require_jobs_released()?;
         let managed = catalog.session.managed_import_root();
         if managed.is_none() {
-            ensure!(source.is_dir(), "import source must be a directory");
+            // A regular file imports alone; the walk then yields only that file.
+            let root = match source.parent() {
+                Some(parent) if source.is_file() => parent,
+                _ => source,
+            };
             ensure!(
-                !source.starts_with(&catalog.root) && !catalog.root.starts_with(source),
+                root.is_dir(),
+                "import source must be a directory or a regular file"
+            );
+            ensure!(
+                !root.starts_with(&catalog.root) && !catalog.root.starts_with(root),
                 "catalog and originals must be separate directories"
             );
         }

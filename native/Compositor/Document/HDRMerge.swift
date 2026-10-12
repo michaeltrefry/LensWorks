@@ -1,19 +1,74 @@
 import Foundation
 
 /// One bracket frame developed by the editor's source development into
-/// extended-linear sRGB float (straight alpha is ignored by the merge).
+/// extended-linear sRGB, held as packed RGB half floats: 6 bytes per pixel
+/// (alpha is ignored by the merge). Half floats keep 11 significant bits per
+/// stop over ±65504, which is finer than a camera sample, at 3/8 of the memory
+/// of the developed float RGBA.
 nonisolated struct LWHDRFrame: Sendable {
     let width: Int
     let height: Int
-    var pixels: [SIMD4<Float>]
-    init(width: Int, height: Int, pixels: [SIMD4<Float>]) throws {
+    /// R, G, B per pixel, row-major.
+    let samples: [Float16]
+    /// The frame's pixels as float RGB with alpha 1.
+    struct Pixels: RandomAccessCollection, Sendable {
+        let samples: [Float16]
+        var startIndex: Int { 0 }
+        var endIndex: Int { samples.count / 3 }
+        subscript(index: Int) -> SIMD4<Float> {
+            SIMD4(Float(samples[index * 3]), Float(samples[index * 3 + 1]), Float(samples[index * 3 + 2]), 1)
+        }
+    }
+    var pixels: Pixels { Pixels(samples: samples) }
+    init(width: Int, height: Int, samples: [Float16]) throws {
+        guard width > 0, height > 0, samples.count == width * height * 3 else { throw LWHDRMergeError.invalidFrame }
+        self.width = width; self.height = height; self.samples = samples
+    }
+    init<C: Collection>(width: Int, height: Int, pixels: C) throws where C.Element == SIMD4<Float> {
         guard width > 0, height > 0, pixels.count == width * height else { throw LWHDRMergeError.invalidFrame }
-        self.width = width; self.height = height; self.pixels = pixels
+        var samples = [Float16](); samples.reserveCapacity(pixels.count * 3)
+        for p in pixels { samples.append(Self.pack(p.x)); samples.append(Self.pack(p.y)); samples.append(Self.pack(p.z)) }
+        try self.init(width: width, height: height, samples: samples)
+    }
+    /// A finite sample is clamped into the half-float range; a non-finite one stays non-finite.
+    @inline(__always) static func pack(_ value: Float) -> Float16 {
+        let limit = Float(Float16.greatestFiniteMagnitude)
+        return value.isFinite ? Float16(max(-limit, min(limit, value))) : Float16(value)
+    }
+    @inline(__always) func rgb(_ pixel: Int) -> SIMD3<Float> {
+        SIMD3(Float(samples[pixel * 3]), Float(samples[pixel * 3 + 1]), Float(samples[pixel * 3 + 2]))
+    }
+
+    /// Bytes of developed float RGBA one strip read asks the plane for. A read charges the shared
+    /// float working set (512 MiB) twice this plus two tiles, so strips stay far below it.
+    static let stripBytes = 32 * 1024 * 1024
+    /// Loads a developed plane in bounded row strips; the whole frame never passes through the
+    /// float working set at once.
+    @_optimize(speed) init(plane: LWFloatPlane) throws {
+        let width = plane.width, height = plane.height
+        guard width > 0, height > 0 else { throw LWHDRMergeError.invalidFrame }
+        var samples = [Float16](repeating: 0, count: width * height * 3)
+        let rows = max(1, min(height, Self.stripBytes / (width * MemoryLayout<SIMD4<Float>>.stride)))
+        var y = 0
+        while y < height {
+            try Task.checkCancellation()
+            let count = min(rows, height - y)
+            let strip = try plane.read(LWFloatRange(x: 0, y: y, width: width, height: count)).surface.pixels
+            guard strip.count == width * count else { throw LWHDRMergeError.invalidFrame }
+            let base = y * width * 3
+            samples.withUnsafeMutableBufferPointer { target in
+                var o = base
+                for p in strip { target[o] = Self.pack(p.x); target[o + 1] = Self.pack(p.y); target[o + 2] = Self.pack(p.z); o += 3 }
+            }
+            y += count
+        }
+        try self.init(width: width, height: height, samples: samples)
     }
 }
 
 nonisolated enum LWHDRMergeError: LocalizedError, Equatable {
     case invalidFrame, tooFewFrames, tooManyFrames, sizeMismatch, insufficientOverlap
+    case tooLarge(frames: Int, width: Int, height: Int, neededBytes: Int, budgetBytes: Int)
     var errorDescription: String? {
         switch self {
         case .invalidFrame: "A bracketed photo did not develop to a usable image."
@@ -21,6 +76,9 @@ nonisolated enum LWHDRMergeError: LocalizedError, Equatable {
         case .tooManyFrames: "Select at most \(LWHDRMerger.maximumFrames) bracketed photos."
         case .sizeMismatch: "Bracketed photos must all have the same pixel dimensions."
         case .insufficientOverlap: "These photos do not share enough well-exposed pixels to be merged as one bracket."
+        case .tooLarge(let frames, let width, let height, let needed, let budget):
+            String(format: "Merging %d photos of %d × %d (%.0f MP) needs about %.1f GB of memory; this Mac allows %.1f GB for a merge. Select fewer photos.",
+                frames, width, height, Double(width * height) / 1e6, Double(needed) / 1e9, Double(budget) / 1e9)
         }
     }
 }
@@ -36,7 +94,16 @@ nonisolated struct LWHDRMergeOptions: Sendable, Equatable {
 nonisolated struct LWHDRMergeResult: Sendable {
     let width: Int
     let height: Int
-    let radiance: [SIMD3<Float>]
+    /// R, G, B per pixel, row-major: 12 bytes per pixel.
+    let samples: [Float]
+    /// The merged pixels as float RGB.
+    struct Radiance: RandomAccessCollection, Sendable {
+        let samples: [Float]
+        var startIndex: Int { 0 }
+        var endIndex: Int { samples.count / 3 }
+        subscript(index: Int) -> SIMD3<Float> { SIMD3(samples[index * 3], samples[index * 3 + 1], samples[index * 3 + 2]) }
+    }
+    var radiance: Radiance { Radiance(samples: samples) }
     let referenceIndex: Int
     /// Linear exposure of each input relative to the reference (reference = 1).
     let exposures: [Double]
@@ -57,14 +124,58 @@ nonisolated enum LWHDRMerger {
     static let maskDilation = 2
     static let maskFeather = 2
 
+    // MARK: Working memory (docs/HDR_MERGE.md, "Memory")
+
+    /// Each loaded frame: packed RGB half floats.
+    static let frameBytesPerPixel = 6
+    /// Everything else at the peak: the radiance sum (12), weight total (4) and flags (1), one
+    /// frame's motion-mask scratch (9), and the alignment scratch (about 6) that the allocator
+    /// still holds after it is freed. Measured peak footprint on 3-, 5- and 9-frame 45 MP
+    /// brackets is 31.1 to 31.3 bytes per pixel above the frames. The file is streamed to disk
+    /// from the result, so writing adds no whole-file buffer.
+    static let sharedBytesPerPixel = 32
+    /// The merge budget on the product-minimum 16 GB Mac.
+    static let minimumBudgetBytes = 6 * 1024 * 1024 * 1024
+    /// 3/8 of physical memory, and never less than the 16 GB Mac's budget.
+    static var budgetBytes: Int { max(minimumBudgetBytes, Int(clamping: ProcessInfo.processInfo.physicalMemory / 8 * 3)) }
+    static func workingBytes(frames: Int, width: Int, height: Int) -> Int {
+        let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+        let (bytes, overflowed) = pixels.multipliedReportingOverflow(by: frames * frameBytesPerPixel + sharedBytesPerPixel)
+        return overflow || overflowed ? .max : bytes
+    }
+    /// Refuses, with the numbers, a merge whose working memory exceeds the budget.
+    static func admit(frames: Int, width: Int, height: Int, budget: Int = budgetBytes) throws {
+        guard width > 0, height > 0 else { throw LWHDRMergeError.invalidFrame }
+        let needed = workingBytes(frames: frames, width: width, height: height)
+        guard needed <= budget else {
+            throw LWHDRMergeError.tooLarge(frames: frames, width: width, height: height, neededBytes: needed, budgetBytes: budget)
+        }
+    }
+
     static func luminance(_ v: SIMD4<Float>) -> Float { 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z }
     static func luminance(_ v: SIMD3<Float>) -> Float { 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z }
 
-    /// The level above which a frame's channel is treated as clipped: just below its own white.
-    static func clipLevel(_ frame: LWHDRFrame) -> Float {
-        var white: Float = 0
-        for p in frame.pixels { white = max(white, p.x, p.y, p.z) }
-        return 0.98 * max(1, white)
+    /// The level above which each of a frame's channels is treated as clipped: just below that
+    /// channel's own white. White-balanced RAW development leaves highlights unclipped, so the
+    /// channels of a saturated sensor reach different levels (the engine's DNG and LibRaw paths
+    /// both scale each channel by its white-balance gain); one level taken from the brightest
+    /// channel would call a pixel whose green is saturated, but below the red maximum, well exposed.
+    static func clipLevel(_ frame: LWHDRFrame) -> SIMD3<Float> {
+        var white = SIMD3<Float>(repeating: 1)
+        frame.samples.withUnsafeBufferPointer { samples in
+            for p in stride(from: 0, to: samples.count, by: 3) {
+                white = pointwiseMax(white, SIMD3(Float(samples[p]), Float(samples[p + 1]), Float(samples[p + 2])))
+            }
+        }
+        return 0.98 * white
+    }
+    @inline(__always) static func clipped(_ v: SIMD3<Float>, _ clip: SIMD3<Float>) -> Bool { v.x >= clip.x || v.y >= clip.y || v.z >= clip.z }
+
+    /// The regular grid the exposure estimate reads: every pixel of a frame up to about 4 MP,
+    /// then every `step`-th pixel in x and in y, which keeps about 4 million of them.
+    static func exposureGrid(width: Int, height: Int) -> (step: Int, samples: Int) {
+        let step = max(1, Int((Double(width * height) / 4_000_000).squareRoot()))
+        return (step, ((width + step - 1) / step) * ((height + step - 1) / step))
     }
 
     /// The reference frame: the median exposure, ordered by mean luminance.
@@ -79,111 +190,127 @@ nonisolated enum LWHDRMerger {
         guard frames.count <= maximumFrames else { throw LWHDRMergeError.tooManyFrames }
         let width = frames[0].width, height = frames[0].height, count = width * height
         guard frames.allSatisfy({ $0.width == width && $0.height == height }) else { throw LWHDRMergeError.sizeMismatch }
+        try admit(frames: frames.count, width: width, height: height)
         let clips = frames.map(clipLevel)
-        let floors = clips.map { $0 * 0.002 }
+        let floors = clips.map { luminance($0) * 0.002 }
         let reference = referenceIndex(frames)
 
         var offsets = Array(repeating: LWHDROffset(x: 0, y: 0), count: frames.count)
         if options.align {
             for index in frames.indices where index != reference {
                 try Task.checkCancellation()
-                offsets[index] = align(frames[index], clip: clips[index], to: frames[reference], referenceClip: clips[reference])
+                offsets[index] = align(frames[index], clip: luminance(clips[index]), to: frames[reference], referenceClip: luminance(clips[reference]))
             }
         }
-        func sample(_ index: Int, _ x: Int, _ y: Int) -> SIMD4<Float>? {
+        func sample(_ index: Int, _ x: Int, _ y: Int) -> SIMD3<Float>? {
             let sx = x + offsets[index].x, sy = y + offsets[index].y
             guard sx >= 0, sy >= 0, sx < width, sy < height else { return nil }
-            return frames[index].pixels[sy * width + sx]
+            return frames[index].rgb(sy * width + sx)
         }
-        func valid(_ index: Int, _ v: SIMD4<Float>) -> Bool {
-            max(v.x, v.y, v.z) < clips[index] && luminance(v) > floors[index]
+        func valid(_ index: Int, _ v: SIMD3<Float>) -> Bool {
+            !clipped(v, clips[index]) && luminance(v) > floors[index]
         }
 
         // Exposure of each frame relative to the reference: the median log ratio over
-        // pixels well exposed in both (robust to the minority of moving pixels).
+        // pixels well exposed in both (robust to the minority of moving pixels). A frame
+        // above about 4 MP is sampled on a regular grid of about 4 million pixels: the
+        // median of that many is the same, and the ratios stay a few megabytes.
         var exposures = Array(repeating: 1.0, count: frames.count)
+        let (step, sampled) = exposureGrid(width: width, height: height)
         for index in frames.indices where index != reference {
             try Task.checkCancellation()
             var ratios: [Float] = []
-            ratios.reserveCapacity(count / 4)
-            for y in 0..<height {
-                for x in 0..<width {
+            ratios.reserveCapacity(sampled)
+            for y in stride(from: 0, to: height, by: step) {
+                if y % 64 == 0 { try Task.checkCancellation() }
+                for x in stride(from: 0, to: width, by: step) {
                     guard let v = sample(index, x, y) else { continue }
-                    let r = frames[reference].pixels[y * width + x]
+                    let r = frames[reference].rgb(y * width + x)
                     guard valid(index, v), valid(reference, r), luminance(v) > floors[index] * 4, luminance(r) > floors[reference] * 4 else { continue }
                     ratios.append(log2(luminance(v) / luminance(r)))
                 }
             }
-            guard ratios.count >= max(16, count / 100) else { throw LWHDRMergeError.insufficientOverlap }
+            guard ratios.count >= max(16, sampled / 100) else { throw LWHDRMergeError.insufficientOverlap }
             ratios.sort()
             exposures[index] = Double(exp2(ratios[ratios.count / 2]))
         }
 
-        // Motion masks: a frame disagrees with the reference by more than motionStops
+        // Motion mask of one frame: it disagrees with the reference by more than motionStops
         // where both are valid, or violates the bound a clipped / underexposed reference sets.
-        var masks = Array(repeating: [Float](), count: frames.count)
-        var maskedPixels = Array(repeating: 0, count: frames.count)
-        if options.deghost {
-            let tolerance = exp2(motionStops)
-            for index in frames.indices where index != reference {
-                try Task.checkCancellation()
+        // Built for one frame at a time and folded into that frame's weights, never retained.
+        func motionMask(_ index: Int) throws -> [Float] {
+            let tolerance = exp2(motionStops), e = Float(exposures[index])
+            let dilated: [Bool] = try {
                 var raw = [Bool](repeating: false, count: count)
-                let e = Float(exposures[index])
                 for y in 0..<height {
+                    if y % 64 == 0 { try Task.checkCancellation() }
                     for x in 0..<width {
                         guard let v = sample(index, x, y), valid(index, v) else { continue }
-                        let r = frames[reference].pixels[y * width + x]
+                        let r = frames[reference].rgb(y * width + x)
                         let radiance = luminance(v) / e, referenceRadiance = luminance(r)
                         if valid(reference, r) {
                             raw[y * width + x] = abs(log2(radiance / referenceRadiance)) > motionStops
-                        } else if max(r.x, r.y, r.z) >= clips[reference] {
+                        } else if clipped(r, clips[reference]) {
                             raw[y * width + x] = radiance * tolerance < referenceRadiance
                         } else {
                             raw[y * width + x] = radiance > max(referenceRadiance, floors[reference]) * tolerance
                         }
                     }
                 }
-                let soft = feather(dilate(raw, width: width, height: height, radius: maskDilation), width: width, height: height, radius: maskFeather)
-                masks[index] = soft
-                maskedPixels[index] = soft.reduce(0) { $0 + ($1 > 0 ? 1 : 0) }
-            }
+                return dilate(raw, width: width, height: height, radius: maskDilation)
+            }()
+            return feather(dilated, width: width, height: height, radius: maskFeather)
         }
 
-        // Weighted radiance average: a hat on each frame's own level (zero when clipped
-        // or at the noise floor) times its exposure (longer exposures carry less noise).
-        var radiance = [SIMD3<Float>](repeating: .zero, count: count)
+        // Weighted radiance average, accumulated one frame at a time: a hat on each frame's own
+        // level (zero when clipped or at the noise floor) times its exposure (longer exposures
+        // carry less noise), times what the frame's motion mask leaves.
+        var sum = [Float](repeating: 0, count: count * 3)
+        var total = [Float](repeating: 0, count: count)
+        var flags = [UInt8](repeating: 0, count: count)  // 1: clipped in some frame; 2: masked as moving in some frame
+        var maskedPixels = Array(repeating: 0, count: frames.count)
+        for index in frames.indices {
+            try Task.checkCancellation()
+            let mask = options.deghost && index != reference ? try motionMask(index) : []
+            maskedPixels[index] = mask.reduce(0) { $0 + ($1 > 0 ? 1 : 0) }
+            let e = Float(exposures[index]), clip = clips[index], floor = floors[index]
+            for y in 0..<height {
+                if y % 64 == 0 { try Task.checkCancellation() }
+                for x in 0..<width {
+                    guard let v = sample(index, x, y) else { continue }
+                    let p = y * width + x
+                    if clipped(v, clip) { flags[p] |= 1; continue }
+                    guard luminance(v) > floor else { continue }
+                    let t = max(v.x / clip.x, v.y / clip.y, v.z / clip.z)
+                    var w = max(0, 1 - pow(2 * t - 1, 12)) * e
+                    if !mask.isEmpty, mask[p] > 0 { w *= 1 - mask[p]; flags[p] |= 2 }
+                    guard w > 0 else { continue }
+                    let scaled = v / e * w
+                    sum[p * 3] += scaled.x; sum[p * 3 + 1] += scaled.y; sum[p * 3 + 2] += scaled.z
+                    total[p] += w
+                }
+            }
+        }
+        // The sum becomes the radiance in place.
         let darkest = exposures.indices.min { exposures[$0] < exposures[$1] }!
         let brightest = exposures.indices.max { exposures[$0] < exposures[$1] }!
         for y in 0..<height {
             if y % 64 == 0 { try Task.checkCancellation() }
             for x in 0..<width {
                 let p = y * width + x
-                var sum = SIMD3<Float>.zero, total: Float = 0, anyClipped = false, moved = false
-                for index in frames.indices {
-                    guard let v = sample(index, x, y) else { continue }
-                    let peak = max(v.x, v.y, v.z)
-                    if peak >= clips[index] { anyClipped = true; continue }
-                    guard luminance(v) > floors[index] else { continue }
-                    let t = peak / clips[index]
-                    var w = max(0, 1 - pow(2 * t - 1, 12)) * Float(exposures[index])
-                    if options.deghost, index != reference, masks[index][p] > 0 { w *= 1 - masks[index][p]; moved = true }
-                    guard w > 0 else { continue }
-                    sum += SIMD3(v.x, v.y, v.z) / Float(exposures[index]) * w
-                    total += w
-                }
-                if total > 0 {
-                    radiance[p] = sum / total
+                if total[p] > 0 {
+                    sum[p * 3] /= total[p]; sum[p * 3 + 1] /= total[p]; sum[p * 3 + 2] /= total[p]
                 } else {
                     // Nothing usable: a clipped highlight takes the darkest frame, a shadow the
                     // brightest; with deghosting a moving region keeps the reference.
-                    var chosen = moved ? reference : (anyClipped ? darkest : brightest)
+                    var chosen = flags[p] & 2 != 0 ? reference : (flags[p] & 1 != 0 ? darkest : brightest)
                     if sample(chosen, x, y) == nil { chosen = reference }
-                    let v = sample(chosen, x, y)!
-                    radiance[p] = SIMD3(max(0, v.x), max(0, v.y), max(0, v.z)) / Float(exposures[chosen])
+                    let v = sample(chosen, x, y)! / Float(exposures[chosen])
+                    sum[p * 3] = max(0, v.x); sum[p * 3 + 1] = max(0, v.y); sum[p * 3 + 2] = max(0, v.z)
                 }
             }
         }
-        return LWHDRMergeResult(width: width, height: height, radiance: radiance, referenceIndex: reference,
+        return LWHDRMergeResult(width: width, height: height, samples: sum, referenceIndex: reference,
             exposures: exposures, offsets: offsets, maskedPixels: maskedPixels, options: options)
     }
 
@@ -291,18 +418,17 @@ nonisolated enum LWHDRMerger {
 
     /// Box-feathers a dilated mask outward; masked pixels stay fully masked.
     static func feather(_ mask: [Bool], width: Int, height: Int, radius: Int) -> [Float] {
-        let hard = mask.map { $0 ? Float(1) : 0 }
-        guard radius > 0 else { return hard }
+        guard radius > 0 else { return mask.map { $0 ? 1 : 0 } }
         let side = Float(2 * radius + 1)
-        var horizontal = [Float](repeating: 0, count: hard.count)
+        var horizontal = [Float](repeating: 0, count: mask.count)
         for y in 0..<height {
             for x in 0..<width {
                 var s: Float = 0
-                for nx in max(0, x - radius)...min(width - 1, x + radius) { s += hard[y * width + nx] }
+                for nx in max(0, x - radius)...min(width - 1, x + radius) where mask[y * width + nx] { s += 1 }
                 horizontal[y * width + x] = s / side
             }
         }
-        var result = [Float](repeating: 0, count: hard.count)
+        var result = [Float](repeating: 0, count: mask.count)
         for y in 0..<height {
             for x in 0..<width {
                 var s: Float = 0
@@ -330,12 +456,12 @@ nonisolated struct LWHDRRegion: Codable, Equatable, Sendable {
 nonisolated enum LWHDRGhostingMetric {
     static let epsilon: Float = 1e-4
     static func measure(_ result: LWHDRMergeResult, reference: LWHDRFrame, region: [LWHDRRegion]) -> (value: Double, pixels: Int) {
-        let clip = LWHDRMerger.clipLevel(reference), floor = clip * 0.002
+        let clip = LWHDRMerger.clipLevel(reference), floor = LWHDRMerger.luminance(clip) * 0.002
         var sum = 0.0, pixels = 0
         for y in 0..<result.height {
             for x in 0..<result.width where region.contains(where: { $0.contains(x: x, y: y) }) {
-                let r = reference.pixels[y * result.width + x]
-                guard max(r.x, r.y, r.z) < clip, LWHDRMerger.luminance(r) > floor else { continue }
+                let r = reference.rgb(y * result.width + x)
+                guard !LWHDRMerger.clipped(r, clip), LWHDRMerger.luminance(r) > floor else { continue }
                 let merged = LWHDRMerger.luminance(result.radiance[y * result.width + x])
                 sum += Double(abs(log2(merged + epsilon) - log2(LWHDRMerger.luminance(r) + epsilon)))
                 pixels += 1
