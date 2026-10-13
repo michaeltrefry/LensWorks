@@ -1265,6 +1265,7 @@ nonisolated indirect enum LWApplicationDtoRequest: Codable, Sendable {
     case Folders(catalog: String, parent: LWCatalogI64?, after: LWCatalogI64, limit: UInt16)
     case Images(catalog: String, folder: LWCatalogI64?, recursive: Bool, text: String?, cursor: String?, limit: UInt16)
     case Search(catalog: String, options: LWApplicationBrowseOptions, cursor: String?, limit: UInt16)
+    case SearchAmong(catalog: String, options: LWApplicationBrowseOptions, keys: [LWCatalogEditsVariantKey], limit: UInt16)
     case Image(catalog: String, key: LWCatalogEditsVariantKey)
     case Variant(catalog: String, key: LWCatalogEditsVariantKey)
     case Variants(catalog: String, asset_id: String, after: LWCatalogI64, limit: UInt16)
@@ -1438,6 +1439,12 @@ nonisolated indirect enum LWApplicationDtoRequest: Codable, Sendable {
             let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
             try payload.lwRequireKeys(["catalog", "options", "cursor", "limit"])
             self = .Search(catalog: try payload.decode(String.self, forKey: LWCatalogCodingKey("catalog")), options: try payload.decode(LWApplicationBrowseOptions.self, forKey: LWCatalogCodingKey("options")), cursor: try payload.decodeIfPresent(String.self, forKey: LWCatalogCodingKey("cursor")), limit: try payload.decode(UInt16.self, forKey: LWCatalogCodingKey("limit")))
+        case "search_among":
+            try container.lwRequireKeys(["command", "args"])
+            let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
+            let payload = try payloadDecoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.lwRequireKeys(["catalog", "options", "keys", "limit"])
+            self = .SearchAmong(catalog: try payload.decode(String.self, forKey: LWCatalogCodingKey("catalog")), options: try payload.decode(LWApplicationBrowseOptions.self, forKey: LWCatalogCodingKey("options")), keys: try payload.decode([LWCatalogEditsVariantKey].self, forKey: LWCatalogCodingKey("keys")), limit: try payload.decode(UInt16.self, forKey: LWCatalogCodingKey("limit")))
         case "image":
             try container.lwRequireKeys(["command", "args"])
             let payloadDecoder = try container.superDecoder(forKey: LWCatalogCodingKey("args"))
@@ -1701,6 +1708,15 @@ nonisolated indirect enum LWApplicationDtoRequest: Codable, Sendable {
             try payload.encode(value0, forKey: LWCatalogCodingKey("catalog"))
             try payload.encode(value1, forKey: LWCatalogCodingKey("options"))
             try payload.encode(value2, forKey: LWCatalogCodingKey("cursor"))
+            try payload.encode(value3, forKey: LWCatalogCodingKey("limit"))
+        case .SearchAmong(let value0, let value1, let value2, let value3):
+            var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
+            try container.encode("search_among", forKey: LWCatalogCodingKey("command"))
+            let payloadEncoder = container.superEncoder(forKey: LWCatalogCodingKey("args"))
+            var payload = payloadEncoder.container(keyedBy: LWCatalogCodingKey.self)
+            try payload.encode(value0, forKey: LWCatalogCodingKey("catalog"))
+            try payload.encode(value1, forKey: LWCatalogCodingKey("options"))
+            try payload.encode(value2, forKey: LWCatalogCodingKey("keys"))
             try payload.encode(value3, forKey: LWCatalogCodingKey("limit"))
         case .Image(let value0, let value1):
             var container = encoder.container(keyedBy: LWCatalogCodingKey.self)

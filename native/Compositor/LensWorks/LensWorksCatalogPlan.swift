@@ -214,6 +214,7 @@ extension LensWorksCatalog {
                     guard let key = selectedAsset?.key, let exposure = action.exposureEV, exposure.isFinite else { throw LensWorksCatalogError.message("Select a photo and supply finite exposure.") }
                     let before = try await service.variant(key)
                     let after = try await service.setExposure(key, value: Float(exposure))
+                    await invalidateSemantic(key, row: selectedAsset) // the photo's pixels changed: its embedding is owed again
                     await service.cancelPreviews()
                     await refresh()
                     additional["beforeVariant"] = try wire(before); additional["afterVariant"] = try wire(after)

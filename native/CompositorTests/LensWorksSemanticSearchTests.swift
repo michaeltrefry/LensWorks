@@ -18,8 +18,14 @@ nonisolated final class LensWorksStubEmbedder: LensWorksSemanticEmbedder, @unche
     private var _batches: [Int] = []
     private var _texts: [String] = []
     private var _releases = 0
+    private var _embedding = 0
+    private var _releasesUnderAnEmbed = 0
     /// Called before each image batch is embedded (a test can hold or cancel there).
     var beforeBatch: (@Sendable (Int) async throws -> Void)?
+    /// Called before a text is embedded (a test can hold there).
+    var beforeText: (@Sendable (String) async throws -> Void)?
+    /// Called before the model's availability is answered (a test can hold there).
+    var beforeModel: (@Sendable () async -> Void)?
 
     init(identity: String = "stub-model-a", unavailable: LensWorksSemanticUnavailable? = nil) { _identity = identity; _unavailable = unavailable }
 
@@ -30,8 +36,11 @@ nonisolated final class LensWorksStubEmbedder: LensWorksSemanticEmbedder, @unche
     var imagesEmbedded: Int { locked { _batches.reduce(0, +) } }
     var texts: [String] { locked { _texts } }
     var releases: Int { locked { _releases } }
+    /// How many times the model was released while an embedding job was still running.
+    var releasesUnderAnEmbed: Int { locked { _releasesUnderAnEmbed } }
 
     func model() async -> Result<LensWorksSemanticModel, LensWorksSemanticUnavailable> {
+        await beforeModel?()
         if let unavailable { return .failure(unavailable) }
         return .success(.init(identity: identity, name: "Stub"))
     }
@@ -51,6 +60,7 @@ nonisolated final class LensWorksStubEmbedder: LensWorksSemanticEmbedder, @unche
     }
 
     func embed(images: [LWInferenceImage]) async throws -> [[Float]] {
+        locked { _embedding += 1 }; defer { locked { _embedding -= 1 } }
         let batch = locked { _batches.count }
         try await beforeBatch?(batch)
         try Task.checkCancellation()
@@ -60,6 +70,8 @@ nonisolated final class LensWorksStubEmbedder: LensWorksSemanticEmbedder, @unche
     }
 
     func embed(text: String) async throws -> [Float] {
+        locked { _embedding += 1 }; defer { locked { _embedding -= 1 } }
+        try await beforeText?(text)
         if let unavailable { throw unavailable }
         locked { _texts.append(text) }
         var sum: [Float] = [0, 0, 0]
@@ -68,7 +80,7 @@ nonisolated final class LensWorksStubEmbedder: LensWorksSemanticEmbedder, @unche
         return sum.map { $0 / peak - 0.5 } + [0.01]
     }
 
-    func release() async { locked { _releases += 1 } }
+    func release() async { locked { _releases += 1; if _embedding > 0 { _releasesUnderAnEmbed += 1 } } }
 }
 
 /// An in-memory catalog: photos with a colour, newest sequence first, paged like the engine.
@@ -78,6 +90,8 @@ actor LensWorksFakeSemanticSource: LensWorksSemanticCatalogSource {
     private var failing: [String: String] = [:]
     private(set) var pageFetches = 0
     private(set) var previewFetches: [String] = []
+    private(set) var versionChecks: [String] = []
+    private var previewsPaused: String?
     private var staleOnce = false
     var pageSize = 100
 
@@ -89,9 +103,12 @@ actor LensWorksFakeSemanticSource: LensWorksSemanticCatalogSource {
         guard let index = photos.firstIndex(where: { $0.row.imageID == id }) else { return }
         photos[index].rgb = rgb; photos[index].revision += 1
     }
+    /// Changes a photo's pixels the way an edit outside this session would: nobody tells the index.
+    func remove(_ id: String) { photos.removeAll { $0.row.imageID == id } }
+    func pausePreviews(_ reason: String?) { previewsPaused = reason }
     func fail(_ id: String, _ reason: String?) { failing[id] = reason }
     func goStaleOnce() { staleOnce = true }
-    func resetCounters() { pageFetches = 0; previewFetches = [] }
+    func resetCounters() { pageFetches = 0; previewFetches = []; versionChecks = [] }
     func row(_ id: String) -> LensWorksSemanticRow? { photos.first { $0.row.imageID == id }?.row }
 
     func semanticPage(cursor: String?) async throws -> LensWorksSemanticSourcePage {
@@ -104,11 +121,17 @@ actor LensWorksFakeSemanticSource: LensWorksSemanticCatalogSource {
     }
 
     func semanticPreview(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticPreview {
+        if let previewsPaused { throw LensWorksSemanticSourceError.paused(previewsPaused) }
         previewFetches.append(row.imageID)
         if let reason = failing[row.imageID] { throw LensWorksCatalogError.message(reason) }
         guard let photo = photos.first(where: { $0.row.imageID == row.imageID }) else { throw LensWorksCatalogError.message("The catalog no longer has this photo.") }
         return .init(image: try LWInferenceImage(width: 2, height: 2, channels: 3, alpha: .none, pixels: Data((0..<4).flatMap { _ in photo.rgb })),
                      revision: photo.revision, recipeDigest: "digest-\(photo.revision)")
+    }
+
+    func semanticVersion(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticVersion? {
+        versionChecks.append(row.imageID)
+        return photos.first { $0.row.imageID == row.imageID }.map { .init(revision: $0.revision, recipeDigest: "digest-\($0.revision)") }
     }
 }
 
@@ -125,12 +148,13 @@ private nonisolated func temporaryDirectory() throws -> URL {
     return url
 }
 
-/// `count` photos cycling through the palette: "photo-0003-yellow".
-private nonisolated func populatedSource(_ count: Int) async -> LensWorksFakeSemanticSource {
+/// `count` photos cycling through the palette: "photo-0003-yellow". `shift` starts the cycle
+/// elsewhere, so the same ids can carry other pixels.
+private nonisolated func populatedSource(_ count: Int, prefix: String = "photo", shift: Int = 0) async -> LensWorksFakeSemanticSource {
     let source = LensWorksFakeSemanticSource()
     for number in 0..<count {
-        let (name, rgb) = stubPalette[number % stubPalette.count]
-        await source.add(String(format: "photo-%04d-", number) + name, rgb: rgb)
+        let name = stubPalette[number % stubPalette.count].0, rgb = stubPalette[(number + shift) % stubPalette.count].1
+        await source.add(prefix + String(format: "-%04d-", number) + name, rgb: rgb)
     }
     return source
 }
@@ -276,7 +300,144 @@ private nonisolated func populatedSource(_ count: Int) async -> LensWorksFakeSem
         #expect(try await index.failures().count == 0)
     }
 
+    @Test func equalScoresAreOrderedByImageSoTheSameIndexAlwaysAnswersInTheSameOrder() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let index = LensWorksSemanticIndex(url: directory.appendingPathComponent("index.sqlite3"))
+        try await index.prepare(model: "m")
+        // Stored in an order that is neither ascending nor descending by image.
+        for image in ["m", "b", "x", "a", "q"] {
+            try await index.store([.init(imageID: image, assetID: image, variantID: "master", revision: 1, recipeDigest: "d", vector: [1, 0, 0])])
+        }
+        try await index.store([.init(imageID: "best", assetID: "best", variantID: "master", revision: 1, recipeDigest: "d", vector: [1, 0.1, 0])])
+        #expect(try await index.nearest([1, 0.1, 0], limit: 6).map(\.imageID) == ["best", "a", "b", "m", "q", "x"])
+        #expect(try await index.nearest([1, 0.1, 0], limit: 3).map(\.imageID) == ["best", "a", "b"], "the cut-off keeps the same photos whatever order they were stored in")
+    }
+
+    /// Edits made outside this session (nobody told the index) are found by comparing a bounded
+    /// slice of indexed photos with the catalog's current version on each pass.
+    @Test func editsMadeOutsideTheSessionAreFoundASliceAtATimeAndPhotosTheCatalogLostAreForgotten() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let index = LensWorksSemanticIndex(url: directory.appendingPathComponent("index.sqlite3"))
+        let embedder = LensWorksStubEmbedder(), source = await populatedSource(10)
+        _ = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, verifyBatch: 0)
+        #expect(await source.versionChecks.isEmpty, "a pass asked to verify nothing reads no versions")
+        // Photo 1 and photo 6 are edited and photo 3 is deleted, all without a word to the index.
+        await source.edit("photo-0001-green", rgb: [20, 20, 230]); await source.edit("photo-0006-red", rgb: [20, 20, 230])
+        await source.remove("photo-0003-yellow")
+        await source.resetCounters()
+        let first = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, verifyBatch: 4)
+        #expect(await source.versionChecks == ["photo-0000-red", "photo-0001-green", "photo-0002-blue", "photo-0003-yellow"], "one bounded slice, in image order")
+        #expect(first.outdated == 1 && first.removed == 1 && first.embedded == 1)
+        #expect(await source.previewFetches == ["photo-0001-green"])
+        #expect(try await index.version("photo-0001-green")?.revision == 2)
+        #expect(try await index.version("photo-0006-red")?.revision == 1, "the next slice has not been reached yet")
+        #expect(try await index.count() == 9)
+        #expect(try await index.version("photo-0003-yellow") == nil)
+        await source.resetCounters()
+        let second = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, verifyBatch: 4)
+        #expect(await source.versionChecks == ["photo-0004-cyan", "photo-0005-magenta", "photo-0006-red", "photo-0007-green"], "the next pass continues after the last one")
+        #expect(second.outdated == 1 && second.embedded == 1)
+        #expect(try await index.version("photo-0006-red")?.revision == 2)
+        #expect(try await index.scores(embedder.embed(text: "blue"), images: ["photo-0006-red"])["photo-0006-red"]! > 0.9, "the vector follows the new pixels")
+        await source.resetCounters()
+        _ = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, verifyBatch: 4)
+        #expect(await source.versionChecks == ["photo-0008-blue", "photo-0009-yellow"])
+        await source.resetCounters()
+        let wrapped = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, verifyBatch: 4)
+        #expect(await source.versionChecks == ["photo-0000-red", "photo-0001-green", "photo-0002-blue", "photo-0004-cyan"], "after the last photo it starts over")
+        #expect(wrapped.outdated == 0 && wrapped.embedded == 0 && embedder.imagesEmbedded == 12)
+    }
+
+    /// A catalog recreated (or restored from a backup) at the same path reuses the index file, but its
+    /// sequences start again: the stored watermark is another catalog's, and so are the stored vectors.
+    @Test func aWatermarkFromAnotherCatalogAtTheSamePathIsDiscardedAndItsPhotosAreForgotten() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let index = LensWorksSemanticIndex(url: directory.appendingPathComponent("index.sqlite3"))
+        let embedder = LensWorksStubEmbedder()
+        _ = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: await populatedSource(30), verifyBatch: 0)
+        #expect(try await index.completeThrough() == 30)
+        // Fewer photos: the newest sequence is below the watermark.
+        let smaller = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: await populatedSource(5, prefix: "other"), verifyBatch: 0)
+        #expect(smaller.rescanned && smaller.embedded == 5 && smaller.removed == 30)
+        #expect(try await index.count() == 5)
+        #expect(try await index.completeThrough() == 5)
+        #expect(try await index.nearest(embedder.embed(text: "red"), limit: 10).allSatisfy { $0.imageID.hasPrefix("other-") })
+        // As many photos as before: the newest sequence equals the watermark, but the index has never heard of that photo.
+        let same = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: await populatedSource(5, prefix: "third"), verifyBatch: 0)
+        #expect(same.rescanned && same.embedded == 5 && same.removed == 5)
+        #expect(try await index.nearest(embedder.embed(text: "red"), limit: 10).allSatisfy { $0.imageID.hasPrefix("third-") })
+        // The same catalog again: nothing is rescanned or embedded.
+        let third = await populatedSource(5, prefix: "third")
+        let idle = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: third, verifyBatch: 0)
+        #expect(!idle.rescanned && idle.embedded == 0 && idle.removed == 0)
+        #expect(await third.pageFetches == 1)
+        // An emptied catalog forgets everything.
+        let emptied = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: await populatedSource(0), verifyBatch: 0)
+        #expect(emptied.rescanned && emptied.removed == 5)
+        #expect(try await index.count() == 0)
+    }
+
     // MARK: Recovery
+
+    /// The index file is named by the catalog's path; its contents are bound to the catalog's creation stamp.
+    @Test func anIndexBoundToAnotherCatalogsCreationStampIsDiscardedEvenWhenThePhotoIdsMatch() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.sqlite3")
+        let embedder = LensWorksStubEmbedder()
+        let first = LensWorksSemanticIndex(url: url, catalog: "born-1.0")
+        _ = try await LensWorksSemanticPass.run(index: first, embedder: embedder, source: await populatedSource(6), verifyBatch: 0)
+        #expect(try await LensWorksSemanticIndex(url: url, catalog: "born-1.0").prepare(model: embedder.identity) == .kept)
+        #expect(try await LensWorksSemanticIndex(url: url).prepare(model: embedder.identity) == .kept, "a catalog whose stamp cannot be read keeps the index")
+        // Another catalog at the same path with the very same ids and sequences, but other pixels.
+        let other = LensWorksSemanticIndex(url: url, catalog: "born-2.0")
+        #expect(try await other.prepare(model: embedder.identity) == .catalogChanged)
+        #expect(try await other.count() == 0)
+        #expect(try await other.completeThrough() == nil)
+        let outcome = try await LensWorksSemanticPass.run(index: other, embedder: embedder, source: await populatedSource(6, shift: 2), verifyBatch: 0)
+        #expect(outcome.embedded == 6 && embedder.imagesEmbedded == 12)
+        #expect(try await other.nearest(embedder.embed(text: "blue"), limit: 1).first?.imageID == "photo-0000-red", "the vectors are the new catalog's")
+        // The stamp itself: a directory's stays put while it is used and changes when it is created again.
+        let catalog = directory.appendingPathComponent("Demo.catalog")
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        let born = try #require(LensWorksSemanticIndex.catalogStamp(catalogPath: catalog.path))
+        try Data("x".utf8).write(to: catalog.appendingPathComponent("file"))
+        #expect(LensWorksSemanticIndex.catalogStamp(catalogPath: catalog.path) == born)
+        try FileManager.default.removeItem(at: catalog)
+        #expect(LensWorksSemanticIndex.catalogStamp(catalogPath: catalog.path) == nil)
+        try await Task.sleep(for: .milliseconds(20))
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        let recreated = try #require(LensWorksSemanticIndex.catalogStamp(catalogPath: catalog.path))
+        #expect(recreated != born)
+        // A restore replaces the database inside the same folder: the stamp is the database's.
+        let database = catalog.appendingPathComponent("catalog.sqlite3")
+        try await Task.sleep(for: .milliseconds(20))
+        try Data("first".utf8).write(to: database)
+        let original = try #require(LensWorksSemanticIndex.catalogStamp(catalogPath: catalog.path))
+        #expect(original != recreated)
+        try FileManager.default.removeItem(at: database)
+        try await Task.sleep(for: .milliseconds(20))
+        try Data("restored".utf8).write(to: database)
+        #expect(LensWorksSemanticIndex.catalogStamp(catalogPath: catalog.path) != original)
+    }
+
+    /// A pass whose index is deleted under it has lost what it stored before: it must not call the catalog covered.
+    @Test func aPassWhoseIndexIsDeletedMidwayDoesNotRecordItselfCompleteAndTheNextPassIndexesEverything() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("index.sqlite3")
+        let index = LensWorksSemanticIndex(url: url)
+        let embedder = LensWorksStubEmbedder(), source = await populatedSource(40)
+        embedder.beforeBatch = { batch in
+            if batch == 2 { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) } }
+        }
+        await #expect(throws: LensWorksSemanticIndexError.recovered) { try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, batchSize: 8, verifyBatch: 0) }
+        #expect(try await index.completeThrough() == nil)
+        #expect(try await index.count() == 24, "what was stored after the deletion stays")
+        embedder.beforeBatch = nil
+        let finished = try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, batchSize: 8, verifyBatch: 0)
+        #expect(finished.embedded == 16)
+        #expect(try await index.count() == 40)
+        #expect(try await index.completeThrough() == 40)
+    }
 
     @Test func deletingTheIndexRebuildsItOnTheNextPass() async throws {
         let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
@@ -489,6 +650,205 @@ private nonisolated func populatedSource(_ count: Int) async -> LensWorksFakeSem
         await service.detach()
     }
 
+    /// The reviewer's case: a catalog recreated or restored at the same path must not inherit the old index.
+    @Test func aDifferentCatalogAtTheSamePathIsIndexedFromScratch() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let embedder = LensWorksStubEmbedder()
+        let service = LensWorksSemanticSearch(embedder: embedder, directory: directory)
+        await service.attach(catalogPath: "/catalog/recreated", source: await populatedSource(30))
+        try await settle(service, isReady)
+        #expect(service.state == .ready(indexed: 30, unindexed: 0, reasons: []))
+        await service.attach(catalogPath: "/catalog/recreated", source: await populatedSource(5, prefix: "restored"))
+        try await settle(service, isReady)
+        #expect(service.state == .ready(indexed: 5, unindexed: 0, reasons: []))
+        #expect(service.lastOutcome?.rescanned == true && service.lastOutcome?.removed == 30)
+        let (index, vector) = try await service.query("green")
+        #expect(try await index.nearest(vector, limit: 1).first?.imageID == "restored-0001-green")
+        await service.detach()
+
+        // A real catalog folder deleted and created again keeps its path, ids and sequences: only its
+        // creation stamp says it is another catalog.
+        let catalog = directory.appendingPathComponent("Demo.catalog")
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        await service.attach(catalogPath: catalog.path, source: await populatedSource(6))
+        try await settle(service, isReady)
+        let embedded = embedder.imagesEmbedded
+        await service.attach(catalogPath: catalog.path, source: await populatedSource(6))
+        try await settle(service, isReady)
+        #expect(embedder.imagesEmbedded == embedded && service.lastPreparation == .kept, "reopening the same catalog embeds nothing")
+        try FileManager.default.removeItem(at: catalog)
+        try await Task.sleep(for: .milliseconds(20))
+        try FileManager.default.createDirectory(at: catalog, withIntermediateDirectories: false)
+        await service.attach(catalogPath: catalog.path, source: await populatedSource(6, shift: 3))
+        try await settle(service, isReady)
+        #expect(service.lastPreparation == .catalogChanged && embedder.imagesEmbedded == embedded + 6)
+        #expect(service.state == .ready(indexed: 6, unindexed: 0, reasons: []))
+        await service.detach()
+    }
+
+    @Test func aDescriptionQueryOnAnIdleIndexReleasesTheModelButNeverUnderAnEmbedStillRunning() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let embedder = LensWorksStubEmbedder(), source = await populatedSource(12)
+        let service = LensWorksSemanticSearch(embedder: embedder, directory: directory)
+        await service.attach(catalogPath: "/catalog/idle", source: source)
+        try await settle(service, isReady)
+        let settled = embedder.releases
+        _ = try await service.query("red")
+        #expect(embedder.releases == settled + 1, "the model does not stay loaded after a search on an idle index")
+        _ = try await service.query("red")
+        #expect(embedder.releases == settled + 1, "a cached description loads nothing, so releases nothing")
+
+        // Two searches overlap: the first to finish must not unload the model under the other.
+        let (reached, signal) = AsyncStream.makeStream(of: Void.self)
+        let (resume, gate) = AsyncStream.makeStream(of: Void.self)
+        embedder.beforeText = { text in
+            guard text == "blue" else { return }
+            signal.yield()
+            for await _ in resume { break }
+        }
+        let slow = Task { try await service.query("blue") }
+        for await _ in reached { break }
+        let before = embedder.releases
+        _ = try await service.query("green")
+        #expect(embedder.releases == before, "the model is still in use by the other search")
+        gate.yield()
+        _ = try await slow.value
+        #expect(embedder.releases == before + 1 && embedder.releasesUnderAnEmbed == 0)
+
+        // A search during an indexing pass shares the pass's residency: the pass releases when it ends.
+        embedder.beforeText = nil
+        let (held, holding) = AsyncStream.makeStream(of: Void.self)
+        let (finish, finishing) = AsyncStream.makeStream(of: Void.self)
+        embedder.beforeBatch = { _ in holding.yield(); for await _ in finish { break } }
+        await source.add("photo-new-cyan", rgb: [20, 230, 230])
+        service.schedule()
+        for await _ in held { break }
+        let during = embedder.releases
+        _ = try await service.query("cyan")
+        #expect(embedder.releases == during, "an indexing pass is embedding")
+        finishing.yield()
+        try await settle(service, isReady)
+        #expect(embedder.releases == during + 1 && embedder.releasesUnderAnEmbed == 0)
+        await service.detach()
+    }
+
+    @Test func anEditMadeWhileTheModelIsUnavailableIsStillOwedWhenTheModelReturns() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let missing = LensWorksSemanticUnavailable.modelUnavailable("The model volume is offline.")
+        let embedder = LensWorksStubEmbedder(), source = await populatedSource(20)
+        // No verification slice: only the recorded edit may cause the re-embed.
+        let first = LensWorksSemanticSearch(embedder: embedder, directory: directory, verifyBatch: 0)
+        await first.attach(catalogPath: "/catalog/offline", source: source)
+        try await settle(first, isReady)
+        await first.detach()
+        // A new session in which the model was never available, so the index was never opened for one.
+        embedder.unavailable = missing
+        let service = LensWorksSemanticSearch(embedder: embedder, directory: directory, verifyBatch: 0)
+        await service.attach(catalogPath: "/catalog/offline", source: source)
+        try await settle(service) { $0 == .modelUnavailable(missing) }
+        let row = try #require(await source.row("photo-0004-cyan"))
+        await source.edit(row.imageID, rgb: [230, 20, 20])
+        await service.invalidate([.init(imageID: row.imageID, assetID: row.assetID, variantID: row.variantID)])
+        try await settle(service) { $0 == .modelUnavailable(missing) }
+        #expect(embedder.imagesEmbedded == 20)
+        embedder.unavailable = nil
+        await source.resetCounters()
+        service.recheck()
+        try await settle(service, isReady)
+        #expect(embedder.imagesEmbedded == 21, "exactly the edited photo is embedded again")
+        #expect(await source.previewFetches == [row.imageID])
+        #expect(service.state == .ready(indexed: 20, unindexed: 0, reasons: []))
+        await service.detach()
+    }
+
+    @Test func aRebuildThatCannotStartLeavesIndexingAsItWasAndRecheckOnlyRunsWhenTheModelWasMissing() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let missing = LensWorksSemanticUnavailable.modelNotInstalled("CLIP ViT-L/14: Not installed.")
+        let embedder = LensWorksStubEmbedder(), source = await populatedSource(8)
+        let service = LensWorksSemanticSearch(embedder: embedder, directory: directory)
+        await service.attach(catalogPath: "/catalog/rebuild", source: source)
+        try await settle(service, isReady)
+
+        // The model list changing (any download's progress) does not start a pass on a healthy index.
+        let passes = service.passes
+        for _ in 0..<5 { service.recheck() }
+        #expect(!service.isIndexing)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(service.passes == passes && service.state == .ready(indexed: 8, unindexed: 0, reasons: []))
+
+        embedder.unavailable = missing
+        await #expect(throws: LensWorksSemanticUnavailable.self) { try await service.rebuild() }
+        #expect(!service.isPaused && service.pauseUnavailableReason == nil, "a rebuild that could not start does not leave indexing paused")
+        try await settle(service) { $0 == .modelUnavailable(missing) }
+        // Indexing is automatic again: a new photo is embedded once the model is back, without Resume.
+        await source.add("photo-new-red", rgb: [230, 20, 20])
+        embedder.unavailable = nil
+        service.recheck()
+        try await settle(service, isReady)
+        #expect(service.state == .ready(indexed: 9, unindexed: 0, reasons: []) && embedder.imagesEmbedded == 9)
+
+        // Paused before the rebuild: it stays paused, whether the rebuild starts or not.
+        await service.pause()
+        embedder.unavailable = missing
+        await #expect(throws: LensWorksSemanticUnavailable.self) { try await service.rebuild() }
+        #expect(service.isPaused && service.state == .paused(indexed: 9))
+        embedder.unavailable = nil
+        await service.detach()
+    }
+
+    @Test func waitingCheckingUnusableIndexAndLicenceStatesSayWhy() async throws {
+        let directory = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        // Previews held for storage maintenance: indexing waits, says why, and can be resumed by hand.
+        let embedder = LensWorksStubEmbedder(), source = await populatedSource(4)
+        await source.pausePreviews("Previews are paused for storage maintenance.")
+        let service = LensWorksSemanticSearch(embedder: embedder, directory: directory)
+        await service.attach(catalogPath: "/catalog/waiting", source: source)
+        try await settle(service) { if case .waiting = $0 { true } else { false } }
+        #expect(service.state == .waiting("Previews are paused for storage maintenance. Indexing continues when previews resume.", indexed: 0))
+        #expect(service.summary == "Semantic indexing is waiting · 0 photos indexed. Previews are paused for storage maintenance. Indexing continues when previews resume.")
+        #expect(service.resumeUnavailableReason == nil && service.searchUnavailableReason == nil && service.pauseUnavailableReason == nil)
+        await source.pausePreviews(nil)
+        service.resume()
+        try await settle(service, isReady)
+        #expect(service.state == .ready(indexed: 4, unindexed: 0, reasons: []))
+        #expect(service.resumeUnavailableReason == "Indexing is not paused; new photos are indexed automatically.")
+        await service.detach()
+
+        // The model's availability is still being established.
+        let (asked, asking) = AsyncStream.makeStream(of: Void.self)
+        let (answer, answering) = AsyncStream.makeStream(of: Void.self)
+        let slow = LensWorksStubEmbedder()
+        slow.beforeModel = { asking.yield(); for await _ in answer { break } }
+        let checking = LensWorksSemanticSearch(embedder: slow, directory: directory)
+        await checking.attach(catalogPath: "/catalog/checking", source: source)
+        for await _ in asked { break }
+        #expect(checking.state == .checking && checking.summary == "Checking the semantic search model…")
+        #expect(checking.searchUnavailableReason == "The semantic search model is still being checked.")
+        slow.beforeModel = nil
+        answering.yield()
+        try await settle(checking, isReady)
+        await checking.detach()
+
+        // Something that is not a file sits where the index belongs: it is left alone and reported.
+        let blocked = try LensWorksSemanticIndex.location(catalogPath: "/catalog/blocked", directory: directory)
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        let unusable = LensWorksSemanticSearch(embedder: LensWorksStubEmbedder(), directory: directory)
+        await unusable.attach(catalogPath: "/catalog/blocked", source: source)
+        try await settle(unusable) { if case .indexUnavailable = $0 { true } else { false } }
+        guard case .indexUnavailable(let reason) = unusable.state else { Issue.record("expected an unusable index"); return }
+        #expect(reason.hasPrefix("The semantic index is unavailable: ") && unusable.summary == reason && unusable.searchUnavailableReason == reason)
+        #expect(FileManager.default.fileExists(atPath: blocked.path) && unusable.indexedCount == 0)
+        await unusable.detach()
+
+        // Licence terms not accepted yet.
+        let terms = LensWorksSemanticUnavailable.licenseRequired("CLIP ViT-L/14 has licence terms to accept in AI Models before it is used.")
+        let licensed = LensWorksSemanticSearch(embedder: LensWorksStubEmbedder(unavailable: terms), directory: directory)
+        await licensed.attach(catalogPath: "/catalog/licence", source: source)
+        try await settle(licensed) { $0 == .modelUnavailable(terms) }
+        #expect(licensed.searchUnavailableReason == terms.message && licensed.summary == terms.message && licensed.rebuildUnavailableReason == terms.message)
+        await licensed.detach()
+    }
+
     @Test func theClipModelIdentityFollowsItsFilesRoutesAndRuntimeAndAnAbsentModelIsNeverDownloaded() async throws {
         let manifest = try LWModelManifest.bundled()
         let clip = try #require(manifest.models.first { $0.id == LensWorksCLIPEmbedder.modelID })
@@ -649,6 +1009,7 @@ actor LensWorksFixtureSemanticSource: LensWorksSemanticCatalogSource {
         guard let image = previews.first(where: { $0.0.imageID == row.imageID })?.1 else { throw LensWorksCatalogError.message("No such fixture.") }
         return .init(image: image, revision: 1, recipeDigest: "fixture")
     }
+    func semanticVersion(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticVersion? { .init(revision: 1, recipeDigest: "fixture") }
 }
 
 /// The fixture drawings and declaration themselves (no weights): every declared photo draws,

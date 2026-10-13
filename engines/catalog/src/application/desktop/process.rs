@@ -1585,6 +1585,7 @@ fn paired_catalog_route(kind: Kind, bytes: &[u8]) -> anyhow::Result<bool> {
         | Request::Folders { .. }
         | Request::Images { .. }
         | Request::Search { .. }
+        | Request::SearchAmong { .. }
         | Request::Image { .. }
         | Request::Variant { .. }
         | Request::Variants { .. }

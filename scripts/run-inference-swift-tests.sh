@@ -25,11 +25,12 @@ if [[ "${LW_REQUIRE_REAL:-}" == 1 ]]; then
 else
   # The test host probes the weight files itself (open + 4 KB read with a deadline) and skips
   # with a warning when macOS privacy consent denies or blocks it, even if this shell could list them.
-  export XCODEBUILD_TEST_ALLOW_SKIPPED="CompositorTests/LensWorksInferenceRealWeightTests CompositorTests/LensWorksSemanticSearchRealWeightTests"
+  export XCODEBUILD_TEST_ALLOW_SKIPPED=CompositorTests/LensWorksInferenceRealWeightTests
 fi
 # The semantic search real-query test (SEMANTIC_SEARCH_FIXTURES.json) needs CLIP ViT-L/14. Its two
 # files are small enough to stage where the test host can read them (see the staging script), so
-# the test runs wherever this shell can read the SceneWorks cache; nothing is downloaded.
+# the test runs wherever this shell can read the SceneWorks cache; nothing is downloaded. Once they
+# are staged the test must run: only a run without them may report it as skipped.
 clip=${LW_INFERENCE_CLIP_HUB:-$(python3 scripts/ci/stage_clip_weights.py 180)}
 if [[ -n "$clip" && -d "$clip" ]]; then
   echo "Semantic search real-query test uses $clip"
@@ -39,6 +40,7 @@ elif [[ "${LW_REQUIRE_REAL:-}" == 1 ]]; then
   exit 1
 else
   echo "::warning::CLIP ViT-L/14 weights are not readable here (missing, or the model volume needs macOS access for this process); the semantic search real-query test is skipped."
+  export XCODEBUILD_TEST_ALLOW_SKIPPED="${XCODEBUILD_TEST_ALLOW_SKIPPED:-} CompositorTests/LensWorksSemanticSearchRealWeightTests"
 fi
 if [[ -n "$sana" && -d "$sana" ]]; then
   echo "Real-weight test uses $sana"

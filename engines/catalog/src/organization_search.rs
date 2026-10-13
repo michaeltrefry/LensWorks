@@ -4,7 +4,9 @@ use crate::{
     organization::{self, Flag},
 };
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OpenFlags, params_from_iter, types::Value as SqlValue};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, params_from_iter, types::Value as SqlValue,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
@@ -575,8 +577,11 @@ fn page(
     scan: usize,
     text_limits: TextLimits,
 ) -> Result<Page> {
-    page_projection(db, query, cursor, limit, scan, text_limits, None)
+    page_projection(db, query, cursor, limit, scan, text_limits, None, None)
 }
+/// `only` restricts the candidates to one logical image's sequence; every
+/// predicate, text admission and byte bound of the query still applies to it.
+#[allow(clippy::too_many_arguments)]
 fn page_projection(
     db: &Connection,
     query: &Query,
@@ -585,6 +590,7 @@ fn page_projection(
     scan: usize,
     text_limits: TextLimits,
     compact_bytes: Option<usize>,
+    only: Option<i64>,
 ) -> Result<Page> {
     organization::page_limit(limit)?;
     text_limits.validate()?;
@@ -607,7 +613,7 @@ fn page_projection(
         ensure!(c.high_water <= max, "cursor high-water exceeds catalog");
     }
     let high = cursor.map(|c| c.high_water).unwrap_or(max);
-    let query_sql = sql_projection(query, cursor, high, scan, compact_bytes.is_some())?;
+    let query_sql = sql_selection(query, cursor, high, scan, compact_bytes.is_some(), only)?;
     let mut returned_bytes = 0usize;
     let mut text_work = TextWork::default();
     let local_query = query
@@ -798,9 +804,88 @@ impl Catalog {
             scan,
             TextLimits::default(),
             Some(page_bytes),
+            None,
         )?;
         tx.commit()?;
         Ok(result)
+    }
+    /// The subset of `keys`, in the given order, that `query` admits: search's
+    /// own predicates (and compact grid projection) applied to named logical
+    /// images instead of to a scan of the catalog. A key the catalog does not
+    /// hold is not admitted. Stops after `limit` matches; `scanned` is the
+    /// number of keys examined and `has_more` says whether any were left. One
+    /// transaction makes the answer internally consistent. Order and cursors
+    /// of the query do not apply: there is no continuation.
+    pub fn search_grid_among(
+        &mut self,
+        query: &Query,
+        keys: &[crate::catalog_edits::VariantKey],
+        limit: usize,
+        page_bytes: usize,
+    ) -> Result<Page> {
+        organization::page_limit(limit)?;
+        ensure!(
+            (1..=4096).contains(&keys.len()),
+            "named image search takes 1..=4096 keys"
+        );
+        ensure!(
+            (1..=1024 * 1024).contains(&page_bytes),
+            "compact search byte bounds"
+        );
+        let started = Instant::now();
+        let tx = self.db.transaction()?;
+        let mut rows = Vec::new();
+        let (mut scanned, mut vm_steps, mut sorts) = (0usize, 0i64, 0i64);
+        let mut text_work = TextWork::default();
+        for key in keys {
+            if rows.len() == limit {
+                break;
+            }
+            key.validate()?;
+            scanned += 1;
+            let sequence: Option<i64> = tx
+                .query_row(
+                    "SELECT sequence FROM catalog_images WHERE asset_id=?1 AND variant_id=?2",
+                    rusqlite::params![key.asset_id, key.variant_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(sequence) = sequence else { continue };
+            let one = page_projection(
+                &tx,
+                query,
+                None,
+                1,
+                1,
+                TextLimits::default(),
+                Some(page_bytes.min(16 * 1024)),
+                Some(sequence),
+            )?;
+            ensure!(
+                !one.text_work.admission_limited,
+                "candidate {sequence} text exceeds text admission"
+            );
+            vm_steps += one.vm_steps;
+            sorts += one.sorts;
+            text_work.candidate_rows_read += one.text_work.candidate_rows_read;
+            text_work.indexed_rows += one.text_work.indexed_rows;
+            text_work.batches += one.text_work.batches;
+            rows.extend(one.rows);
+        }
+        tx.commit()?;
+        let exhausted = scanned == keys.len();
+        Ok(Page {
+            rows,
+            scanned,
+            has_more: !exhausted,
+            exhausted,
+            page_complete: true,
+            next: None,
+            vm_steps,
+            sorts,
+            text_work,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        })
     }
     /// Exact logical image for a selected variant, independent of a grid page.
     pub fn grid_image(

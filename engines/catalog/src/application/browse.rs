@@ -131,6 +131,49 @@ impl Actor {
             scanned: page.scanned as u32,
         })
     }
+    /// The named images the query admits, in the order named. The scan budget
+    /// bounds how many keys one request may name, as it bounds a page's candidates.
+    pub(super) fn search_among(
+        &mut self,
+        catalog: &str,
+        query: Query,
+        keys: Vec<VariantKey>,
+        limit: u16,
+    ) -> std::result::Result<Response, BridgeError> {
+        let limits = self.config.limits.clone();
+        if limit == 0 || limit > limits.page_rows {
+            return Err(error(ErrorCode::InvalidRequest, "page row allowance"));
+        }
+        if keys.is_empty() || keys.len() > limits.scan_rows {
+            return Err(error(
+                ErrorCode::InvalidRequest,
+                "named image search exceeds the scan row allowance",
+            ));
+        }
+        let page = self
+            .current(catalog)?
+            .catalog
+            .search_grid_among(&query, &keys, usize::from(limit), limits.page_bytes)
+            .map_err(native)?;
+        Ok(Response::Images {
+            rows: page
+                .rows
+                .into_iter()
+                .map(|row| {
+                    let key = VariantKey {
+                        asset_id: row.asset_id.clone(),
+                        variant_id: row.variant_id.clone(),
+                    };
+                    let image = self.current(catalog)?.catalog.image(&key).map_err(native)?;
+                    grid_image(row, image)
+                })
+                .collect::<std::result::Result<Vec<_>, BridgeError>>()?,
+            next: None,
+            has_more: page.has_more,
+            page_complete: page.page_complete,
+            scanned: page.scanned as u32,
+        })
+    }
 }
 
 /// Enrich only admitted page rows, using the exact logical variant's catalog state.

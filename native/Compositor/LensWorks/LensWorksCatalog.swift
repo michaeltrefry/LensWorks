@@ -386,6 +386,26 @@ actor LensWorksCatalogService {
         backgroundBrowse = read
         return try await withTaskCancellationHandler { try await read.value } onCancel: { read.cancel() }
     }
+    /// How many photos one named-photo query may name: the engine's scan allowance.
+    var amongLimit: Int { Int(min(512, configuration?.limits?.scan_rows ?? 512)) }
+    #if DEBUG
+    /// Test observation of named-photo queries.
+    private(set) var amongCalls = 0
+    #endif
+    /// Of the photos named by `keys` (at most `amongLimit`), in that order, those the filters admit: the
+    /// engine's own filter evaluation, asked about named photos instead of by scanning the catalog. At
+    /// most one page of rows comes back; `examined` says how many keys the engine got through.
+    func browseAmong(options: LWApplicationBrowseOptions, keys: [LWCatalogEditsVariantKey]) async throws -> (rows: [LWApplicationDtoGridImage], examined: Int) {
+        let (owner, token) = try context()
+        #if DEBUG
+        amongCalls += 1
+        #endif
+        guard case .Images(let rows, _, let more, _, let scanned) = try await owner.perform(.SearchAmong(catalog: token, options: options, keys: keys, limit: rowLimit)),
+              rows.count <= 100, scanned >= 1, Int(scanned) <= keys.count, more == (Int(scanned) < keys.count) else {
+            throw LensWorksManagedError.protocolViolation("Expected a bounded page of the named catalog images.")
+        }
+        return (rows, Int(scanned))
+    }
     private func search(options: LWApplicationBrowseOptions, cursor: String?) async throws -> LensWorksBrowserPage {
         let (owner, token) = try context()
         let limit = rowLimit
@@ -465,11 +485,12 @@ actor LensWorksCatalogService {
         guard let previews, let key = asset.key else { throw LensWorksManagedError.closed }
         return try await previews.fetch(key, tier: tier)
     }
-    /// A photo's stored thumbnail for semantic indexing, through the same bounded preview store as the grid.
+    /// A photo's stored thumbnail for semantic indexing, through the same bounded preview store as the grid
+    /// but as background work that stays out of the grid's decoded cache (it would evict visible thumbnails).
     func semanticThumbnail(_ key: LWCatalogEditsVariantKey) async throws -> LensWorksPreview {
         try ordinaryAdmission()
         guard let previews else { throw LensWorksManagedError.closed }
-        return try await previews.fetch(key, tier: .Thumbnail)
+        return try await previews.fetch(key, tier: .Thumbnail, background: true)
     }
     func cancelPreviews() async { await previews?.cancelAll() } // Dedicated retirement cleanup.
     func cancelPreviews(catalog expected: String?) async {
@@ -952,6 +973,12 @@ final class LensWorksCatalog {
     private(set) var semanticQuery: String?
     /// The ranked matches of the current description search (at most `semanticResultLimit`), shown a page at a time.
     @ObservationIgnored private var semanticRanking: [LensWorksSemanticHit] = []
+    /// What `semanticRanking` was computed from; an unchanged key reuses the ranking instead of recomputing it.
+    @ObservationIgnored private var semanticRankingKey: String?
+    #if DEBUG
+    /// Test observation: how many times a description ranking was computed (not reused).
+    @ObservationIgnored private(set) var semanticRankingsComputed = 0
+    #endif
     static let semanticResultLimit = 500
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let migrateLegacy: Bool
@@ -1031,7 +1058,7 @@ final class LensWorksCatalog {
         catalogEpoch &+= 1; folderEpoch &+= 1; groupEpoch &+= 1
         let epoch = catalogEpoch, previousSelection = selectionOwner, previousQuery = queryOwner, previousCatalog = catalogToken
         activeFolder = nil; searchText = ""; previewSettings = nil
-        semanticQuery = nil; semanticRanking = []
+        semanticQuery = nil; semanticRanking = []; semanticRankingKey = nil
         await semantic?.detach()
         guard !closingRequested, catalogEpoch == epoch else { return }
         do {
@@ -1323,6 +1350,8 @@ final class LensWorksCatalog {
         await refreshVersions()
     }
     private func staleCursor(_ code: String, _ message: String) -> Bool { Self.isStaleCursor(code, message) }
+    /// The engine's reply for a photo (logical image) the catalog does not have.
+    nonisolated static func isMissingPhoto(_ code: String, _ message: String) -> Bool { code == "native" && message.hasPrefix("logical image not found") }
     nonisolated static func isStaleCursor(_ code: String, _ message: String) -> Bool {
         (code == "native" && (message.hasPrefix("search cursor stale after edits, relinks or index changes") || message.hasPrefix("cursor belongs to a different query or version"))) ||
         (code == "stale_session" && message == "search cursor belongs to another session")
@@ -1803,6 +1832,8 @@ final class LensWorksCatalog {
             let origins = recorded.recording(action, by: origin, canUndo: next.can_undo, canRedo: next.can_redo)
             try? await index.setRecipeOrigins(origins, catalog: catalog, key: next.key, revision: next.revision.value, digest: next.recipe_digest)
         }
+        // The engine has saved the change: the embedding is owed now, whatever the checks below decide to publish.
+        await invalidateSemantic(next.key, row: creating ? nil : asset)
         #if DEBUG
         await continuationFixture?(.catalogRecipeReply)
         #endif
@@ -1823,9 +1854,16 @@ final class LensWorksCatalog {
         guard selectedAsset?.key?.asset_id == next.key.asset_id, selectedAsset?.key?.variant_id == next.key.variant_id else { throw CancellationError() }
         try await loadCatalogVariants()
         status = origin.historyName("Catalog recipe \(next.label) · revision \(next.revision.value).")
-        // The photo's pixels changed (or a copy was created): its embedding is owed again.
-        if let changed = selectedAsset { await semantic?.invalidate([.init(imageID: changed.id, assetID: next.key.asset_id, variantID: next.key.variant_id)]) }
         return next
+    }
+    /// A photo's pixels changed, or it was just created: its embedding is owed again. `row` is the
+    /// photo's grid row when the caller holds it; otherwise the engine is asked for the photo's id.
+    func invalidateSemantic(_ key: LWCatalogEditsVariantKey, row: LensWorksCatalogAsset?) async {
+        guard let semantic, let token = catalogToken else { return }
+        var image = row.flatMap { $0.key?.asset_id == key.asset_id && $0.key?.variant_id == key.variant_id ? $0.id : nil }
+        if image == nil { image = (try? await service.catalogImage(catalog: token, key: key))?.image_id }
+        if let image { await semantic.invalidate([.init(imageID: image, assetID: key.asset_id, variantID: key.variant_id)]) }
+        else { semantic.schedule() } // a new photo is still found by the pass's scan
     }
     private func selectCreatedCatalogFocus(_ row: LWApplicationDtoGridImage, scope: LensWorksCatalogScope, query: String) async throws {
         let owner = selectionOwner, previous = selectedPhotoID
@@ -2471,7 +2509,7 @@ final class LensWorksCatalog {
         catch {
             // A search that could not run leaves the ordinary grid, not an empty one.
             if scopeIsCurrent(scope), queryEpoch == admitted, semanticQuery == description {
-                semanticQuery = nil; semanticRanking = []
+                semanticQuery = nil; semanticRanking = []; semanticRankingKey = nil
                 try? await refreshAssets()
             }
             throw error
@@ -2486,17 +2524,26 @@ final class LensWorksCatalog {
     func clearSemanticSearch() async throws {
         try admitCatalogWork()
         guard semanticQuery != nil else { return }
-        semanticQuery = nil; semanticRanking = []
+        semanticQuery = nil; semanticRanking = []; semanticRankingKey = nil
         try await refreshAssets()
         status = "Showing \(assets.count) photos"
     }
-    /// One page of the ranked matches. The first page computes the ranking: with no filter, a
-    /// bounded scan of the index; with filters, the catalog's own filtered query is streamed a
-    /// page at a time and each page's photos are scored, so the engine stays the filter authority.
+    /// One page of the ranked matches. The first page computes the ranking. With no filter it is a
+    /// bounded scan of the index. With filters the engine stays the only filter authority, asked in
+    /// whichever way is cheaper: a small filtered set is read whole through the catalog's own filtered
+    /// query and scored; a large one is not read at all — the index's ranking is walked from the best
+    /// match down, and the engine says which of the next photos its filters admit, until enough are found.
+    ///
+    /// A ranking already computed from the same description, filters and index contents is reused
+    /// while the catalog is unchanged. The engine says so itself: the continuation cursor of the
+    /// first filtered page carries the catalog's change epoch and newest photo, so an identical
+    /// cursor means an identical filtered set. (A filtered set of one page has no cursor and is
+    /// simply read again.)
     private func semanticPage(_ description: String, options: LWApplicationBrowseOptions, cursor: String?) async throws -> LensWorksBrowserPage {
         guard let semantic, let token = catalogToken else { throw LensWorksCatalogError.message("Semantic search is not available in this session.") }
         let epoch = catalogEpoch, query = queryEpoch, limit = Self.semanticResultLimit
         func current() throws { guard catalogEpoch == epoch, queryEpoch == query, semanticQuery == description else { throw CancellationError() } }
+        func better(_ a: LensWorksSemanticHit, _ b: LensWorksSemanticHit) -> Bool { a.score != b.score ? a.score > b.score : a.imageID < b.imageID }
         var offset = 0
         if let cursor {
             guard cursor.hasPrefix("semantic:"), let value = Int(cursor.dropFirst(9)), value >= 0, value <= semanticRanking.count else {
@@ -2506,44 +2553,94 @@ final class LensWorksCatalog {
         } else {
             let (index, vector) = try await semantic.query(description)
             try current()
-            var hits: [LensWorksSemanticHit] = []
-            if Self.hasFilters(options) {
-                var restarts = 0
+            let filtered = Self.hasFilters(options)
+            var key = [description, token, String(decoding: try LWCatalogCodec.encode(options), as: UTF8.self), String(await index.revision)].joined(separator: "\u{1f}")
+            try current()
+            var hits: [LensWorksSemanticHit]?
+            if filtered {
+                let base = key
+                // A small filtered set is read whole and scored: at most this many pages, growing with
+                // the square root of the index so neither this read nor the walk below dominates.
+                let streamed = max(4, Int(Double(try await index.count()).squareRoot() / 10))
+                try current()
+                var restarts = 0, reused = false, whole = false
                 stream: while true {
-                    hits = []
-                    var page: String?
+                    var found: [LensWorksSemanticHit] = [], page: String?, pages = 0
                     do {
                         repeat {
                             try Task.checkCancellation()
                             let rows = try await service.browse(options: options, cursor: page)
                             try current()
+                            guard !rows.hasMore || (rows.next != nil && rows.next != page) else { throw LensWorksManagedError.protocolViolation("A continuing page did not advance its cursor authority.") }
+                            if page == nil {
+                                key = base + "\u{1f}" + (rows.hasMore ? rows.next ?? "" : "")
+                                if rows.hasMore, key == semanticRankingKey { reused = true; break stream } // unchanged catalog, filters, index and description
+                            }
                             let scores = try await index.scores(vector, images: rows.rows.map(\.image_id))
                             try current()
-                            hits += rows.rows.compactMap { row in scores[row.image_id].map { LensWorksSemanticHit(imageID: row.image_id, key: row.key, score: $0, row: row) } }
-                            if hits.count > limit * 2 { hits.sort { $0.score > $1.score }; hits.removeLast(hits.count - limit) }
-                            guard !rows.hasMore || (rows.next != nil && rows.next != page) else { throw LensWorksManagedError.protocolViolation("A continuing page did not advance its cursor authority.") }
+                            found += rows.rows.compactMap { row in scores[row.image_id].map { LensWorksSemanticHit(imageID: row.image_id, key: row.key, score: $0, row: row) } }
+                            if found.count > limit * 2 { found.sort(by: better); found.removeLast(found.count - limit) }
                             page = rows.hasMore ? rows.next : nil
-                        } while page != nil
+                            pages += 1
+                        } while page != nil && pages < streamed
+                        if page == nil {
+                            found.sort(by: better)
+                            if found.count > limit { found.removeLast(found.count - limit) }
+                            hits = found; whole = true
+                        }
                         break stream
                     } catch LensWorksManagedError.native(let code, let message) where staleCursor(code, message) && restarts < 3 { restarts += 1 }
                 }
-                hits.sort { $0.score > $1.score }
-                if hits.count > limit { hits.removeLast(hits.count - limit) }
-            } else {
+                if !reused, !whole {
+                    // A large filtered set: walk down the index's own ranking instead, asking the engine which
+                    // of the next best photos its filters admit, until enough are found. The engine evaluates
+                    // the filters either way; only the order of the questions changes.
+                    let ranking = try await index.ranked(vector)
+                    try current()
+                    let chunk = await service.amongLimit
+                    var found: [LensWorksSemanticHit] = [], position = 0
+                    while found.count < limit, position < ranking.count {
+                        try Task.checkCancellation()
+                        let slice = ranking[position..<min(position + chunk, ranking.count)]
+                        let photos = try await index.photos(rowids: slice.map(\.rowid))
+                        var keys: [LWCatalogEditsVariantKey] = [], offsets: [Int] = [], scores: [String: Float] = [:]
+                        for (offset, photo) in photos.enumerated() {
+                            guard let photo else { continue } // forgotten since the ranking was made
+                            keys.append(.init(asset_id: photo.assetID, variant_id: photo.variantID)); offsets.append(position + offset)
+                            scores[photo.imageID] = ranking[position + offset].score
+                        }
+                        guard !keys.isEmpty else { position += slice.count; continue }
+                        let admitted = try await service.browseAmong(options: options, keys: keys)
+                        try current()
+                        found += admitted.rows.compactMap { row in scores[row.image_id].map { LensWorksSemanticHit(imageID: row.image_id, key: row.key, score: $0, row: row) } }
+                        // A full page of rows stops the engine early: continue from the first key it did not examine.
+                        position = admitted.examined < keys.count ? offsets[admitted.examined] : position + slice.count
+                    }
+                    if found.count > limit { found.removeLast(found.count - limit) }
+                    hits = found
+                }
+            } else if key != semanticRankingKey {
                 hits = try await index.nearest(vector, limit: limit).map {
                     LensWorksSemanticHit(imageID: $0.imageID, key: .init(asset_id: $0.assetID, variant_id: $0.variantID), score: $0.score, row: nil)
                 }
             }
             try current()
-            semanticRanking = hits
+            if let hits {
+                semanticRanking = hits; semanticRankingKey = key
+                #if DEBUG
+                semanticRankingsComputed += 1
+                #endif
+            }
         }
         let end = min(offset + Int(rowLimit), semanticRanking.count)
         var rows: [LWApplicationDtoGridImage] = []
         for hit in semanticRanking[offset..<end] {
             if let row = hit.row { rows.append(row); continue }
-            // A photo the catalog no longer has is left out of the page rather than failing the search.
             do { rows.append(try await service.catalogImage(catalog: token, key: hit.key)) }
-            catch LensWorksManagedError.native { continue }
+            catch LensWorksManagedError.native(let code, let message) where Self.isMissingPhoto(code, message) {
+                // The catalog no longer has this photo: it is left out of the page and forgotten by the index.
+                await semantic.forget([hit.imageID])
+            }
             try current()
         }
         return LensWorksBrowserPage(catalog: token, rows: rows, next: end < semanticRanking.count ? "semantic:\(end)" : nil,
@@ -2836,7 +2933,7 @@ final class LensWorksCatalog {
         catalogEpoch &+= 1; folderEpoch &+= 1; groupEpoch &+= 1; previewGeneration &+= 1
         await service.beginRetirement()
         // The indexing pass reads previews: it stops before they are retired. Its stored vectors stay.
-        semanticQuery = nil; semanticRanking = []
+        semanticQuery = nil; semanticRanking = []; semanticRankingKey = nil
         await semantic?.detach()
         // Settings task retirement adds a separate, explicit 30-second observation bound.
         importMonitor?.cancel(); try await retireSettingsWork(); await service.cancelPreviews()
@@ -2855,7 +2952,7 @@ final class LensWorksCatalog {
 
     func thumbnail(_ asset: LensWorksCatalogAsset, tier: LWApplicationDtoPreviewTier = .Thumbnail) async throws -> LensWorksPreview {
         try admitCatalogWork()
-        guard !previewsSuspended else { throw LensWorksCatalogError.message("Previews are paused for storage maintenance.") }
+        guard !previewsSuspended else { throw LensWorksCatalogError.message(LensWorksPreviewStore.pausedMessage) }
         let scope = captureScope(), generation = previewGeneration
         let preview = try await service.preview(asset, tier: tier)
         try checkScope(scope)

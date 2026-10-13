@@ -1272,6 +1272,7 @@ fn during_relink_hold(request: &Request) -> bool {
         | Request::Folders { .. }
         | Request::Images { .. }
         | Request::Search { .. }
+        | Request::SearchAmong { .. }
         | Request::Image { .. }
         | Request::Variant { .. }
         | Request::Variants { .. }
@@ -1448,6 +1449,7 @@ impl Actor {
                                     | Request::Cull { .. }
                                     | Request::Images { .. }
                                     | Request::Search { .. }
+                                    | Request::SearchAmong { .. }
                                     | Request::Organization { .. }
                             ) || matches!(&r, Request::Metadata { request, .. } if matches!(request.as_ref(), metadata::Request::Resolve { .. }))
                                 || matches!(&r, Request::MetadataWrite { request, .. } if !request.read_only());
@@ -2099,6 +2101,7 @@ impl Actor {
                     | Request::Folders { .. }
                     | Request::Images { .. }
                     | Request::Search { .. }
+                    | Request::SearchAmong { .. }
                     | Request::Image { .. }
                     | Request::Variant { .. }
                     | Request::Variants { .. }
@@ -2474,6 +2477,12 @@ impl Actor {
                 cursor,
                 limit,
             } => self.search_page(&catalog, (*options).query()?, cursor, limit),
+            Request::SearchAmong {
+                catalog,
+                options,
+                keys,
+                limit,
+            } => self.search_among(&catalog, (*options).query()?, keys, limit),
             Request::Image { catalog, key } => {
                 let o = self.current(&catalog)?;
                 let image = core!(o.catalog.image(&key));

@@ -22,6 +22,14 @@ nonisolated struct LensWorksSemanticPending: Sendable, Equatable {
     var reason: String? = nil
 }
 
+/// One embedded photo's place in a ranking of the whole index: 16 bytes a photo.
+nonisolated struct LensWorksSemanticRank: Sendable {
+    let score: Float
+    /// The photo's position in image order, which orders equal scores.
+    let ordinal: UInt32
+    let rowid: Int64
+}
+
 nonisolated struct LensWorksSemanticMatch: Sendable, Equatable {
     let imageID: String
     let assetID: String
@@ -37,6 +45,8 @@ nonisolated enum LensWorksSemanticPreparation: Sendable, Equatable {
     case created
     /// The stored vectors came from another model or layout and were discarded.
     case modelChanged
+    /// The stored vectors belonged to another catalog at the same path (recreated, or restored from a backup) and were discarded.
+    case catalogChanged
     /// The file was not a readable index and was replaced.
     case replacedUnreadable
 }
@@ -63,6 +73,9 @@ nonisolated enum LensWorksSemanticIndexError: Error, Equatable, CustomStringConv
 ///
 /// Every write is one transaction; `completeThrough` is the highest catalog sequence a finished
 /// pass has covered, so an interrupted pass or rebuild simply continues.
+///
+/// The file is named by the catalog's path, so it is also bound to the catalog's creation stamp
+/// (when one can be read): a catalog recreated or restored at the same path starts an empty index.
 actor LensWorksSemanticIndex {
     static let applicationID: Int32 = 0x4c57_5349 // "LWSI"
     static let schemaVersion = 1
@@ -70,6 +83,13 @@ actor LensWorksSemanticIndex {
     static let layout = "unit-f16-v1"
 
     nonisolated let url: URL
+    /// The creation stamp of the catalog these vectors belong to; nil when it cannot be read.
+    nonisolated let catalog: String?
+    /// Counts every time the stored vectors were discarded (deleted file, other model, other catalog,
+    /// rebuild): a pass that started before such a change must not record itself as complete.
+    private(set) var generation = 0
+    /// Counts every change to the stored vectors, so a ranking computed from them knows when it is out of date.
+    private(set) var revision = 0
     private var database: OpaquePointer?
     private var openedInode: UInt64 = 0
     private var model: String?
@@ -78,7 +98,7 @@ actor LensWorksSemanticIndex {
 
     private struct SQLiteFailure: Error { let code: Int32; let message: String }
 
-    init(url: URL) { self.url = url }
+    init(url: URL, catalog: String? = nil) { self.url = url; self.catalog = catalog }
     deinit { if let database { sqlite3_close_v2(database) } }
 
     /// The index file for a catalog, under `directory` (LensWorks' own Application Support
@@ -90,6 +110,20 @@ actor LensWorksSemanticIndex {
         return root.appendingPathComponent(name + ".sqlite3")
     }
 
+    /// When the catalog at `catalogPath` was created, as a stable stamp: the creation time of its
+    /// database file (a restore replaces that file inside the same folder), or of the path itself.
+    /// Nil when the volume is not local (creation times there may be synthesized from other
+    /// timestamps) or it cannot be read.
+    static func catalogStamp(catalogPath: String) -> String? {
+        let root = URL(fileURLWithPath: catalogPath).resolvingSymlinksInPath()
+        guard (try? root.resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == true else { return nil }
+        var info = stat()
+        let database = root.appendingPathComponent("catalog.sqlite3").path
+        guard database.withCString({ Darwin.lstat($0, &info) }) == 0 || root.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              info.st_birthtimespec.tv_sec > 0 else { return nil }
+        return "born-\(info.st_birthtimespec.tv_sec).\(info.st_birthtimespec.tv_nsec)"
+    }
+
     // MARK: Opening and recovery
 
     /// Opens the index for `model`, creating it when missing, replacing it when unreadable and
@@ -99,14 +133,14 @@ actor LensWorksSemanticIndex {
         if database != nil, inode() != openedInode { close() } // deleted or replaced underneath us
         do {
             if database != nil {
-                do { return try adopt(model) ? .kept : .modelChanged }
+                do { return try adopt(model) }
                 catch let failure as SQLiteFailure where Self.isUnreadable(failure.code) { close() }
             }
             let existed = inode() != nil
             do {
                 try open()
-                let kept = try adopt(model)
-                return existed ? (kept ? .kept : .modelChanged) : .created
+                let adopted = try adopt(model)
+                return existed ? adopted : .created
             } catch let failure as SQLiteFailure where Self.isUnreadable(failure.code) {
                 try replaceUnreadable()
                 _ = try adopt(model)
@@ -153,6 +187,7 @@ actor LensWorksSemanticIndex {
                 CREATE TABLE IF NOT EXISTS embeddings(image TEXT PRIMARY KEY, asset TEXT NOT NULL, variant TEXT NOT NULL,
                     revision INTEGER NOT NULL, digest TEXT NOT NULL, vector BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS pending(image TEXT PRIMARY KEY, asset TEXT NOT NULL, variant TEXT NOT NULL, reason TEXT) WITHOUT ROWID;
+                CREATE TABLE IF NOT EXISTS seen(image TEXT PRIMARY KEY) WITHOUT ROWID;
                 """)
         } catch { close(); throw error }
         openedInode = inode() ?? 0
@@ -172,33 +207,59 @@ actor LensWorksSemanticIndex {
         do { try open() } catch let failure as SQLiteFailure { throw LensWorksSemanticIndexError.unavailable(failure.message) }
     }
 
-    /// Makes the open database belong to `model`. Returns whether its stored vectors were kept.
-    private func adopt(_ model: String) throws -> Bool {
+    /// Makes the open database belong to `model` and this catalog. Returns what happened to its
+    /// stored vectors: kept (or there were none), or discarded for another model or another catalog.
+    private func adopt(_ model: String) throws -> LensWorksSemanticPreparation {
         let identity = model + "|" + Self.layout + "|schema-\(Self.schemaVersion)"
         if try meta("model") == identity {
+            let bound = try meta("catalog")
+            if let catalog, let bound, bound != catalog {
+                try transaction {
+                    try execute("DELETE FROM embeddings; DELETE FROM pending; DELETE FROM seen; DELETE FROM meta WHERE key IN ('complete_through','dimension','verified_through')")
+                    try setMeta("catalog", catalog)
+                }
+                dimension = nil; generation += 1; revision += 1
+                return .catalogChanged
+            }
+            // An index written before the stamp could be read is adopted; the pass still notices a foreign catalog by its sequences.
+            if let catalog, bound == nil { try setMeta("catalog", catalog) }
             dimension = try meta("dimension").flatMap { Int($0) }
-            return true
+            return .kept
         }
         let hadContents = try scalar("SELECT EXISTS(SELECT 1 FROM embeddings) OR EXISTS(SELECT 1 FROM meta)") != 0
         try transaction {
-            try execute("DELETE FROM embeddings; DELETE FROM pending; DELETE FROM meta")
+            try execute("DELETE FROM embeddings; DELETE FROM pending; DELETE FROM seen; DELETE FROM meta")
             try setMeta("model", identity)
+            if let catalog { try setMeta("catalog", catalog) }
         }
-        dimension = nil
-        return !hadContents
+        dimension = nil; generation += 1; revision += 1
+        return hadContents ? .modelChanged : .kept
     }
 
     /// Runs `body` against the prepared index, reopening it when its file was deleted and
-    /// replacing it when SQLite reports it unreadable.
-    private func run<T>(_ body: () throws -> T) throws -> T {
-        guard let model else { throw LensWorksSemanticIndexError.unavailable("The index has not been prepared for a model.") }
-        if database == nil || inode() != openedInode { try prepare(model: model) }
+    /// replacing it when SQLite reports it unreadable. `needsModel: false` is for writes that only
+    /// need the open database (queueing an edited photo while the model is unavailable).
+    private func run<T>(needsModel: Bool = true, _ body: () throws -> T) throws -> T {
+        if let model {
+            if database == nil || inode() != openedInode { try prepare(model: model) }
+        } else {
+            guard !needsModel else { throw LensWorksSemanticIndexError.unavailable("The index has not been prepared for a model.") }
+            if database != nil, inode() != openedInode { close() }
+            if database == nil {
+                do { try open() }
+                catch let failure as SQLiteFailure {
+                    guard Self.isUnreadable(failure.code) else { throw LensWorksSemanticIndexError.unavailable(failure.message) }
+                    try replaceUnreadable()
+                }
+            }
+        }
         do { return try body() }
         catch let failure as SQLiteFailure {
             if failure.code & 0xff == SQLITE_INTERRUPT { throw CancellationError() }
             guard Self.isUnreadable(failure.code) else { throw LensWorksSemanticIndexError.unavailable(failure.message) }
             try replaceUnreadable()
-            do { _ = try adopt(model) } catch let failure as SQLiteFailure { throw LensWorksSemanticIndexError.unavailable(failure.message) }
+            generation += 1; revision += 1
+            if let model { do { _ = try adopt(model) } catch let failure as SQLiteFailure { throw LensWorksSemanticIndexError.unavailable(failure.message) } }
             throw LensWorksSemanticIndexError.recovered
         }
     }
@@ -226,6 +287,13 @@ actor LensWorksSemanticIndex {
         return try body(pointer)
     }
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    /// Resets a prepared statement and binds new text values, so a loop prepares its statement once.
+    private func rebind(_ prepared: OpaquePointer, _ strings: [String]) throws {
+        sqlite3_reset(prepared)
+        for (index, value) in strings.enumerated() {
+            guard value.withCString({ sqlite3_bind_text(prepared, Int32(index + 1), $0, -1, Self.transient) }) == SQLITE_OK else { throw failure() }
+        }
+    }
     private func step(_ prepared: OpaquePointer) throws -> Bool {
         switch sqlite3_step(prepared) {
         case SQLITE_ROW: return true
@@ -320,23 +388,82 @@ actor LensWorksSemanticIndex {
 
     /// Of `images`, those with a stored embedding that is not waiting to be replaced.
     func embedded(_ images: [String]) throws -> Set<String> {
-        try run {
-            var found = Set<String>()
-            for image in images where try scalar("SELECT EXISTS(SELECT 1 FROM embeddings WHERE image=?1) AND NOT EXISTS(SELECT 1 FROM pending WHERE image=?1)", [image]) != 0 {
-                found.insert(image)
+        try matching(images, "SELECT EXISTS(SELECT 1 FROM embeddings WHERE image=?1) AND NOT EXISTS(SELECT 1 FROM pending WHERE image=?1)")
+    }
+    /// Of `images`, those queued for (re)embedding or recorded as failed.
+    func owed(_ images: [String]) throws -> Set<String> { try matching(images, "SELECT EXISTS(SELECT 1 FROM pending WHERE image=?1)") }
+    /// Of `images`, those the index has heard of at all (embedded, queued or failed).
+    func known(_ images: [String]) throws -> Set<String> {
+        try matching(images, "SELECT EXISTS(SELECT 1 FROM embeddings WHERE image=?1) OR EXISTS(SELECT 1 FROM pending WHERE image=?1)")
+    }
+    /// One prepared statement, bound once per image.
+    private func matching(_ images: [String], _ sql: String) throws -> Set<String> {
+        guard !images.isEmpty else { return [] }
+        return try run {
+            try statement(sql) { prepared in
+                var found = Set<String>()
+                for image in images {
+                    try rebind(prepared, [image])
+                    if try step(prepared), sqlite3_column_int64(prepared, 0) != 0 { found.insert(image) }
+                }
+                return found
             }
-            return found
         }
     }
 
-    /// Of `images`, those queued for (re)embedding or recorded as failed.
-    func owed(_ images: [String]) throws -> Set<String> {
+    // MARK: Full scans
+
+    /// A scan of the whole catalog starts: nothing has been seen yet.
+    func beginFullScan() throws { try run { try execute("DELETE FROM seen") } }
+    /// Photos a full scan found in the catalog.
+    func markSeen(_ images: [String]) throws {
+        guard !images.isEmpty else { return }
         try run {
-            var found = Set<String>()
-            for image in images where try scalar("SELECT EXISTS(SELECT 1 FROM pending WHERE image=?)", [image]) != 0 { found.insert(image) }
-            return found
+            try transaction {
+                try statement("INSERT OR IGNORE INTO seen(image) VALUES(?)") { prepared in
+                    for image in images { try rebind(prepared, [image]); try done(prepared) }
+                }
+            }
         }
     }
+    /// Records a finished scan that started when the index was at `generation`. A full scan also
+    /// forgets every photo it did not see (the catalog no longer has them). Returns how many were
+    /// forgotten. Throws `recovered` when the stored vectors were discarded while the scan ran.
+    @discardableResult func finishScan(full: Bool, through sequence: Int64?, generation started: Int) throws -> Int {
+        try run {
+            guard generation == started else { throw LensWorksSemanticIndexError.recovered }
+            var forgotten = 0
+            try transaction {
+                if full {
+                    forgotten = Int(try scalar("SELECT COUNT(*) FROM embeddings WHERE image NOT IN (SELECT image FROM seen)"))
+                    try execute("DELETE FROM embeddings WHERE image NOT IN (SELECT image FROM seen); DELETE FROM pending WHERE image NOT IN (SELECT image FROM seen); DELETE FROM seen")
+                }
+                try setMeta("complete_through", sequence.map { String($0) })
+            }
+            if forgotten > 0 { revision += 1 }
+            return forgotten
+        }
+    }
+
+    // MARK: Verification
+
+    /// Up to `limit` embedded photos (not already owed) after the last one a pass verified, in image order.
+    func verificationSlice(limit: Int) throws -> [LensWorksSemanticEntry] {
+        try run {
+            let after = try meta("verified_through") ?? ""
+            return try statement("SELECT image,asset,variant,revision,digest FROM embeddings WHERE image>?1 AND image NOT IN (SELECT image FROM pending) ORDER BY image LIMIT ?2", [after]) { prepared in
+                sqlite3_bind_int(prepared, 2, Int32(limit))
+                var rows: [LensWorksSemanticEntry] = []
+                while try step(prepared) {
+                    rows.append(.init(imageID: text(prepared, 0), assetID: text(prepared, 1), variantID: text(prepared, 2),
+                                      revision: sqlite3_column_int64(prepared, 3), recipeDigest: text(prepared, 4), vector: []))
+                }
+                return rows
+            }
+        }
+    }
+    /// Records how far verification got; nil starts again from the first photo.
+    func setVerifiedThrough(_ image: String?) throws { try run { try setMeta("verified_through", image) } }
 
     /// Stores one batch of embeddings and settles their pending rows, atomically.
     func store(_ entries: [LensWorksSemanticEntry]) throws {
@@ -351,29 +478,32 @@ actor LensWorksSemanticIndex {
             }
             try transaction {
                 if dimension == nil { try setMeta("dimension", String(expected)) }
-                for (entry, blob) in zip(entries, blobs) {
-                    try statement("INSERT INTO embeddings(image,asset,variant,digest,revision,vector) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(image) DO UPDATE SET asset=excluded.asset,variant=excluded.variant,revision=excluded.revision,digest=excluded.digest,vector=excluded.vector",
-                                  [entry.imageID, entry.assetID, entry.variantID, entry.recipeDigest]) { prepared in
-                        sqlite3_bind_int64(prepared, 5, entry.revision)
-                        guard blob.withUnsafeBytes({ sqlite3_bind_blob(prepared, 6, $0.baseAddress, Int32($0.count), Self.transient) }) == SQLITE_OK else { throw failure() }
-                        try done(prepared)
+                try statement("INSERT INTO embeddings(image,asset,variant,digest,revision,vector) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(image) DO UPDATE SET asset=excluded.asset,variant=excluded.variant,revision=excluded.revision,digest=excluded.digest,vector=excluded.vector") { insert in
+                    try statement("DELETE FROM pending WHERE image=?") { settle in
+                        for (entry, blob) in zip(entries, blobs) {
+                            try rebind(insert, [entry.imageID, entry.assetID, entry.variantID, entry.recipeDigest])
+                            sqlite3_bind_int64(insert, 5, entry.revision)
+                            guard blob.withUnsafeBytes({ sqlite3_bind_blob(insert, 6, $0.baseAddress, Int32($0.count), Self.transient) }) == SQLITE_OK else { throw failure() }
+                            try done(insert)
+                            try rebind(settle, [entry.imageID]); try done(settle)
+                        }
                     }
-                    try statement("DELETE FROM pending WHERE image=?", [entry.imageID]) { try done($0) }
                 }
             }
-            dimension = expected
+            dimension = expected; revision += 1
         }
     }
 
     /// Queues photos for (re)embedding, or records why an attempt failed. A photo whose pixels
     /// changed keeps its old vector until the new one replaces it, but is no longer reported as embedded.
+    /// Needs only the index file, not a model: an edit made while the model is unavailable is still owed.
     func markPending(_ rows: [LensWorksSemanticPending]) throws {
         guard !rows.isEmpty else { return }
-        try run {
+        try run(needsModel: false) {
             try transaction {
-                for row in rows {
-                    try statement("INSERT INTO pending(image,asset,variant,reason) VALUES(?,?,?,?) ON CONFLICT(image) DO UPDATE SET asset=excluded.asset,variant=excluded.variant,reason=excluded.reason",
-                                  [row.imageID, row.assetID, row.variantID]) { prepared in
+                try statement("INSERT INTO pending(image,asset,variant,reason) VALUES(?,?,?,?) ON CONFLICT(image) DO UPDATE SET asset=excluded.asset,variant=excluded.variant,reason=excluded.reason") { prepared in
+                    for row in rows {
+                        try rebind(prepared, [row.imageID, row.assetID, row.variantID])
                         if let reason = row.reason {
                             guard reason.withCString({ sqlite3_bind_text(prepared, 4, $0, -1, Self.transient) }) == SQLITE_OK else { throw failure() }
                         } else { sqlite3_bind_null(prepared, 4) }
@@ -403,11 +533,13 @@ actor LensWorksSemanticIndex {
         guard !images.isEmpty else { return }
         try run {
             try transaction {
-                for image in images {
-                    try statement("DELETE FROM embeddings WHERE image=?", [image]) { try done($0) }
-                    try statement("DELETE FROM pending WHERE image=?", [image]) { try done($0) }
+                for table in ["embeddings", "pending"] {
+                    try statement("DELETE FROM \(table) WHERE image=?") { prepared in
+                        for image in images { try rebind(prepared, [image]); try done(prepared) }
+                    }
                 }
             }
+            revision += 1
         }
     }
 
@@ -416,36 +548,78 @@ actor LensWorksSemanticIndex {
     func clear() throws {
         try run {
             try transaction {
-                try execute("DELETE FROM embeddings; DELETE FROM pending; DELETE FROM meta WHERE key IN ('complete_through','dimension')")
+                try execute("DELETE FROM embeddings; DELETE FROM pending; DELETE FROM seen; DELETE FROM meta WHERE key IN ('complete_through','dimension','verified_through')")
             }
-            dimension = nil
+            dimension = nil; generation += 1; revision += 1
         }
     }
 
     // MARK: Queries
 
     /// The `limit` most similar photos, by a streaming scan that keeps only `limit` candidates.
+    /// Equal scores are ordered by image id, so the same index always answers in the same order.
     func nearest(_ query: [Float], limit: Int) throws -> [LensWorksSemanticMatch] {
         try run {
             let query = try unit(query)
             guard !query.isEmpty, limit > 0 else { return [] }
-            var best: [(score: Float, rowid: Int64)] = [] // ascending by score
-            try statement("SELECT rowid,vector FROM embeddings") { prepared in
+            var best: [(score: Float, image: String, rowid: Int64)] = [] // worst first: ascending score, then descending image id
+            try statement("SELECT rowid,vector,image FROM embeddings") { prepared in
                 var scanned = 0
                 while try step(prepared) {
                     scanned += 1
                     if scanned & 0x3ff == 0 { try Task.checkCancellation() }
                     guard Int(sqlite3_column_bytes(prepared, 1)) == query.count * 2, let blob = sqlite3_column_blob(prepared, 1) else { continue }
                     let value = score(blob, query: query)
-                    if best.count == limit { guard value > best[0].score else { continue }; best.removeFirst() }
-                    let index = best.firstIndex { $0.score > value } ?? best.count
-                    best.insert((value, sqlite3_column_int64(prepared, 0)), at: index)
+                    if best.count == limit, value < best[0].score { continue }
+                    let image = text(prepared, 2)
+                    if best.count == limit {
+                        guard value > best[0].score || image < best[0].image else { continue }
+                        best.removeFirst()
+                    }
+                    let index = best.firstIndex { $0.score > value || ($0.score == value && $0.image < image) } ?? best.count
+                    best.insert((value, image, sqlite3_column_int64(prepared, 0)), at: index)
                 }
             }
-            return try best.reversed().compactMap { candidate in
-                try statement("SELECT image,asset,variant FROM embeddings WHERE rowid=?") { prepared in
+            return try statement("SELECT asset,variant FROM embeddings WHERE rowid=?") { prepared in
+                try best.reversed().compactMap { candidate in
+                    sqlite3_reset(prepared)
                     sqlite3_bind_int64(prepared, 1, candidate.rowid)
-                    return try step(prepared) ? LensWorksSemanticMatch(imageID: text(prepared, 0), assetID: text(prepared, 1), variantID: text(prepared, 2), score: candidate.score) : nil
+                    return try step(prepared) ? LensWorksSemanticMatch(imageID: candidate.image, assetID: text(prepared, 0), variantID: text(prepared, 1), score: candidate.score) : nil
+                }
+            }
+        }
+    }
+
+    /// Every embedded photo's similarity to `query`, best first, equal scores in image order. Unlike
+    /// `nearest` it keeps the whole ranking (16 bytes a photo), for a caller that must walk down it
+    /// until enough photos pass a test the index cannot make (the catalog's filters).
+    func ranked(_ query: [Float]) throws -> [LensWorksSemanticRank] {
+        try run {
+            let query = try unit(query)
+            guard !query.isEmpty else { return [] }
+            var ranking: [LensWorksSemanticRank] = []
+            ranking.reserveCapacity(Int(try scalar("SELECT COUNT(*) FROM embeddings")))
+            try statement("SELECT rowid,vector FROM embeddings ORDER BY image") { prepared in
+                while try step(prepared) {
+                    if ranking.count & 0x3ff == 0 { try Task.checkCancellation() }
+                    guard Int(sqlite3_column_bytes(prepared, 1)) == query.count * 2, let blob = sqlite3_column_blob(prepared, 1) else { continue }
+                    ranking.append(.init(score: score(blob, query: query), ordinal: UInt32(truncatingIfNeeded: ranking.count), rowid: sqlite3_column_int64(prepared, 0)))
+                }
+            }
+            ranking.sort { $0.score != $1.score ? $0.score > $1.score : $0.ordinal < $1.ordinal }
+            return ranking
+        }
+    }
+
+    /// The photos stored at `rowids`, in that order; nil for a row that is gone.
+    func photos(rowids: [Int64]) throws -> [LensWorksSemanticPending?] {
+        guard !rowids.isEmpty else { return [] }
+        return try run {
+            try statement("SELECT image,asset,variant FROM embeddings WHERE rowid=?") { prepared in
+                try rowids.map { rowid in
+                    sqlite3_reset(prepared)
+                    sqlite3_bind_int64(prepared, 1, rowid)
+                    return try step(prepared) ? LensWorksSemanticPending(imageID: text(prepared, 0), assetID: text(prepared, 1), variantID: text(prepared, 2)) : nil
                 }
             }
         }
@@ -453,17 +627,20 @@ actor LensWorksSemanticIndex {
 
     /// Similarity of each of `images` that has an embedding (the others are absent from the result).
     func scores(_ query: [Float], images: [String]) throws -> [String: Float] {
-        try run {
+        guard !images.isEmpty else { return [:] }
+        return try run {
             let query = try unit(query)
             guard !query.isEmpty else { return [:] }
-            var result: [String: Float] = [:]
-            for image in images {
-                try statement("SELECT vector FROM embeddings WHERE image=?", [image]) { prepared in
-                    guard try step(prepared), Int(sqlite3_column_bytes(prepared, 0)) == query.count * 2, let blob = sqlite3_column_blob(prepared, 0) else { return }
+            return try statement("SELECT vector FROM embeddings WHERE image=?") { prepared in
+                var result: [String: Float] = [:]
+                result.reserveCapacity(images.count)
+                for image in images {
+                    try rebind(prepared, [image])
+                    guard try step(prepared), Int(sqlite3_column_bytes(prepared, 0)) == query.count * 2, let blob = sqlite3_column_blob(prepared, 0) else { continue }
                     result[image] = score(blob, query: query)
                 }
+                return result
             }
-            return result
         }
     }
 

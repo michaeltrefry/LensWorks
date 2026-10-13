@@ -731,6 +731,61 @@ extension CompositorUITests {
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
     }
+    /// S31: an unattended launch (this one) never starts indexing on its own. The description search
+    /// field is there, its status line says indexing is paused, and its menu offers Resume Indexing
+    /// while Pause Indexing reads why it is unavailable.
+    @MainActor
+    func testS31DescriptionSearchShowsPausedIndexingAndItsReasonedCommands() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let fixture = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S38_FIXTURE_ROOT"))
+        let worker = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_WORKER")
+        let decode = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_DECODE_WORKER")
+        let output = fixture.appendingPathComponent("WorkingVersions-5")
+        guard try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty else {
+            throw NSError(domain: "LensWorks.S31", code: 1, userInfo: [NSLocalizedDescriptionKey: "The fixture owner must prepare an empty private WorkingVersions-5 folder."])
+        }
+        let app = XCUIApplication()
+        addTeardownBlock { @MainActor in
+            guard app.state == .runningForeground || app.state == .runningBackground else { return }
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+        }
+        app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
+        app.launchEnvironment["LW_CATALOG_TEST_WORKER"] = worker
+        app.launchEnvironment["LW_CATALOG_TEST_DECODE_WORKER"] = decode
+        // The index (never written while paused) stays out of the app's own Application Support folder.
+        app.launchEnvironment["LW_SEMANTIC_INDEX_ROOT"] = output.appendingPathComponent("SemanticIndex").path
+        app.launchArguments = ["--lensworks-catalog", output.appendingPathComponent("Demo.catalog").path, "--lensworks-create-catalog",
+                               "--lensworks-import", fixture.appendingPathComponent("photos").path, "--lensworks-output", output.path,
+                               "-ApplePersistenceIgnoreState", "YES", "-LensWorksPinnedWindowFrame", s47Placement.appKitFrame]
+        app.launch(); app.activate()
+        let grid = app.scrollViews["LensWorks.catalogGrid"]
+        XCTAssertTrue(grid.waitForExistence(timeout: 30))
+        XCTAssertTrue(grid.staticTexts["LensWorks.catalogAsset.single-harbor.png"].waitForExistence(timeout: 30))
+        func element(_ identifier: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: identifier).firstMatch }
+        let field = element("LensWorks.semanticSearchField")
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        XCTAssertTrue(field.isEnabled, "a paused index still answers searches over what it holds")
+        let status = element("LensWorks.semanticStatus")
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        let paused = NSPredicate { _, _ in (status.value as? String)?.contains("paused") == true }
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: paused, object: nil)], timeout: 20), .completed, "saw \(String(describing: status.value))")
+        XCTAssertEqual(status.value as? String, "Semantic indexing is paused · 0 photos indexed. Resume Indexing to continue.")
+        let menu = element("LensWorks.semanticMenu")
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.click()
+        let resume = app.menuItems["Resume Indexing"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 10))
+        XCTAssertTrue(resume.isEnabled)
+        let pause = app.menuItems["Pause Indexing — Indexing is already paused."]
+        XCTAssertTrue(pause.waitForExistence(timeout: 10))
+        XCTAssertFalse(pause.isEnabled)
+        XCTAssertFalse(app.menuItems["Pause Indexing"].exists, "the unavailable command reads its reason")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.appendingPathComponent("SemanticIndex").path), "nothing was indexed, so no index was written")
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+    }
     /// S06: a catalog whose source folder was disconnected after import keeps organization
     /// working, disables Create Working Version with its reason, and a reviewed folder relink
     /// restores the original in one Apply that one Undo reverses. The fixture owner imports

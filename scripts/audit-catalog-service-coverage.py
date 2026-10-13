@@ -315,7 +315,7 @@ RESULTS = {
   'OpenExisting':['Status'], 'Create':['Status'], 'Status':['Status'], 'Close':['Status'],
   'ImportStart':['Import'], 'ImportResume':['Import'], 'ImportStatus':['Import'], 'ImportCancel':['Import'],
   'BackupCreate':['Backup'], 'BackupInspect':['Backup'], 'BackupRestore':['Backup'], 'BackupStatus':['Backup'], 'BackupCancel':['Backup'], 'RestoreStatus':['Restore'], 'ResumeRestoredJobs':['Restore'],
-  'Metadata':['Metadata'], 'MetadataWrite':['MetadataWrite'], 'Organization':['Organization'], 'Folders':['Folders'], 'Images':['Images'], 'Search':['Images'], 'Image':['Image'],
+  'Metadata':['Metadata'], 'MetadataWrite':['MetadataWrite'], 'Organization':['Organization'], 'Folders':['Folders'], 'Images':['Images'], 'Search':['Images'], 'SearchAmong':['Images'], 'Image':['Image'],
   'Variant':['Variant'], 'Variants':['Variants'], 'CreateVariant':['Variant'], 'SaveRecipe':['Variant'], 'Undo':['Variant'], 'Redo':['Variant'], 'History':['History'], 'Cull':['Culled'],
   'Preview':['Preview'], 'PreviewStatus':['Preview'], 'ReleaseViewport':['Status'], 'CancelPreview':['Preview']},
  'application::metadata::Request': {**{x:[x] for x in ['Identity','Fields','Candidates','Sources','Observations','Models','Packets','Decisions','FileInstances','ImportHistory','ImportColumns','ImportFields','AdobeProperties']}, 'Resolve':['Changed'],'TextChunk':['Chunk'],'BlobChunk':['Chunk'],'ImportChunk':['Chunk']},

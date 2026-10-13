@@ -6,13 +6,15 @@ macOS privacy consent withholds from the ad-hoc signed test host app even where 
 read it. The real-query semantic search test therefore reads a staged copy of the two CLIP files
 the bundled manifest names, kept in the persistent CI cache (copied once, reused while the sizes
 match; the model store still verifies every file's SHA-256 before it admits the model). Nothing
-is downloaded. A read that blocks is abandoned at the deadline, never waited on.
+is downloaded. A read that blocks is abandoned at the deadline, never waited on. Staged copies of
+revisions the manifest no longer names are removed, so the cache holds one revision.
 
 usage: stage_clip_weights.py [deadline-seconds]   (LW_CLIP_STAGE_DIR overrides the staging directory)
 """
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -49,4 +51,9 @@ for file in component['files']:
         partial.unlink(missing_ok=True)
         sys.exit(0)
     os.replace(partial, destination)
+# Only this staging directory's own snapshots of this repository are pruned, and only once the
+# named revision is complete.
+for other in target.parent.iterdir():
+    if other.name != target.name:
+        shutil.rmtree(other) if other.is_dir() and not other.is_symlink() else other.unlink()
 print(stage)

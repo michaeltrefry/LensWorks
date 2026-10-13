@@ -426,6 +426,10 @@ struct LensWorksCatalogWorkspace: View {
         let text = semanticText
         Task { await action { try await catalog.searchSemantically(text) } }
     }
+    /// A description-search command whose unavailable item reads its reason, as the menu bar's items do.
+    private func semanticCommand(_ id: LensWorksCommandID, reason: String?, action: @escaping () -> Void) -> some View {
+        LensWorksCommandButton(id, title: LensWorksCommandRegistry.menuLabel(LensWorksCommandRegistry.descriptor(id).label, reason: reason), reason: reason, action: action)
+    }
     /// Description search and the honest state of its index: no model, indexing with progress, paused, unavailable and why.
     private func semanticBar(_ semantic: LensWorksSemanticSearch) -> some View {
         let unavailable = catalog.semanticSearchUnavailableReason
@@ -437,15 +441,15 @@ struct LensWorksCatalogWorkspace: View {
                     .disabled(unavailable != nil).help(unavailable ?? "Ranks the photos in this view by how well they match the description")
                     .accessibilityIdentifier("LensWorks.semanticSearchField")
                 Menu("Description Search") {
-                    LensWorksCommandButton(.semanticSearch, reason: unavailable ?? (empty ? "Type a description first." : nil)) { searchSemantically() }
-                    LensWorksCommandButton(.clearSemanticSearch, reason: catalog.semanticQuery == nil ? "No description search is active." : nil) {
+                    semanticCommand(.semanticSearch, reason: unavailable ?? (empty ? "Type a description first." : nil)) { searchSemantically() }
+                    semanticCommand(.clearSemanticSearch, reason: catalog.semanticQuery == nil ? "No description search is active." : nil) {
                         semanticText = ""
                         Task { await action { try await catalog.clearSemanticSearch() } }
                     }
                     Divider()
-                    LensWorksCommandButton(.pauseSemanticIndexing, reason: semantic.pauseUnavailableReason) { Task { await semantic.pause() } }
-                    LensWorksCommandButton(.resumeSemanticIndexing, reason: semantic.resumeUnavailableReason) { semantic.resume() }
-                    LensWorksCommandButton(.rebuildSemanticIndex, reason: semantic.rebuildUnavailableReason) { Task { await action { try await semantic.rebuild() } } }
+                    semanticCommand(.pauseSemanticIndexing, reason: semantic.pauseUnavailableReason) { Task { await semantic.pause() } }
+                    semanticCommand(.resumeSemanticIndexing, reason: semantic.resumeUnavailableReason) { semantic.resume() }
+                    semanticCommand(.rebuildSemanticIndex, reason: semantic.rebuildUnavailableReason) { Task { await action { try await semantic.rebuild() } } }
                     Divider()
                     LensWorksCommandButton(.aiModels) { LWModelCenter.shared.show() }
                 }.fixedSize().accessibilityIdentifier("LensWorks.semanticMenu")

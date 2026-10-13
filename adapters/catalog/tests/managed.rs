@@ -740,6 +740,38 @@ h=json.dumps(d).encode();sys.stdout.buffer.write(b'LWFLT002'+struct.pack('<QQ',l
     shutdown(&s);
 }
 
+/// The named-image search crosses the managed boundary like any retained command: it answers
+/// with the image page shape, names only what the filters admit, and reports the keys examined.
+#[test]
+fn managed_search_among_returns_the_named_images_the_filters_admit() {
+    let _scope = TestScope::new();
+    let (_temp, s, c, key) = fixture();
+    let ghost = json!({"asset_id":"no-such-asset","variant_id":"master"});
+    let among = |options: Value, keys: Value, limit: u16| {
+        rpc(
+            &s,
+            json!({"command":"search_among","args":{"catalog":c,"options":options,"keys":keys,"limit":limit}}),
+        )
+    };
+    let all = among(json!({}), json!([ghost, key]), 10);
+    assert_eq!(all["status"], "ok", "{all}");
+    let page = &all["value"]["data"];
+    assert_eq!(all["value"]["kind"], "images", "{all}");
+    assert_eq!(page["rows"].as_array().unwrap().len(), 1, "{all}");
+    assert_eq!(page["rows"][0]["key"], key, "{all}");
+    assert_eq!((&page["scanned"], &page["has_more"], &page["next"]), (&json!(2), &json!(false), &Value::Null), "{all}");
+    let applied = organize(&s, &c, &key, json!({"operation":"rating","value":3}));
+    assert_eq!(applied["status"], "ok", "{applied}");
+    let rated = among(json!({"rating":3}), json!([key]), 10);
+    assert_eq!(rated["value"]["data"]["rows"][0]["key"], key, "{rated}");
+    let other = among(json!({"rating":5}), json!([key]), 10);
+    assert_eq!(other["status"], "ok", "{other}");
+    assert!(other["value"]["data"]["rows"].as_array().unwrap().is_empty(), "{other}");
+    let refused = among(json!({}), json!([]), 10);
+    assert_eq!((&refused["status"], &refused["error"]["code"]), (&json!("error"), &json!("invalid_request")), "{refused}");
+    shutdown(&s);
+}
+
 #[test]
 fn managed_all_source_wire_variants_preserve_exact_typed_authority() {
     let _gate = TestScope::new();

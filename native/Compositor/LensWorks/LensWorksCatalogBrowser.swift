@@ -161,14 +161,18 @@ actor LensWorksPreviewStore {
         self.session = session; self.catalog = catalog; self.thumbnailEdge = thumbnailEdge; self.largeEdge = largeEdge; self.binaryLimit = binaryLimit
     }
 
+    /// What every preview request is refused with while storage maintenance holds previews.
+    static let pausedMessage = "Previews are paused for storage maintenance."
     func metrics() -> LensWorksPreviewMetrics { totals }
-    func fetch(_ key: LWCatalogEditsVariantKey, tier: LWApplicationDtoPreviewTier = .Thumbnail) async throws -> LensWorksPreview {
-        guard accepting else { throw LensWorksCatalogError.message("Previews are paused for storage maintenance.") }
+    /// `background: true` is for work nobody is looking at (semantic indexing): the engine is told the
+    /// request is not foreground, and the result does not enter (or reorder) the grid's decoded cache.
+    func fetch(_ key: LWCatalogEditsVariantKey, tier: LWApplicationDtoPreviewTier = .Thumbnail, background: Bool = false) async throws -> LensWorksPreview {
+        guard accepting else { throw LensWorksCatalogError.message(Self.pausedMessage) }
         guard tasks.count < Self.maximumPending else { throw LensWorksManagedError.resourceLimit("Thumbnail work is waiting for a viewport.") }
         let id = UUID()
         let task = Task {
-            do { return try await render(key, tier: tier, id: id) }
-            catch Retry.staleAuthority { try Task.checkCancellation(); return try await render(key, tier: tier, id: id) }
+            do { return try await render(key, tier: tier, id: id, background: background) }
+            catch Retry.staleAuthority { try Task.checkCancellation(); return try await render(key, tier: tier, id: id, background: background) }
         }
         tasks[id] = task
         defer { tasks[id] = nil }
@@ -311,7 +315,7 @@ actor LensWorksPreviewStore {
         }
         totals.cacheEntries = cached.count
     }
-    private func render(_ key: LWCatalogEditsVariantKey, tier: LWApplicationDtoPreviewTier, id: UUID) async throws -> LensWorksPreview {
+    private func render(_ key: LWCatalogEditsVariantKey, tier: LWApplicationDtoPreviewTier, id: UUID, background: Bool) async throws -> LensWorksPreview {
         let slot = try await acquire(id)
         defer { release(slot) }
         try Task.checkCancellation()
@@ -325,7 +329,7 @@ actor LensWorksPreviewStore {
         var ticket: String?
         do {
             guard case .Preview(var status) = try await owner.perform(.Preview(catalog: token, key: key,
-                tier: tier, interactive: false, viewport: viewport, generation: generation, foreground: true, diagnostics: true)) else {
+                tier: tier, interactive: false, viewport: viewport, generation: generation, foreground: !background, diagnostics: true)) else {
                 throw LensWorksManagedError.protocolViolation("Expected thumbnail progress.")
             }
             ticket = status.ticket
@@ -350,10 +354,10 @@ actor LensWorksPreviewStore {
             if let cached = cached[cacheKey] {
                 try Task.checkCancellation()
                 _ = try await owner.perform(.ReleaseViewport(catalog: token, viewport: viewport, generation: generation))
-                recency.removeAll { $0 == cacheKey }; recency.append(cacheKey)
+                if !background { recency.removeAll { $0 == cacheKey }; recency.append(cacheKey) }
                 return LensWorksPreview(copying: cached, status: status)
             }
-            let job = try await owner.preview(catalog: token, ticket: status.ticket, foreground: true)
+            let job = try await owner.preview(catalog: token, ticket: status.ticket, foreground: !background)
             let value: LensWorksPreview
             do {
                 #if DEBUG
@@ -369,6 +373,7 @@ actor LensWorksPreviewStore {
             } catch { try? await Task.detached { try await job.close() }.value; throw error }
             try Task.checkCancellation()
             _ = try await owner.perform(.ReleaseViewport(catalog: token, viewport: viewport, generation: generation))
+            if background { totals.completed += 1; return value }
             if let replaced = cached.removeValue(forKey: cacheKey) { totals.cacheBytes -= replaced.cost }
             recency.removeAll { $0 == cacheKey }
             while cached.count >= Self.maximumEntries || totals.cacheBytes + value.cost > Self.maximumBytes {

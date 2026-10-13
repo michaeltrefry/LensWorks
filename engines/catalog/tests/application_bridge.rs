@@ -709,6 +709,177 @@ fn desktop_search_filters_keep_variant_identity_and_reject_changed_query_cursor(
     Ok(())
 }
 
+/// SearchAmong answers "which of these named images do the filters admit" with search's own
+/// predicates: in the order named, skipping images the catalog does not hold, bounded by the
+/// page and scan allowances, and stopping (and saying so) at the row limit.
+#[test]
+fn desktop_search_among_admits_named_images_by_the_same_filters_in_the_named_order() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let originals = temp.path().join("originals");
+    std::fs::create_dir_all(originals.join("nested"))?;
+    for name in ["a.png", "m.png", "nested/z.png"] {
+        image::RgbImage::from_pixel(8, 8, image::Rgb([30u8, 50, 80])).save(originals.join(name))?;
+    }
+    let root = temp.path().join("catalog");
+    let mut c = Catalog::open(&root)?;
+    c.import(&originals, None, |_| Ok(()))?;
+    drop(c);
+    let bridge = Bridge::spawn(config(&originals))?;
+    let Response::Status(open) = call(
+        &bridge,
+        Request::OpenExisting {
+            path: NativePath::from_path(&root),
+        },
+    )?
+    else {
+        bail!("open response");
+    };
+    let token = open.catalog.unwrap();
+    wait_ready(&bridge)?;
+    let Response::Images { rows: all, .. } = call(
+        &bridge,
+        Request::Search {
+            catalog: token.clone(),
+            options: Box::new(browse::Options {
+                sort: photocatalog::organization_search::Sort::Filename,
+                ..Default::default()
+            }),
+            cursor: None,
+            limit: 10,
+        },
+    )?
+    else {
+        bail!("all response");
+    };
+    assert_eq!(
+        all.iter().map(|r| r.filename.as_str()).collect::<Vec<_>>(),
+        ["a.png", "m.png", "z.png"]
+    );
+    let (a, m, z) = (all[0].key.clone(), all[1].key.clone(), all[2].key.clone());
+    for (key, revision) in [(&m, all[1].metadata_revision), (&z, all[2].metadata_revision)] {
+        call(
+            &bridge,
+            Request::Cull {
+                catalog: token.clone(),
+                key: key.clone(),
+                expected_revision: revision,
+                operation: CullOperation::Rating(4),
+            },
+        )?;
+    }
+    let among = |options: browse::Options, keys: Vec<VariantKey>, limit: u16| {
+        call(
+            &bridge,
+            Request::SearchAmong {
+                catalog: token.clone(),
+                options: Box::new(options),
+                keys,
+                limit,
+            },
+        )
+    };
+    let names = |response: Response| -> Result<(Vec<String>, u32, bool, Option<String>)> {
+        let Response::Images {
+            rows,
+            scanned,
+            has_more,
+            next,
+            ..
+        } = response
+        else {
+            bail!("among response");
+        };
+        Ok((
+            rows.into_iter().map(|r| r.filename).collect(),
+            scanned,
+            has_more,
+            next,
+        ))
+    };
+    let ghost = VariantKey::master("no-such-asset");
+    let rated = browse::Options {
+        rating: Some(4),
+        ..Default::default()
+    };
+    // The named order is kept, the unrated photo and the unknown image are not admitted.
+    let (found, scanned, more, next) = names(among(
+        rated.clone(),
+        vec![z.clone(), ghost.clone(), a.clone(), m.clone()],
+        10,
+    )?)?;
+    assert_eq!(found, ["z.png", "m.png"]);
+    assert_eq!((scanned, more, next), (4, false, None));
+    // The same predicates as Search: no filter admits every named image the catalog holds...
+    let (found, ..) = names(among(
+        browse::Options::default(),
+        vec![m.clone(), ghost.clone(), a.clone()],
+        10,
+    )?)?;
+    assert_eq!(found, ["m.png", "a.png"]);
+    // ...a recursive folder admits what Search under that folder returns...
+    // Folders are listed a level at a time from the catalog's roots.
+    let mut level = vec![None];
+    let mut nested = None;
+    while nested.is_none() && !level.is_empty() {
+        let mut below = Vec::new();
+        for parent in level {
+            let Response::Folders { rows, .. } = call(
+                &bridge,
+                Request::Folders {
+                    catalog: token.clone(),
+                    parent,
+                    after: I64(0),
+                    limit: 100,
+                },
+            )?
+            else {
+                bail!("folders response");
+            };
+            for folder in rows {
+                if folder.name == "nested" {
+                    nested = Some(folder.id);
+                }
+                below.push(Some(folder.id));
+            }
+        }
+        level = below;
+    }
+    let nested = nested.context("nested folder")?;
+    let in_nested = browse::Options {
+        folder: Some(nested),
+        folder_recursive: true,
+        ..Default::default()
+    };
+    let (found, ..) = names(among(in_nested, vec![a.clone(), z.clone(), m.clone()], 10)?)?;
+    assert_eq!(found, ["z.png"]);
+    // ...and filename text is matched the way Search matches it.
+    let text = browse::Options {
+        text: Some("m".into()),
+        rating: Some(4),
+        ..Default::default()
+    };
+    let (found, ..) = names(among(text, vec![z.clone(), m.clone(), a.clone()], 10)?)?;
+    assert_eq!(found, ["m.png"]);
+    // The row limit stops the scan and says how far it got, so the caller can continue from there.
+    let (found, scanned, more, _) =
+        names(among(rated.clone(), vec![a.clone(), z.clone(), m.clone()], 1)?)?;
+    assert_eq!(found, ["z.png"]);
+    assert_eq!((scanned, more), (2, true));
+    // Allowances: no keys, more keys than the scan allowance, and more rows than a page are refused.
+    ensure!(among(rated.clone(), vec![], 10).is_err(), "no keys");
+    ensure!(
+        among(rated.clone(), vec![a.clone(); 513], 10).is_err(),
+        "scan allowance"
+    );
+    ensure!(
+        among(rated.clone(), vec![a.clone(); 512], 100).is_ok(),
+        "the scan allowance itself is admitted"
+    );
+    ensure!(among(rated, vec![a.clone()], 101).is_err(), "page allowance");
+    bridge.shutdown();
+    Ok(())
+}
+
 fn import_status(b: &Bridge, token: &str) -> Result<Option<ImportStatus>> {
     let Response::Import(s) = call(
         b,

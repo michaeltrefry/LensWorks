@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "48e307a341630acbde39cf7b3de9fd276caa8fb359835e65c1447e175f1763a5",
+  "source_digest": "879587ee2c9a902609952a4affea10f3cd6d1b0d5d6ef203416ec718d6cdf3d6",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1969,8 +1969,8 @@
     {
       "path": "src/application.rs",
       "mode": "100644",
-      "bytes": 144031,
-      "sha256": "aebc2c88485dafe6227a0601ca0b663df605cff5f7a804548a06d37dcd311a69"
+      "bytes": 144395,
+      "sha256": "b80fbeb08d80962572973a128778c78f714b9aedcedac7bde34b8aa2661cab46"
     },
     {
       "path": "src/application/backup.rs",
@@ -1981,8 +1981,8 @@
     {
       "path": "src/application/browse.rs",
       "mode": "100644",
-      "bytes": 8244,
-      "sha256": "5f9d80e117f79c6afcc3d448a7e19d32663778c08532ecee38fdce46e17a8905"
+      "bytes": 9932,
+      "sha256": "cf69db7b12162da26a64611ff152f95f2d4e75cec36b21555bf670b65ad0c6cd"
     },
     {
       "path": "src/application/copy.rs",
@@ -1999,8 +1999,8 @@
     {
       "path": "src/application/desktop.rs",
       "mode": "100644",
-      "bytes": 65066,
-      "sha256": "735b85cd5171815e7e90fabaf210ee62f8833c449ab4ec04ec08db630882b906"
+      "bytes": 65104,
+      "sha256": "34db75109d9bef13b2f1121be1102c9d2e72756d2d36961c40da005954557113"
     },
     {
       "path": "src/application/desktop/backup.rs",
@@ -2125,8 +2125,8 @@
     {
       "path": "src/application/desktop/process.rs",
       "mode": "100644",
-      "bytes": 121689,
-      "sha256": "515cdd3baaba247c65cfb8dabbf8a744a900b09c73aa735084ea3de5764d0933"
+      "bytes": 121727,
+      "sha256": "ef51bdae9ba30fce277494ba8e5114ffa0d33ae4affb46bdfdf80ab7d8c344b7"
     },
     {
       "path": "src/application/desktop/process/test_reap.rs",
@@ -2167,8 +2167,8 @@
     {
       "path": "src/application/dto.rs",
       "mode": "100644",
-      "bytes": 11745,
-      "sha256": "8cbe6c5d283c73f2ba35fcb28a998d112bf386e3b5b2c8b710fd4ae2659518fd"
+      "bytes": 12148,
+      "sha256": "5c531d36bd02aab9c6904fe0cae218ddeee4e3dcb15d888f118865182aa9bb91"
     },
     {
       "path": "src/application/exports.rs",
@@ -3847,8 +3847,8 @@
     {
       "path": "src/organization_search.rs",
       "mode": "100644",
-      "bytes": 47182,
-      "sha256": "6ab7050071bf1ebbfc66b743a6c7ad0564a26f100025cfca52a62fb549017185"
+      "bytes": 50376,
+      "sha256": "fb3b747bac246e426ba9fe0fcca9df9b55ed1d140e1c1de0343fffeba1bcc218"
     },
     {
       "path": "src/photo_render.rs",
@@ -4135,8 +4135,8 @@
     {
       "path": "tests/application_bridge.rs",
       "mode": "100644",
-      "bytes": 84202,
-      "sha256": "965edb5f77f1edeb37d36a674fc3786ce199e89570335b82b44e20a43edc18d3"
+      "bytes": 90246,
+      "sha256": "8b9f55e075cb91b278b6d4a3db406b00469807bec593b5184d80e67be5e4c8e0"
     },
     {
       "path": "tests/application_lightroom_bridge.rs",

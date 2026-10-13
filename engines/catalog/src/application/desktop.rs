@@ -1632,6 +1632,7 @@ fn local_route(request: &Request) -> bool {
         | Request::Folders { .. }
         | Request::Images { .. }
         | Request::Search { .. }
+        | Request::SearchAmong { .. }
         | Request::Image { .. }
         | Request::Variant { .. }
         | Request::Variants { .. }

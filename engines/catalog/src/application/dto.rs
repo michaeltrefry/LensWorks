@@ -137,6 +137,15 @@ pub enum Request {
         cursor: Option<String>,
         limit: u16,
     },
+    /// The subset of `keys`, in the given order, that the search options admit.
+    /// Replies with `Images`: at most `limit` rows, `scanned` keys examined, and
+    /// `has_more` when keys were left unexamined. Sort, direction and cursors do not apply.
+    SearchAmong {
+        catalog: String,
+        options: Box<super::browse::Options>,
+        keys: Vec<VariantKey>,
+        limit: u16,
+    },
     Image {
         catalog: String,
         key: VariantKey,

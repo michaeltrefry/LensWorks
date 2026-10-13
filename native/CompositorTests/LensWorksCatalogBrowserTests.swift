@@ -2002,7 +2002,10 @@ struct LensWorksCatalogBrowserTests {
         let photos = 100_000, pageRows = 100
         let fixture = try Fixture(images: 1)
         try fixture.prepareSyntheticCatalog(count: photos)
-        try await fixture.run(create: false) { model in
+        // Description search is exercised on the same catalog; indexing stays paused (the photos have no previews).
+        let embedder = LensWorksStubEmbedder()
+        let semantic = LensWorksSemanticSearch(embedder: embedder, directory: fixture.root.appendingPathComponent("Semantic"), automatic: false)
+        try await fixture.run(create: false, semantic: semantic) { model in
             @MainActor func checkWindow() {
                 #expect(model.assets.count <= pageRows && model.keywords.count <= pageRows && model.groups.count <= pageRows)
                 #expect(model.selection.count <= pageRows)
@@ -2107,6 +2110,8 @@ struct LensWorksCatalogBrowserTests {
             try await model.redoOrganization()
             #expect(try await labels().allSatisfy { $0 == "Purple" })
             checkWindow()
+
+            try await Self.filteredDescriptionSearchAtScale(model, semantic: semantic, embedder: embedder, photos: photos, pageRows: pageRows)
         }
     }
 
@@ -2780,6 +2785,95 @@ extension LensWorksCatalogBrowserTests {
         guard CGImageDestinationFinalize(destination) else { throw LensWorksCatalogError.message("Fixture PNG encoding failed.") }
         return data as Data
     }
+    /// How long a description search may take on 100,000 indexed photos when the active filter admits every
+    /// one of them. Reading that filtered set a page at a time took 21 s here (1,001 page reads); the bound
+    /// leaves room for a loaded runner over the roughly one second the search takes now.
+    static let filteredDescriptionSearchBound = Duration.seconds(5)
+
+    /// S31 at scale: with a filter that admits all 100,000 photos, a description search answers within
+    /// `filteredDescriptionSearchBound` without reading the filtered set (a bounded number of pages, then
+    /// the engine is asked about the best-ranked photos by name), equal scores come back in image order,
+    /// and an unchanged catalog reuses the ranking (one page read) where a changed one computes it again.
+    @MainActor private static func filteredDescriptionSearchAtScale(_ model: LensWorksCatalog, semantic: LensWorksSemanticSearch, embedder: LensWorksStubEmbedder, photos: Int, pageRows: Int) async throws {
+        // Every photo gets a vector without rendering 100,000 previews: one of six colours, by sequence.
+        let palette: [[Float]] = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [0, 1, 1], [1, 0, 1]].map { $0.map { $0 - 0.5 } + [0.01] }
+        let index = LensWorksSemanticIndex(url: try #require(semantic.indexURL))
+        try await index.prepare(model: embedder.identity)
+        try await model.browse()
+        await model.clearSelection()
+        var cursor: String?, stored = 0, batch: [LensWorksSemanticEntry] = []
+        repeat {
+            let page = try await model.service.browse(options: model.browseOptions, cursor: cursor)
+            batch += page.rows.map { .init(imageID: $0.image_id, assetID: $0.key.asset_id, variantID: $0.key.variant_id, revision: 0, recipeDigest: "", vector: palette[Int($0.sequence.value % 6)]) }
+            cursor = page.hasMore ? page.next : nil
+            if batch.count >= 5000 || cursor == nil { try await index.store(batch); stored += batch.count; batch = [] }
+        } while cursor != nil
+        #expect(stored == photos)
+
+        // A small filtered set (one keyword: ten photos, of three colours) is read whole through the catalog's
+        // own query and scored; equal scores come back in image order.
+        try await model.loadKeywords()
+        try await model.enterKeyword(try #require(model.keywords.first { $0.name == "Wide" }))
+        let term = try #require(model.keywords.first { $0.name == "Term00000" })
+        try await model.setFilters(keyword: .some(term))
+        #expect(model.assets.count == 10 && Set(model.assets.map { $0.sequence % 6 }).count == 3, "\(model.assets.map(\.sequence))")
+        let before = await model.service.amongCalls
+        try await model.searchSemantically("red")
+        #expect(model.assets.count == 10 && model.status.contains("10 best matches"), "\(model.status)")
+        #expect(await model.service.amongCalls == before, "a small filtered set needs no named-photo query")
+        // Red first, then the colours less like it; within a colour, by image.
+        let groups = Dictionary(grouping: model.assets, by: { $0.sequence % 6 })
+        #expect(model.assets.first?.sequence.isMultiple(of: 6) == true && groups[0]?.count == 3)
+        let expected = [0, 2, 4].flatMap { colour in (groups[colour] ?? []).map(\.id).sorted() }
+        let other = Set(model.assets.map { $0.sequence % 6 }).subtracting([0])
+        #expect(other == [2, 4] && model.assets.map(\.id) == expected, "\(model.assets.map { "\($0.sequence % 6):\($0.id)" })")
+        try await model.clearSemanticSearch()
+        try await model.clearFilters()
+
+        // The root folder, recursively: a filter, and every photo passes it.
+        try await model.loadFolders()
+        let root = try #require(model.folders.first)
+        try await model.browse(folder: root)
+        #expect(LensWorksCatalog.hasFilters(model.browseOptions) && model.assets.count == pageRows)
+        let computed = model.semanticRankingsComputed
+        var calls = await model.service.browseCalls
+        let named = await model.service.amongCalls
+        let started = ContinuousClock.now
+        try await model.searchSemantically("red")
+        let elapsed = ContinuousClock.now - started
+        let streamed = await model.service.browseCalls - calls, asked = await model.service.amongCalls - named
+        print("Filtered description search over \(photos) photos: \(elapsed) in \(streamed) page reads and \(asked) named-photo queries (bound \(filteredDescriptionSearchBound)).")
+        #expect(elapsed < filteredDescriptionSearchBound, "a description search within an all-admitting filter took \(elapsed) over \(photos) photos")
+        // √100,000 / 10 pages are read before the filtered set is judged large; 500 matches then take five pages of named photos.
+        #expect(streamed == 31 && asked == LensWorksCatalog.semanticResultLimit / pageRows, "\(streamed) page reads, \(asked) named-photo queries")
+        #expect(model.error == nil && model.semanticRankingsComputed == computed + 1)
+        #expect(model.status.contains("\(LensWorksCatalog.semanticResultLimit) best matches") && model.status.contains("within the current filters"), "\(model.status)")
+        #expect(model.assets.count == pageRows && model.assets.allSatisfy { $0.sequence % 6 == 0 }, "only the red photos lead")
+        // A sixth of the catalog scores exactly the same: the ranking is by image, not by where a sort happened to leave it.
+        let first = model.assets.map(\.id)
+        #expect(first == first.sorted() && Set(first).count == pageRows)
+
+        // Nothing changed: refreshing reads one page, recognises the catalog and reuses the ranking.
+        calls = await model.service.browseCalls
+        await model.refresh()
+        #expect(model.error == nil && model.semanticRankingsComputed == computed + 1 && model.assets.map(\.id) == first)
+        #expect(await model.service.browseCalls - calls == 1)
+        // Further pages come from the ranking without touching the catalog's query.
+        #expect(await model.nextPage())
+        #expect(await model.service.browseCalls - calls == 1 && model.assets.count == pageRows && Set(model.assets.map(\.id)).isDisjoint(with: first))
+        #expect(model.assets.allSatisfy { $0.sequence % 6 == 0 } && model.assets.map(\.id) == model.assets.map(\.id).sorted() && model.assets[0].id > first[pageRows - 1])
+        #expect(await model.service.amongCalls - named == asked, "nothing was asked again")
+        // The catalog changed (a rating): the engine's cursor says so and the ranking is computed again.
+        let rated = try #require(model.assets.first), key = try #require(rated.key)
+        try await model.organize(.rating(2), rows: [LensWorksSelectedRow(imageID: rated.id, key: key)])
+        await model.refresh()
+        #expect(model.error == nil && model.semanticRankingsComputed == computed + 2)
+
+        try await model.clearSemanticSearch()
+        try await model.browse()
+        #expect(model.semanticQuery == nil && !LensWorksCatalog.hasFilters(model.browseOptions) && model.assets.count == pageRows)
+    }
+
     private static func settled(_ semantic: LensWorksSemanticSearch, indexed: Int) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(120))
         while true {
@@ -2808,6 +2902,9 @@ extension LensWorksCatalogBrowserTests {
             // Automatic: nobody asked for indexing.
             try await Self.settled(semantic, indexed: 5)
             #expect(embedder.imagesEmbedded == 5 && embedder.batches.allSatisfy { $0 <= 2 }, "bounded batches: \(embedder.batches)")
+            // Indexing read five previews as background work: none of them entered the grid's decoded cache.
+            let previews = await model.service.previewMetrics()
+            #expect(previews.completed >= 5 && previews.cacheEntries == 0 && previews.cacheEntriesHighWater == 0, "\(previews)")
             @MainActor func names() -> [String] { model.assets.map(\.filename) }
 
             try await model.searchSemantically("red")
@@ -2862,16 +2959,69 @@ extension LensWorksCatalogBrowserTests {
             let after = try #require(try await index.version(red.id))
             #expect(after.revision > before.revision && after.recipeDigest != before.recipeDigest, "the stored vector follows the edited recipe")
 
+            #if DEBUG
+            // The engine saves an edit, then the selection changes before the result is published: the
+            // action is refused, but the saved edit's embedding is still owed.
+            let other = try #require(model.assets.first { $0.filename == "green.png" })
+            model.continuationFixture = { point in if point == .catalogRecipeReply { await model.select(other) } }
+            await #expect(throws: CancellationError.self) { _ = try await model.changeCatalogRecipe(.exposure(-1)) }
+            model.continuationFixture = nil
+            try await Self.settled(semantic, indexed: 6)
+            #expect(embedder.imagesEmbedded == 8, "the refused publication still re-embeds the photo the engine changed")
+            #expect(try #require(try await index.version(red.id)).revision > after.revision)
+            #endif
+            // An automation plan's exposure edit goes straight to the engine; its embedding is owed too.
+            let plan = fixture.root.appendingPathComponent("edit-plan.json")
+            try Data(#"{"version":1,"actions":[{"kind":"select","filename":"green.png"},{"kind":"editPreview","exposureEV":0.5}]}"#.utf8).write(to: plan)
+            let planned = embedder.imagesEmbedded
+            let green = try #require(model.assets.first { $0.filename == "green.png" })
+            let greenBefore = try #require(try await index.version(green.id))
+            try await model.executeCatalogPlan(plan.path)
+            try await Self.settled(semantic, indexed: 6)
+            #expect(embedder.imagesEmbedded == planned + 1)
+            #expect(try #require(try await index.version(green.id)).revision > greenBefore.revision)
+
+            #if DEBUG
+            // Storage maintenance holds previews: indexing waits and says why, then continues when they resume.
+            try await model.service.observePreviewDrain(timeoutMilliseconds: 30_000)
+            let greenKey = try #require(green.key)
+            await semantic.invalidate([.init(imageID: green.id, assetID: greenKey.asset_id, variantID: greenKey.variant_id)])
+            try await Self.wait { !semantic.isIndexing }
+            #expect(semantic.state == .waiting(LensWorksPreviewStore.pausedMessage + " Indexing continues when previews resume.", indexed: 6))
+            #expect(semantic.resumeUnavailableReason == nil)
+            let held = embedder.imagesEmbedded
+            #expect(await model.service.resumePreviews())
+            semantic.resume()
+            try await Self.settled(semantic, indexed: 6)
+            #expect(embedder.imagesEmbedded == held + 1)
+            #endif
+
+            // The index names a photo the catalog does not have (it was removed elsewhere): the match is
+            // left out and forgotten. Any other engine failure is an error, not "no such photo".
+            let ghost = LensWorksSemanticEntry(imageID: "ghost", assetID: "no-such-asset", variantID: "master", revision: 1, recipeDigest: "d", vector: [0.5, -0.5, 0.5, 0.01])
+            try await index.store([ghost])
+            try await model.searchSemantically("magenta")
+            #expect(names().count == 6 && names().first == "magenta.png" && model.error == nil, "\(names())")
+            #expect(try await index.version("ghost") == nil, "the photo the catalog no longer has is forgotten")
+            try await index.store([.init(imageID: "broken", assetID: String(repeating: "x", count: 300), variantID: "master", revision: 1, recipeDigest: "d", vector: [0.5, -0.5, 0.5, 0.01])])
+            do { try await model.searchSemantically("magenta cyan"); Issue.record("an engine failure that is not a missing photo must surface") }
+            catch { #expect(!LensWorksCatalog.isMissingPhoto("native", error.localizedDescription) && !(error is CancellationError), "\(error)") }
+            #expect(model.semanticQuery == nil, "the grid is browsable again")
+            #expect(try await index.version("broken") != nil, "nothing was forgotten")
+            try await index.remove(["broken"])
+            try await model.clearSemanticSearch()
+
             // Originals go offline. Indexing and search read only stored previews, so both still work —
             // including rebuilding an index that was deleted.
             let moved = fixture.root.appendingPathComponent("Moved Photos")
             try FileManager.default.moveItem(at: fixture.photos, to: moved)
             defer { if !FileManager.default.fileExists(atPath: fixture.photos.path) { try? FileManager.default.moveItem(at: moved, to: fixture.photos) } }
             await model.refresh()
+            let beforeRebuild = embedder.imagesEmbedded
             for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: index.url.path + suffix) }
             semantic.schedule()
             try await Self.settled(semantic, indexed: 6)
-            #expect(embedder.imagesEmbedded == 13, "the deleted index was rebuilt from the six stored previews")
+            #expect(embedder.imagesEmbedded == beforeRebuild + 6, "the deleted index was rebuilt from the six stored previews")
             try await model.searchSemantically("green")
             #expect(names().first == "green.png" && names().count == 6 && model.error == nil)
             // Pausing is a registered, reasoned state; a paused index still answers.

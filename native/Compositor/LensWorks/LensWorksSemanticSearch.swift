@@ -119,7 +119,7 @@ protocol LensWorksSemanticEmbedder: Sendable {
 
     func embed(text: String) async throws -> [Float] {
         keptLoaded = true
-        // Kept loaded so a run of searches does not reload the model each time; `release` unloads it.
+        // Shares the residency of an indexing pass that is running; the search service releases it after the query otherwise.
         return try await run(task: "embed_text", pixels: nil, inputs: [], count: 1) { provider, lease in
             .embedText(provider: provider, weights: lease.weights, load: .init(residency: .keepLoaded), LWEmbedTextParams(texts: [text]))
         }[0]
@@ -159,10 +159,19 @@ nonisolated enum LensWorksSemanticSourceError: Error, Equatable {
     case paused(String)
 }
 
-/// What indexing reads from a catalog: every photo newest first, and each photo's stored preview.
+/// The version of a photo's pixels: the recipe revision and digest its preview is rendered from.
+nonisolated struct LensWorksSemanticVersion: Sendable, Equatable {
+    let revision: Int64
+    let recipeDigest: String
+}
+
+/// What indexing reads from a catalog: every photo newest first, each photo's stored preview, and
+/// the version a photo's pixels are at now.
 protocol LensWorksSemanticCatalogSource: Sendable {
     func semanticPage(cursor: String?) async throws -> LensWorksSemanticSourcePage
     func semanticPreview(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticPreview
+    /// The photo's current version, or nil when the catalog no longer has it.
+    func semanticVersion(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticVersion?
 }
 
 extension LensWorksCatalogService: LensWorksSemanticCatalogSource {
@@ -182,9 +191,16 @@ extension LensWorksCatalogService: LensWorksSemanticCatalogSource {
     func semanticPreview(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticPreview {
         let preview: LensWorksPreview
         do { preview = try await semanticThumbnail(LWCatalogEditsVariantKey(asset_id: row.assetID, variant_id: row.variantID)) }
-        catch LensWorksCatalogError.message(let text) where text.hasPrefix("Previews are paused") { throw LensWorksSemanticSourceError.paused(text) }
+        catch LensWorksCatalogError.message(LensWorksPreviewStore.pausedMessage) { throw LensWorksSemanticSourceError.paused(LensWorksPreviewStore.pausedMessage) }
         catch LensWorksManagedError.resourceLimit { throw CancellationError() } // the grid has the viewports; try again shortly
         return .init(image: try LWInferenceImage(cgImage: preview.image), revision: preview.status.revision.value, recipeDigest: preview.status.recipe_digest)
+    }
+
+    func semanticVersion(_ row: LensWorksSemanticRow) async throws -> LensWorksSemanticVersion? {
+        do {
+            let current = try await variant(LWCatalogEditsVariantKey(asset_id: row.assetID, variant_id: row.variantID))
+            return .init(revision: current.revision.value, recipeDigest: current.recipe_digest)
+        } catch LensWorksManagedError.native(let code, let message) where LensWorksCatalog.isMissingPhoto(code, message) { return nil }
     }
 }
 
@@ -202,20 +218,31 @@ nonisolated struct LensWorksSemanticPassOutcome: Sendable, Equatable {
     var interrupted = 0
     /// Largest batch handed to the model.
     var largestBatch = 0
+    /// Photos forgotten because the catalog no longer has them.
+    var removed = 0
+    /// Indexed photos found to have changed since they were embedded (edited outside this session), embedded again.
+    var outdated = 0
+    /// The stored watermark belonged to another catalog at the same path, so the whole catalog was scanned.
+    var rescanned = false
 }
 
 /// One incremental pass: retry what is owed, then scan the catalog newest first, embedding
 /// photos that have no embedding, and stop at the sequence an earlier pass finished through.
+/// A scan of the whole catalog (the first one, after a rebuild, or when the stored watermark turns
+/// out to belong to another catalog at the same path) also forgets photos the catalog no longer
+/// has. Last, up to `verifyBatch` already indexed photos are compared with the catalog's current
+/// version, so edits made outside this session are embedded again a slice at a time.
 /// Work is bounded by `batchSize` previews at a time and stops at the next photo or model
 /// event when its task is cancelled; everything stored before that stays.
 nonisolated enum LensWorksSemanticPass {
     static let interruptedReason = "Its preview request was interrupted by other preview work."
 
     static func run(index: LensWorksSemanticIndex, embedder: any LensWorksSemanticEmbedder, source: any LensWorksSemanticCatalogSource,
-                    batchSize: Int = 16, progress: @Sendable (LensWorksSemanticPassOutcome) async -> Void = { _ in }) async throws -> LensWorksSemanticPassOutcome {
+                    batchSize: Int = 16, verifyBatch: Int = 128, progress: @Sendable (LensWorksSemanticPassOutcome) async -> Void = { _ in }) async throws -> LensWorksSemanticPassOutcome {
         let model = try await embedder.model().get()
         var outcome = LensWorksSemanticPassOutcome()
         outcome.preparation = try await index.prepare(model: model.identity)
+        let generation = await index.generation
         let size = max(1, batchSize)
 
         func embed(_ rows: [LensWorksSemanticRow]) async throws {
@@ -268,13 +295,28 @@ nonisolated enum LensWorksSemanticPass {
         // 2. Newest first, down to what a finished pass already covered.
         var restarts = 0
         scan: while true {
-            let floor = try await index.completeThrough()
+            var floor = try await index.completeThrough()
             var cursor: String?, top: Int64?
             do {
                 while true {
                     try Task.checkCancellation()
                     let page = try await source.semanticPage(cursor: cursor)
-                    if top == nil { top = page.rows.first?.sequence }
+                    if cursor == nil {
+                        top = page.rows.first?.sequence
+                        // Sequences only grow within one catalog. A newest photo below the watermark, or at it
+                        // but unknown to the index, means the watermark is another catalog's (recreated or
+                        // restored at this path): everything is scanned, and what is not seen is forgotten.
+                        if let covered = floor {
+                            var foreign = true
+                            if let newest = page.rows.first, newest.sequence >= covered {
+                                let unknown = try await index.known([newest.imageID]).isEmpty
+                                foreign = newest.sequence == covered && unknown
+                            }
+                            if foreign { try await index.setCompleteThrough(nil); floor = nil; outcome.rescanned = true }
+                        }
+                        if floor == nil { try await index.beginFullScan() }
+                    }
+                    if floor == nil { try await index.markSeen(page.rows.map(\.imageID)) }
                     let fresh = page.rows.filter { row in floor.map { row.sequence > $0 } ?? true }
                     let have = try await index.embedded(fresh.map(\.imageID))
                     // Photos already owed were attempted in step 1 of this pass.
@@ -291,8 +333,25 @@ nonisolated enum LensWorksSemanticPass {
                 guard restarts <= 8 else { throw LensWorksSemanticIndexError.unavailable("The catalog kept changing while it was being indexed. Indexing continues on the next pass.") }
                 continue scan
             }
-            if let top { try await index.setCompleteThrough(max(top, floor ?? top)) }
+            if let floor { try await index.finishScan(full: false, through: max(top ?? floor, floor), generation: generation) }
+            else { outcome.removed += try await index.finishScan(full: true, through: top, generation: generation) }
             break
+        }
+        // 3. A bounded slice of the photos indexed earlier: has the catalog a newer version of them?
+        if verifyBatch > 0 {
+            let slice = try await index.verificationSlice(limit: verifyBatch)
+            var gone: [String] = [], changed: [LensWorksSemanticRow] = []
+            for entry in slice {
+                try Task.checkCancellation()
+                let row = LensWorksSemanticRow(imageID: entry.imageID, assetID: entry.assetID, variantID: entry.variantID, sequence: 0)
+                guard let current = try await source.semanticVersion(row) else { gone.append(entry.imageID); continue }
+                if current != LensWorksSemanticVersion(revision: entry.revision, recipeDigest: entry.recipeDigest) { changed.append(row) }
+            }
+            try await index.remove(gone)
+            outcome.removed += gone.count; outcome.outdated += changed.count
+            for start in stride(from: 0, to: changed.count, by: size) { try await embed(Array(changed[start..<min(start + size, changed.count)])) }
+            // Fewer than a full slice means the end was reached: the next pass starts over.
+            try await index.setVerifiedThrough(slice.count < verifyBatch ? nil : slice.last?.imageID)
         }
         return outcome
     }
@@ -330,6 +389,10 @@ final class LensWorksSemanticSearch {
     @ObservationIgnored let embedder: any LensWorksSemanticEmbedder
     @ObservationIgnored private let directory: URL?
     @ObservationIgnored private let batchSize: Int
+    @ObservationIgnored private let verifyBatch: Int
+    /// Passes and description queries that are using the loaded model; it is released when none is.
+    @ObservationIgnored private var modelUsers = 0
+    @ObservationIgnored private var releasing: Task<Void, Never>?
     @ObservationIgnored private var index: LensWorksSemanticIndex?
     @ObservationIgnored private var source: (any LensWorksSemanticCatalogSource)?
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -339,8 +402,9 @@ final class LensWorksSemanticSearch {
     @ObservationIgnored private var queryVectors: [(model: String, text: String, vector: [Float])] = []
 
     /// `automatic: false` starts paused: nothing is embedded until the person resumes indexing.
-    init(embedder: any LensWorksSemanticEmbedder, directory: URL? = nil, batchSize: Int = 16, automatic: Bool = true) {
-        self.embedder = embedder; self.directory = directory; self.batchSize = batchSize; self.userPaused = !automatic
+    /// `verifyBatch` is how many already indexed photos each pass compares with the catalog's current version.
+    init(embedder: any LensWorksSemanticEmbedder, directory: URL? = nil, batchSize: Int = 16, verifyBatch: Int = 128, automatic: Bool = true) {
+        self.embedder = embedder; self.directory = directory; self.batchSize = batchSize; self.verifyBatch = verifyBatch; self.userPaused = !automatic
     }
 
     /// The app's service: CLIP through the shared model store. Under XCTest (the app as a test
@@ -416,7 +480,10 @@ final class LensWorksSemanticSearch {
 
     func attach(catalogPath: String, source: any LensWorksSemanticCatalogSource) async {
         await detach()
-        do { index = LensWorksSemanticIndex(url: try LensWorksSemanticIndex.location(catalogPath: catalogPath, directory: directory)) }
+        do {
+            index = LensWorksSemanticIndex(url: try LensWorksSemanticIndex.location(catalogPath: catalogPath, directory: directory),
+                                           catalog: LensWorksSemanticIndex.catalogStamp(catalogPath: catalogPath))
+        }
         catch { state = .indexUnavailable(error.localizedDescription); return }
         self.source = source
         state = userPaused ? .paused(indexed: 0) : .checking
@@ -430,7 +497,8 @@ final class LensWorksSemanticSearch {
         task = nil; rerun = false
         running?.cancel()
         await running?.value
-        if index != nil { await embedder.release() }
+        // A description query still embedding releases the model itself when it finishes.
+        if index != nil, modelUsers == 0 { await embedder.release() }
         index = nil; source = nil; queryVectors = []
         state = .noCatalog
     }
@@ -439,18 +507,19 @@ final class LensWorksSemanticSearch {
     func schedule() {
         guard !userPaused, let index, let source else { return }
         if task != nil { rerun = true; return }
-        let admitted = generation, embedder = self.embedder, batchSize = self.batchSize
+        let admitted = generation, embedder = self.embedder, batchSize = self.batchSize, verifyBatch = self.verifyBatch
         task = Task { [weak self] in
             var retries = 0
             while !Task.isCancelled {
+                await self?.useModel()
                 let result: Result<LensWorksSemanticPassOutcome, any Error>
                 do {
-                    result = .success(try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, batchSize: batchSize) { outcome in
+                    result = .success(try await LensWorksSemanticPass.run(index: index, embedder: embedder, source: source, batchSize: batchSize, verifyBatch: verifyBatch) { outcome in
                         let indexed = (try? await index.count()) ?? 0
                         await self?.report(.indexing(indexed: indexed, examined: outcome.examined), generation: admitted)
                     })
                 } catch { result = .failure(error) }
-                await embedder.release()
+                if let self { await self.doneWithModel() } else { await embedder.release() }
                 guard let self, self.generation == admitted, !Task.isCancelled else { return }
                 // Photos whose preview request lost to other preview work are retried a few times, then reported.
                 var interrupted = false
@@ -460,6 +529,24 @@ final class LensWorksSemanticSearch {
             }
             if let self, self.generation == admitted { self.task = nil }
         }
+    }
+
+    /// Counts one more user of the loaded model, after any release in progress has finished.
+    private func useModel() async {
+        while let releasing { await releasing.value }
+        modelUsers += 1
+    }
+    /// One user is done. The model is unloaded when no pass and no description query is embedding,
+    /// so it never stays resident (and leased) on an idle index, and is never unloaded under a job.
+    private func doneWithModel() async {
+        modelUsers -= 1
+        while let releasing { await releasing.value }
+        guard modelUsers == 0 else { return }
+        let embedder = self.embedder
+        // Cleared by the release itself, before it completes: a waiter never finds a finished release still recorded.
+        let release = Task { await embedder.release(); self.releasing = nil }
+        releasing = release
+        await release.value
     }
 
     private func report(_ state: State, generation admitted: UInt64) {
@@ -519,25 +606,35 @@ final class LensWorksSemanticSearch {
         guard let index else { return }
         let wasPaused = userPaused
         await pause()
-        let model = try await embedder.model().get()
-        try await index.prepare(model: model.identity)
-        try await index.clear()
+        do {
+            let model = try await embedder.model().get()
+            try await index.prepare(model: model.identity)
+            try await index.clear()
+        } catch {
+            // The rebuild did not start: indexing goes back to how it was, not left paused.
+            if !wasPaused { resume() }
+            throw error
+        }
         userPaused = wasPaused
         if wasPaused { state = .paused(indexed: 0) } else { state = .indexing(indexed: 0, examined: 0); schedule() }
     }
 
     /// Photos whose pixels changed (or that were just created): their embeddings are owed again.
+    /// Recording that needs only the index file, so an edit made while the model is unavailable is not lost.
     func invalidate(_ rows: [LensWorksSemanticPending]) async {
         guard let index, !rows.isEmpty else { return }
-        guard case .success(let model) = await embedder.model(), (try? await index.prepare(model: model.identity)) != nil else { return }
         try? await index.markPending(rows)
         schedule()
     }
 
+    /// Photos the catalog no longer has.
+    func forget(_ images: [String]) async { try? await index?.remove(images) }
+
     /// Looks again after the model's state may have changed (a download finished, a licence was accepted).
     func recheck() {
         guard index != nil else { return }
-        if case .modelUnavailable = state { state = userPaused ? .paused(indexed: 0) : .checking }
+        guard case .modelUnavailable = state else { return }
+        state = userPaused ? .paused(indexed: 0) : .checking
         schedule()
     }
 
@@ -554,7 +651,10 @@ final class LensWorksSemanticSearch {
         if case .modelUnavailable = state { recheck() }
         try await index.prepare(model: model.identity)
         if let cached = queryVectors.first(where: { $0.model == model.identity && $0.text == text }) { return (index, cached.vector) }
-        let vector = try await embedder.embed(text: text)
+        await useModel()
+        let vector: [Float]
+        do { vector = try await embedder.embed(text: text) } catch { await doneWithModel(); throw error }
+        await doneWithModel()
         queryVectors.append((model.identity, text, vector))
         if queryVectors.count > 16 { queryVectors.removeFirst() }
         return (index, vector)
