@@ -3,6 +3,8 @@ on:
   pull_request: {}
   push:
     branches: [main]
+    # The code graph document is regenerated after every merge; it changes no build input.
+    paths-ignore: [CODEGRAPH.md]
 permissions: {contents: read}
 # One runner serves every workflow, so a newer push to a pull request replaces its older runs.
 # Pushes to main are grouped by commit and never cancelled.
