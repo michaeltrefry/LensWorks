@@ -68,7 +68,7 @@ final class ShortcutSettings {
     @ObservationIgnored private let panel = FloatingPanelController(name: "keyboardShortcuts")
     private static let storageKey = "keyboardShortcuts.v1"
     private init() {
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+        if let data = LensWorksUserState.defaults.data(forKey: Self.storageKey),
            let stored = try? JSONDecoder().decode([String: ShortcutChord].self, from: data) {
             (overrides, droppedOverrides) = Self.applicable(Self.migrated(stored))
             if !droppedOverrides.isEmpty { NSLog("Keyboard shortcuts: custom shortcuts not applied: %@", droppedOverrides.joined(separator: ", ")) }
@@ -110,7 +110,7 @@ final class ShortcutSettings {
     func save(_ values: [String: ShortcutChord]) {
         guard Self.problem(in: values) == nil, let data = try? JSONEncoder().encode(values) else { return }
         overrides = values
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        LensWorksUserState.defaults.set(data, forKey: Self.storageKey)
         close()
     }
     static func problem(in values: [String: ShortcutChord]) -> String? {

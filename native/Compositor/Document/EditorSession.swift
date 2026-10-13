@@ -385,7 +385,7 @@ final class EditorSession {
     @ObservationIgnored var selectionMoveOrigin: DocumentSelection?
     var pixelMove: PixelMove?
     /// The clipboard Cut, Copy and Paste use. Tests give a session its own so they never touch the person's.
-    @ObservationIgnored var pasteboard = NSPasteboard.general
+    @ObservationIgnored var pasteboard = LensWorksUserState.pasteboard
     @ObservationIgnored var pixelClipboard: PixelClipboard?
     @ObservationIgnored var copiedLayer: CopiedLayer?
     var levels: LevelsEdit? { didSet { resumeFileRequests() } }

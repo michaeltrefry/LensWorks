@@ -133,7 +133,7 @@ final class LensWorksAutomation {
     /// Whether a confirmation asks for the person's attention in the Dock.
     @ObservationIgnored var requestsAttention = true
 
-    init(defaults: UserDefaults = .standard, secretStore: LensWorksAutomationSecretStore = LensWorksKeychainSecretStore(),
+    init(defaults: UserDefaults = LensWorksUserState.defaults, secretStore: LensWorksAutomationSecretStore = LensWorksUserState.secretStore(),
          socketPath: String = LensWorksAutomationServer.defaultSocketPath(),
          session: @escaping () -> EditorSession?, catalog: @escaping () -> LensWorksCatalog?) {
         self.defaults = defaults; self.secretStore = secretStore
@@ -247,7 +247,7 @@ final class LensWorksAutomation {
     }
 
     /// Copies a secret (or a configuration carrying it), marked concealed so clipboard managers do not keep it.
-    func copyToPasteboard(_ text: String, pasteboard: NSPasteboard = .general) {
+    func copyToPasteboard(_ text: String, pasteboard: NSPasteboard = LensWorksUserState.pasteboard) {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboard.setString("", forType: Self.concealedPasteboardType)

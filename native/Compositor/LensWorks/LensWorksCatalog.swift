@@ -606,6 +606,36 @@ actor LensWorksCatalogService {
 
 nonisolated enum LensWorksCatalogRecipeAction: Sendable { case copy(String), exposure(Float), undo, redo }
 
+/// Who made the recipe changes a catalog copy's Undo and Redo would step over, newest last. The engine keeps the
+/// recipe history itself and records no author, so LensWorks keeps this beside it (in its index, across launches),
+/// tied to the exact revision and recipe it describes. A step it has no record of is the person's.
+nonisolated struct LensWorksRecipeOrigins: Sendable, Equatable {
+    static let limit = 256
+    var undo: [LensWorksCommandOrigin] = []
+    var redo: [LensWorksCommandOrigin] = []
+    init() {}
+    init(undo: String, redo: String) {
+        self.undo = undo.map { $0 == "a" ? .agent : .user }; self.redo = redo.map { $0 == "a" ? .agent : .user }
+    }
+    var encodedUndo: String { String(undo.suffix(Self.limit).map { $0 == .agent ? "a" : "u" }) }
+    var encodedRedo: String { String(redo.suffix(Self.limit).map { $0 == .agent ? "a" : "u" }) }
+    /// The history after `origin` made `action`, which left the copy able to undo and redo as given.
+    func recording(_ action: LensWorksCatalogRecipeAction, by origin: LensWorksCommandOrigin, canUndo: Bool, canRedo: Bool) -> Self {
+        var next = self
+        switch action {
+        case .copy: break
+        case .exposure: next.undo.append(origin)
+        case .undo: next.redo.append(next.undo.popLast() ?? .user)
+        case .redo: next.undo.append(next.redo.popLast() ?? .user)
+        }
+        // The engine's own answer bounds the record: it never names a step the engine does not have (a save leaves
+        // nothing to redo).
+        if !canUndo { next.undo = [] }
+        if !canRedo { next.redo = [] }
+        return next
+    }
+}
+
 nonisolated enum LensWorksCatalogControlAction: Sendable {
     case firstVariants
     case moreVariants(LWCatalogI64)
@@ -839,6 +869,8 @@ final class LensWorksCatalog {
     private(set) var keywordNext: LWCatalogI64?
     @ObservationIgnored private var keywordTrail: [LWApplicationOrganizationKeyword] = []
     @ObservationIgnored private var keywordEpoch: UInt64 = 0
+    /// The recorded recipe-history origins of the copy shown, with the revision and recipe they describe.
+    private(set) var catalogRecipeOrigins: (key: LWCatalogEditsVariantKey, revision: LWCatalogI64, digest: String, origins: LensWorksRecipeOrigins)?
     private(set) var organizationUndo: [LensWorksOrganizationStep] = []
     private(set) var organizationRedo: [LensWorksOrganizationStep] = []
     @ObservationIgnored private var organizationStepID: Int64 = 0
@@ -923,7 +955,7 @@ final class LensWorksCatalog {
     }
     var selectedVersions: [LensWorksWorkingVersion] { versions.filter { $0.photoID == selectedAsset?.photoID && $0.sourceVariantID == (selectedAsset?.key?.variant_id ?? "master")  } }
     var isImporting: Bool { importProgress.map { [.Discovering, .Draining, .CancelRequested].contains($0.phase) } ?? false }
-    init(configuration: LWManagedSessionConfig? = nil, index: LensWorksCatalogIndex = .shared, defaults: UserDefaults = .standard, migrateLegacy: Bool = false, catalogService: LensWorksCatalogService? = nil) {
+    init(configuration: LWManagedSessionConfig? = nil, index: LensWorksCatalogIndex = .shared, defaults: UserDefaults = LensWorksUserState.defaults, migrateLegacy: Bool = false, catalogService: LensWorksCatalogService? = nil) {
         service = catalogService ?? LensWorksCatalogService(configuration: configuration)
         self.index = index; self.defaults = defaults; self.migrateLegacy = migrateLegacy
         rowLimit = min(100, configuration?.limits?.page_rows ?? 100)
@@ -1558,7 +1590,20 @@ final class LensWorksCatalog {
         try await loadGroups(after: after); try checkScope(scope)
     }
 
-    func captureCatalogControl(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant) throws -> LensWorksCatalogControlAdmission {
+    /// Who made the recipe change Undo (or Redo) would step over on the current copy; nil when there is none or it
+    /// was not recorded, which reads as the person's.
+    func recipeHistoryOrigin(redo: Bool) -> LensWorksCommandOrigin? {
+        guard let current = currentCatalogVariant, let recorded = catalogRecipeOrigins, recorded.revision == current.revision,
+              recorded.digest == current.recipe_digest, recorded.key.asset_id == current.key.asset_id, recorded.key.variant_id == current.key.variant_id,
+              redo ? current.can_redo : current.can_undo else { return nil }
+        return redo ? recorded.origins.redo.last : recorded.origins.undo.last
+    }
+    /// The rule document and organize history follow: an agent steps only over its own recipe changes.
+    static func recipeOwnershipRefusal(redo: Bool) -> LensWorksCatalogError {
+        .message(redo ? "The next catalog recipe change to redo is the person’s own: an agent redoes only its own."
+                      : "The last catalog recipe change is the person’s own: an agent undoes only its own.")
+    }
+    func captureCatalogControl(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant, origin: LensWorksCommandOrigin = .user) throws -> LensWorksCatalogControlAdmission {
         try admitCatalogWork()
         guard !isBusy, let asset = selectedAsset, let key = asset.key, let current = currentCatalogVariant,
               current.key.asset_id == key.asset_id, current.key.variant_id == key.variant_id,
@@ -1572,9 +1617,11 @@ final class LensWorksCatalog {
             try requireFullResolutionOriginal(asset)
         case .recipe(.undo):
             guard current.can_undo else { throw LensWorksCatalogError.message("This catalog recipe has no Undo step.") }
+            guard origin != .agent || recipeHistoryOrigin(redo: false) == .agent else { throw Self.recipeOwnershipRefusal(redo: false) }
             try requireFullResolutionOriginal(asset)
         case .recipe(.redo):
             guard current.can_redo else { throw LensWorksCatalogError.message("This catalog recipe has no Redo step.") }
+            guard origin != .agent || recipeHistoryOrigin(redo: true) == .agent else { throw Self.recipeOwnershipRefusal(redo: true) }
             try requireFullResolutionOriginal(asset)
         case .rating(let value):
             guard value <= 5 else { throw LensWorksCatalogError.message("Rating must be 0–5.") }
@@ -1604,7 +1651,7 @@ final class LensWorksCatalog {
         case .firstVariants: try await loadCatalogVariants()
         case .moreVariants(let cursor): try await loadCatalogVariants(after: cursor)
         case .selectVariant(let variant): try await selectCatalogVariant(variant)
-        case .recipe(let action): _ = try await changeCatalogRecipe(action)
+        case .recipe(let action): _ = try await changeCatalogRecipe(action, origin: origin)
         case .rating(let value): try await setCatalogRating(value, origin: origin)
         }
     }
@@ -1633,6 +1680,10 @@ final class LensWorksCatalog {
         try checkCatalogSelection(scope, image: asset.id, query: query)
         guard current.key.asset_id == key.asset_id, current.key.variant_id == key.variant_id else { throw LensWorksManagedError.protocolViolation("Catalog recipe authority changed logical identity.") }
         guard master.key.asset_id == key.asset_id, master.key.variant_id == "master" else { throw LensWorksManagedError.protocolViolation("Catalog master authority changed logical identity.") }
+        // Who made this copy's recipe history, as recorded for exactly this revision and recipe.
+        let origins = try? await index.recipeOrigins(catalog: scope.path ?? "", key: current.key, revision: current.revision.value, digest: current.recipe_digest)
+        try checkCatalogSelection(scope, image: asset.id, query: query)
+        catalogRecipeOrigins = origins.map { (current.key, current.revision, current.recipe_digest, $0) }
         catalogVariantScope = scope; catalogVariant = current
         // The native page includes persisted recipes; the implicit master is a separate typed authority.
         catalogVariants = [master] + rows.map(\.second).filter { $0.key.variant_id != "master" }; catalogVariantsNext = next
@@ -1656,11 +1707,18 @@ final class LensWorksCatalog {
         catalogVariant = nil; catalogVariants = []; catalogVariantsNext = nil
         await refreshVersions()
     }
-    func changeCatalogRecipe(_ action: LensWorksCatalogRecipeAction) async throws -> LWApplicationDtoVariant {
+    func changeCatalogRecipe(_ action: LensWorksCatalogRecipeAction, origin: LensWorksCommandOrigin = .user) async throws -> LWApplicationDtoVariant {
         try admitCatalogWork()
-        guard !isBusy, let source = currentCatalogVariant, let asset = selectedAsset, let token = catalogToken else { throw LensWorksCatalogError.message("Choose a current catalog recipe before editing.") }
+        guard !isBusy, let source = currentCatalogVariant, let asset = selectedAsset, let token = catalogToken, let catalog = catalogPath else { throw LensWorksCatalogError.message("Choose a current catalog recipe before editing.") }
         let busy = beginBusy(); defer { finishBusy(busy) }
         let scope = captureScope(), query = queryOwner
+        // Read from the index, not the copy shown: what is recorded for exactly the revision this change is made on.
+        let recorded = try await index.recipeOrigins(catalog: catalog, key: source.key, revision: source.revision.value, digest: source.recipe_digest) ?? LensWorksRecipeOrigins()
+        try checkCatalogSelection(scope, image: asset.id, query: query)
+        if origin == .agent {
+            if case .undo = action, recorded.undo.last != .agent { throw Self.recipeOwnershipRefusal(redo: false) }
+            if case .redo = action, recorded.redo.last != .agent { throw Self.recipeOwnershipRefusal(redo: true) }
+        }
         if case .copy = action {} else {
             // Recipe edits, Undo and Redo render the full-resolution original: observe it now.
             try await requireFreshOriginal(asset)
@@ -1688,6 +1746,12 @@ final class LensWorksCatalog {
             request = .Redo(catalog: token, key: source.key, expected_revision: source.revision); creating = false
         }
         let next = try await service.catalogVariantChange(catalog: token, request: request, source: source, creating: creating)
+        // A new copy starts with nothing recorded. Every accepted change is a new revision and one history step in
+        // the engine, a save that leaves the recipe as it was included.
+        if !creating, next.revision != source.revision {
+            let origins = recorded.recording(action, by: origin, canUndo: next.can_undo, canRedo: next.can_redo)
+            try? await index.setRecipeOrigins(origins, catalog: catalog, key: next.key, revision: next.revision.value, digest: next.recipe_digest)
+        }
         #if DEBUG
         await continuationFixture?(.catalogRecipeReply)
         #endif
@@ -1707,7 +1771,7 @@ final class LensWorksCatalog {
         try checkScope(scope)
         guard selectedAsset?.key?.asset_id == next.key.asset_id, selectedAsset?.key?.variant_id == next.key.variant_id else { throw CancellationError() }
         try await loadCatalogVariants()
-        status = "Catalog recipe \(next.label) · revision \(next.revision.value)."
+        status = origin.historyName("Catalog recipe \(next.label) · revision \(next.revision.value).")
         return next
     }
     private func selectCreatedCatalogFocus(_ row: LWApplicationDtoGridImage, scope: LensWorksCatalogScope, query: String) async throws {

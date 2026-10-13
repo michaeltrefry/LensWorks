@@ -54,10 +54,10 @@ final class LensWorksAgentTools {
                 "prefix": ["type": "string", "maxLength": 64, "description": "Only commands whose id starts with this."]]],
              "annotations": ["readOnlyHint": true]],
             ["name": "get_state", "title": "Describe the open document and catalog",
-             "description": "The open document (size, selection, layers with id, name, visibility, opacity, blend mode, mask and effects, the selected layers, and who made the edits Undo and Redo would step over), the project tabs and recent projects, the folders granted to automation, and the open catalog (the photos, catalog folders, virtual folders and keywords on the current page, filters and sort, the selected photo, its catalog version and copies). Long lists are cut at \(stateRowLimit) rows and say so.",
+             "description": "The open document (size, selection, layers with id, name, visibility, opacity, blend mode, mask and effects, the selected layers, and who made the edits Undo and Redo would step over), the project tabs and recent projects, the folders granted to automation, and the open catalog (the photos, catalog folders, virtual folders and keywords on the current page, filters and sort, the selected photo, its catalog version (with who made the recipe changes its Undo and Redo would step over) and copies). Long lists are cut at \(stateRowLimit) rows and say so.",
              "inputSchema": empty, "annotations": ["readOnlyHint": true]],
             ["name": "invoke_command", "title": "Run a LensWorks command",
-             "description": "Runs one registered command as the agent. Document edits enter LensWorks history labeled “(Agent)”, so Undo in the app reverts them. edit.undo and edit.redo step only over the agent's own edits. A file path is accepted only inside a folder the person granted to automation, and so is every file a command reaches without naming it (a catalog photo’s original and working version, a project’s RAW originals). Permanent changes (deletes, saving over the project file, replacing an existing file, relinking a moved folder, opening another catalog over organize changes Undo could still revert) wait for the person to confirm in LensWorks and return a refusal when they decline. Unknown argument names are refused.",
+             "description": "Runs one registered command as the agent. Document edits enter LensWorks history labeled “(Agent)”, so Undo in the app reverts them. edit.undo and edit.redo step only over the agent's own edits, as do the catalog's recipe Undo and Redo. A file path is accepted only inside a folder the person granted to automation, and so is every file a command reaches without naming it (a catalog photo’s original and working version, a project’s RAW originals). Permanent changes (deletes, saving over the project file, replacing an existing file, relinking a moved folder, opening another catalog over organize changes Undo could still revert) wait for the person to confirm in LensWorks and return a refusal when they decline. Unknown argument names are refused.",
              "inputSchema": ["type": "object", "required": ["command"], "additionalProperties": false, "properties": [
                 "command": ["type": "string", "enum": agentCommands.map(\.rawValue), "description": "A command id from list_commands."],
                 "arguments": ["type": "object", "description": "Arguments matching that command's inputSchema from list_commands."]]]],
@@ -154,7 +154,7 @@ final class LensWorksAgentTools {
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             guard let current = catalog.currentCatalogVariant else { return "Select a catalog photo first." }
             if id == .moreVariants && catalog.catalogVariantsNext == nil { return "There are no more catalog copies." }
-            return catalog.catalogCommandAvailability(defaultAction(id, catalog: catalog, current: current), expected: current)
+            return catalog.catalogCommandAvailability(defaultAction(id, catalog: catalog, current: current), expected: current, origin: .agent)
         default: break
         }
         switch kind {
@@ -261,6 +261,12 @@ final class LensWorksAgentTools {
             func version(_ variant: LWApplicationDtoVariant) -> [String: Any] {
                 ["variantId": variant.key.variant_id, "label": Self.clip(variant.label), "revision": variant.revision.value]
             }
+            // As for the document: whose recipe change Undo and Redo would step over (null when none, or not recorded).
+            func current(_ variant: LWApplicationDtoVariant) -> [String: Any] {
+                version(variant).merging(["canUndo": variant.can_undo, "canRedo": variant.can_redo,
+                                          "undoOrigin": catalog.recipeHistoryOrigin(redo: false)?.rawValue ?? NSNull(),
+                                          "redoOrigin": catalog.recipeHistoryOrigin(redo: true)?.rawValue ?? NSNull()]) { $1 }
+            }
             let photos = Self.rows(catalog.assets) { asset in
                 ["id": asset.id, "filename": Self.clip(asset.filename), "rating": asset.rating.map { Int($0) } ?? NSNull(), "flag": asset.flag,
                  "label": Self.clip(asset.label), "selected": catalog.selection.contains(asset.id)] as [String: Any]
@@ -272,7 +278,7 @@ final class LensWorksAgentTools {
                 "path": path, "busy": catalog.isBusy, "importing": catalog.isImporting,
                 "selectedPhoto": catalog.selectedPhotoID ?? NSNull(), "selectionCount": catalog.selectionCount,
                 "rating": catalog.selectedAsset?.rating.map { Int($0) } ?? NSNull(),
-                "currentVersion": catalog.currentCatalogVariant.map(version) ?? NSNull(),
+                "currentVersion": catalog.currentCatalogVariant.map(current) ?? NSNull(),
                 "copies": catalog.catalogVariants.prefix(Self.stateRowLimit).map(version),
                 "copiesCursor": catalog.catalogVariantsNext?.value ?? NSNull(),
                 "photos": photos.rows, "hasMorePhotos": catalog.hasMore,

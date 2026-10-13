@@ -24,7 +24,7 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
     /// app's own domain with `--lensworks-defaults-suite <name>`.
     static func catalogDefaults(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> UserDefaults {
         guard let index = arguments.firstIndex(of: "--lensworks-defaults-suite"), index + 1 < arguments.count,
-              !arguments[index + 1].isEmpty, let suite = UserDefaults(suiteName: arguments[index + 1]) else { return .standard }
+              !arguments[index + 1].isEmpty, let suite = UserDefaults(suiteName: arguments[index + 1]) else { return LensWorksUserState.defaults }
         return suite
     }
     override init() {

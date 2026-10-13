@@ -40,7 +40,7 @@ final class LWModelCenter {
     }
 
     private static func addedLibraries() -> [URL] {
-        (UserDefaults.standard.stringArray(forKey: librariesKey) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
+        (LensWorksUserState.defaults.stringArray(forKey: librariesKey) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
     private func makeStore() async -> LWModelStore? {
@@ -78,7 +78,7 @@ final class LWModelCenter {
         var added = Self.addedLibraries()
         guard !added.contains(url) else { return }
         added.append(url)
-        UserDefaults.standard.set(added.map(\.path), forKey: Self.librariesKey)
+        LensWorksUserState.defaults.set(added.map(\.path), forKey: Self.librariesKey)
         Task {
             await store?.setSceneWorksLibraries(LWModelStore.Configuration.defaultLibraries(added: added))
             await refresh()

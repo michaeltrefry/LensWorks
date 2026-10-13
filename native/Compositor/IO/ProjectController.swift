@@ -280,7 +280,7 @@ final class ProjectController {
                 if var version = savedVersion {
                     version.projectPath = destination.path
                     workingVersion = version
-                    if sharesWorkingVersions { UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion") }
+                    if sharesWorkingVersions { LensWorksUserState.defaults.set(destination.path, forKey: "LensWorks.lastWorkingVersion") }
                 }
                 // Register before publishing the URL: the catalog lists working versions again when the project URL
                 // changes, and a listing that reached the index before this registration would miss the saved version.

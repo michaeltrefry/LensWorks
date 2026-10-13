@@ -244,13 +244,13 @@ extension LensWorksCatalog {
         case .rating: .rating
         }
     }
-    func catalogCommandAvailability(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant) -> String? {
-        do { _ = try captureCatalogControl(action, expected: expected); return nil }
+    func catalogCommandAvailability(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant, origin: LensWorksCommandOrigin = .user) -> String? {
+        do { _ = try captureCatalogControl(action, expected: expected, origin: origin); return nil }
         catch is CancellationError { return "The catalog, photo, version or revision is no longer current." }
         catch { return error.localizedDescription }
     }
     func admitCommand(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant, origin: LensWorksCommandOrigin = .user) throws -> LensWorksCatalogCommandAdmission {
-        .init(id: commandID(action), native: try captureCatalogControl(action, expected: expected), origin: origin)
+        .init(id: commandID(action), native: try captureCatalogControl(action, expected: expected, origin: origin), origin: origin)
     }
     /// Why the virtual folder `id` cannot be deleted now, or nil when it can.
     func folderDeleteAvailability(_ id: String) -> String? {

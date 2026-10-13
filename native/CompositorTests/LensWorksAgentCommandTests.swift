@@ -1197,6 +1197,111 @@ struct LensWorksAgentCommandTests {
         }
     }
 
+    /// The catalog's recipe history is the engine's, which records no author: LensWorks keeps who made each change
+    /// beside it, so an agent steps only over its own recipe changes, and still does after the catalog is reopened.
+    @Test func recipeHistoryKeepsWhoMadeEachChangeAndSurvivesReopening() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try LensWorksCatalogBrowserTests.Fixture(images: 1)
+        let undoOwn = "The last catalog recipe change is the person’s own: an agent undoes only its own."
+        let redoOwn = "The next catalog recipe change to redo is the person’s own: an agent redoes only its own."
+        @MainActor func exposure(_ model: LensWorksCatalog) -> Float? {
+            if case .V1(let recipe) = model.currentCatalogVariant?.recipe { recipe.exposure_ev.value } else { nil }
+        }
+        @MainActor func shown() async -> [String: Any] {
+            ((content(await fixture.tools.call("get_state", arguments: [:]))["catalog"] as? [String: Any])?["currentVersion"] as? [String: Any]) ?? [:]
+        }
+        // The fixture's folder (catalog, originals and LensWorks's index) is kept for the second opening below.
+        catalog.preserveSuccessEvidence = true
+        try await catalog.run { model in
+            fixture.harness.catalog = model
+            try await catalog.importPhotos(model)
+            await model.select(try #require(model.assets.first))
+            try await model.loadCatalogVariants()
+            #expect(model.recipeHistoryOrigin(redo: false) == nil && fixture.tools.agentAvailability(.undoRecipe) == "This catalog recipe has no Undo step.")
+
+            // The person changes the recipe: an agent cannot undo it, by the tool or by any other way in.
+            _ = try await model.changeCatalogRecipe(.exposure(1))
+            let revision = model.currentCatalogVariant?.revision
+            #expect(exposure(model) == 1 && model.recipeHistoryOrigin(redo: false) == .user && model.status.hasSuffix("(Agent)") == false)
+            let personal = try #require(model.currentCatalogVariant)
+            #expect(fixture.tools.agentAvailability(.undoRecipe) == undoOwn && model.catalogCommandAvailability(.recipe(.undo), expected: personal) == nil)
+            let refused = await fixture.invoke("catalog.recipe.undo")
+            #expect(refused["isError"] as? Bool == true && text(refused) == undoOwn, "\(text(refused))")
+            do { _ = try await model.changeCatalogRecipe(.undo, origin: .agent); Issue.record("an agent undid the person's recipe change") }
+            catch { #expect(error.localizedDescription == undoOwn) }
+            #expect(exposure(model) == 1 && model.currentCatalogVariant?.revision == revision && model.currentCatalogVariant?.can_undo == true)
+
+            // The agent's own change is labeled as its own, and it undoes and redoes that one.
+            let edited = await fixture.invoke("catalog.recipe.exposure", ["exposureEV": 2])
+            #expect(ok(edited) && exposure(model) == 2 && model.recipeHistoryOrigin(redo: false) == .agent && model.status.hasSuffix(" (Agent)"), "\(text(edited)) \(model.status)")
+            var version = await shown()
+            #expect(version["undoOrigin"] as? String == "agent" && version["redoOrigin"] is NSNull && version["canUndo"] as? Bool == true)
+            #expect(fixture.tools.agentAvailability(.undoRecipe) == nil)
+            let undone = await fixture.invoke("catalog.recipe.undo")
+            #expect(ok(undone) && exposure(model) == 1 && model.recipeHistoryOrigin(redo: false) == .user && model.recipeHistoryOrigin(redo: true) == .agent, "\(text(undone))")
+            // Under its own change is the person's again.
+            let deeper = await fixture.invoke("catalog.recipe.undo")
+            #expect(deeper["isError"] as? Bool == true && text(deeper) == undoOwn && exposure(model) == 1)
+            let redone = await fixture.invoke("catalog.recipe.redo")
+            #expect(ok(redone) && exposure(model) == 2 && model.recipeHistoryOrigin(redo: false) == .agent, "\(text(redone))")
+            // A save that changes nothing is still a step in the engine's history, and it is whoever made it's: the
+            // person's here, so the agent's change under it is out of the agent's reach until the person undoes theirs.
+            let before = try #require(model.currentCatalogVariant)
+            _ = try await model.changeCatalogRecipe(.exposure(2))
+            #expect(exposure(model) == 2 && model.currentCatalogVariant?.revision != before.revision && model.currentCatalogVariant?.recipe_digest == before.recipe_digest)
+            #expect(model.recipeHistoryOrigin(redo: false) == .user && fixture.tools.agentAvailability(.undoRecipe) == undoOwn)
+            _ = try await model.changeCatalogRecipe(.undo)
+            #expect(exposure(model) == 2 && model.recipeHistoryOrigin(redo: false) == .agent && model.recipeHistoryOrigin(redo: true) == .user)
+            _ = try await model.changeCatalogRecipe(.exposure(2), origin: .agent)
+            #expect(model.recipeHistoryOrigin(redo: false) == .agent && model.recipeHistoryOrigin(redo: true) == nil)
+            _ = try await model.changeCatalogRecipe(.undo, origin: .agent)
+            // The person undoes both; the agent may redo neither while the person's is the next one.
+            _ = try await model.changeCatalogRecipe(.undo); _ = try await model.changeCatalogRecipe(.undo)
+            #expect(exposure(model) == 0 && model.recipeHistoryOrigin(redo: true) == .user && fixture.tools.agentAvailability(.redoRecipe) == redoOwn)
+            let early = await fixture.invoke("catalog.recipe.redo")
+            #expect(early["isError"] as? Bool == true && text(early) == redoOwn && exposure(model) == 0)
+            do { _ = try await model.changeCatalogRecipe(.redo, origin: .agent); Issue.record("an agent redid the person's recipe change") }
+            catch { #expect(error.localizedDescription == redoOwn && exposure(model) == 0) }
+            _ = try await model.changeCatalogRecipe(.redo)
+            version = await shown()
+            #expect(exposure(model) == 1 && version["undoOrigin"] as? String == "user" && version["redoOrigin"] as? String == "agent")
+        }
+        // Closed and opened again: the engine's history is still there, and so is who made it.
+        catalog.preserveSuccessEvidence = false
+        try await catalog.run(create: false) { model in
+            fixture.harness.catalog = model
+            await model.select(try #require(model.assets.first))
+            try await model.loadCatalogVariants()
+            await model.observeSelectedOriginal()
+            #expect(exposure(model) == 1 && model.currentCatalogVariant?.can_undo == true && model.currentCatalogVariant?.can_redo == true)
+            #expect(model.recipeHistoryOrigin(redo: false) == .user && model.recipeHistoryOrigin(redo: true) == .agent)
+            let refused = await fixture.invoke("catalog.recipe.undo")
+            #expect(refused["isError"] as? Bool == true && text(refused) == undoOwn && exposure(model) == 1, "\(text(refused))")
+            let redone = await fixture.invoke("catalog.recipe.redo")
+            #expect(ok(redone) && exposure(model) == 2, "\(text(redone))")
+            let undone = await fixture.invoke("catalog.recipe.undo")
+            #expect(ok(undone) && exposure(model) == 1, "\(text(undone))")
+            // A recipe changed by something that kept no record (here, straight through the engine): nothing is known
+            // about its history any more, so all of it reads as the person's.
+            #expect(ok(await fixture.invoke("catalog.recipe.exposure", ["exposureEV": 3])) && model.recipeHistoryOrigin(redo: false) == .agent)
+            let unrecorded = try #require(model.currentCatalogVariant).key
+            _ = try await model.service.setExposure(unrecorded, value: 4)
+            try await model.loadCatalogVariants()
+            #expect(exposure(model) == 4 && model.currentCatalogVariant?.can_undo == true && model.recipeHistoryOrigin(redo: false) == nil)
+            let unknown = await fixture.invoke("catalog.recipe.undo")
+            #expect(unknown["isError"] as? Bool == true && text(unknown) == undoOwn && exposure(model) == 4)
+        }
+        // The record itself: an undo with nothing recorded moves a person's step, and the engine's answer bounds it.
+        var origins = LensWorksRecipeOrigins()
+        origins = origins.recording(.exposure(1), by: .agent, canUndo: true, canRedo: false)
+        #expect(origins.undo == [.agent] && origins.encodedUndo == "a")
+        origins = origins.recording(.undo, by: .agent, canUndo: true, canRedo: true).recording(.undo, by: .user, canUndo: true, canRedo: true)
+        #expect(origins.undo.isEmpty && origins.redo == [.agent, .user])
+        #expect(origins.recording(.exposure(2), by: .user, canUndo: true, canRedo: false).redo.isEmpty)
+        #expect(origins.recording(.redo, by: .agent, canUndo: false, canRedo: true).undo.isEmpty)
+        #expect(LensWorksRecipeOrigins(undo: "ua", redo: "a") == LensWorksRecipeOrigins(undo: "ua", redo: "a").recording(.copy("x"), by: .agent, canUndo: true, canRedo: true))
+    }
+
     /// Locate Moved Folder: the folder's originals are relinked to a granted folder, all or none, once the person allows.
     @Test func locatingAMovedFolderRelinksItsOriginalsAfterThePersonAllows() async throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }

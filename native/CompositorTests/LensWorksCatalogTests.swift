@@ -104,8 +104,8 @@ struct LensWorksCatalogTests {
         let fixture = try ImageImportTests().fixture(.png)
         defer { try? FileManager.default.removeItem(at: fixture) }
         try FileManager.default.copyItem(at: fixture, to: media.appendingPathComponent("Source.png"))
-        let previousCatalog = UserDefaults.standard.string(forKey: "LensWorks.catalogPath")
-        defer { UserDefaults.standard.set(previousCatalog, forKey: "LensWorks.catalogPath") }
+        let previousCatalog = LensWorksUserState.defaults.string(forKey: "LensWorks.catalogPath")
+        defer { LensWorksUserState.defaults.set(previousCatalog, forKey: "LensWorks.catalogPath") }
         let catalog = LensWorksCatalog()
         await catalog.connect(catalogURL.path, create: true)
         await catalog.importFolder(media.path)
@@ -132,8 +132,8 @@ struct LensWorksCatalogTests {
         let source = media.appendingPathComponent("Source.png")
         try FileManager.default.copyItem(at: fixture, to: source)
         let keys = ["LensWorks.catalogPath", "LensWorks.workingVersions"]
-        let previous = keys.map { UserDefaults.standard.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, previous) { UserDefaults.standard.set(value, forKey: key) } }
+        let previous = keys.map { LensWorksUserState.defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, previous) { LensWorksUserState.defaults.set(value, forKey: key) } }
         let catalog = LensWorksCatalog()
         await catalog.connect(catalogURL.path, create: true)
         await catalog.importFolder(media.path)
@@ -147,10 +147,10 @@ struct LensWorksCatalogTests {
         try await ProjectStore.shared.save(snapshot, to: healthy, workingVersion: version)
         try await ProjectStore.shared.save(snapshot, to: corrupt, workingVersion: version)
         try FileManager.default.removeItem(at: corrupt.appendingPathComponent("LensWorks.json"))
-        UserDefaults.standard.set([healthy.path, corrupt.path], forKey: "LensWorks.workingVersions")
+        LensWorksUserState.defaults.set([healthy.path, corrupt.path], forKey: "LensWorks.workingVersions")
         await catalog.reconcileWorkingVersions()
         #expect(catalog.error?.contains("Corrupt.comp") == true)
-        #expect(UserDefaults.standard.stringArray(forKey: "LensWorks.workingVersions")?.contains(corrupt.path) == true)
+        #expect(LensWorksUserState.defaults.stringArray(forKey: "LensWorks.workingVersions")?.contains(corrupt.path) == true)
         await catalog.connect(catalogURL.path)
         #expect(catalog.catalogPath != nil)
         #expect(catalog.assets.count == 1)
@@ -193,8 +193,8 @@ struct LensWorksCatalogTests {
         try FileManager.default.copyItem(at: fixture, to: source)
         let sourceBytes = try Data(contentsOf: source)
         let keys = ["LensWorks.workingVersions", "LensWorks.lastWorkingVersion"]
-        let previous = keys.map { UserDefaults.standard.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, previous) { UserDefaults.standard.set(value, forKey: key) } }
+        let previous = keys.map { LensWorksUserState.defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, previous) { LensWorksUserState.defaults.set(value, forKey: key) } }
         let session = EditorSession()
         await session.importImages([source])
         let layer = try #require(session.activeLayerID)
@@ -240,8 +240,8 @@ struct LensWorksCatalogTests {
         let source = root.appendingPathComponent("Source.png")
         try FileManager.default.copyItem(at: fixture, to: source)
         let keys = ["LensWorks.workingVersions", "LensWorks.lastWorkingVersion"]
-        let previous = keys.map { UserDefaults.standard.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, previous) { UserDefaults.standard.set(value, forKey: key) } }
+        let previous = keys.map { LensWorksUserState.defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, previous) { LensWorksUserState.defaults.set(value, forKey: key) } }
         let session = EditorSession()
         await session.importImages([source])
         let layer = try #require(session.activeLayerID)

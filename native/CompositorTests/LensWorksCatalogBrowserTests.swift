@@ -22,7 +22,7 @@ struct LensWorksCatalogBrowserTests {
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
             await model.setOutput(output.path)
             let page = model.pageAuthority, rows = model.assets.map(\.id)
-            let workspace = ProjectWorkspace()
+            let workspace = Self.isolatedWorkspace()
             await model.createWorkingVersion(workspace: workspace)
             let version = try #require(workspace.current.controller.workingVersion)
             let selected = try #require(model.selectedAsset)
@@ -1670,7 +1670,7 @@ struct LensWorksCatalogBrowserTests {
             await model.setOutput(output.path)
             let page = model.pageAuthority, rows = model.assets.map(\.id)
             let fetchesBeforeEditor = await model.service.browseCalls
-            let workspace = ProjectWorkspace()
+            let workspace = Self.isolatedWorkspace()
             await model.createWorkingVersion(workspace: workspace)
             #expect(model.error == nil && !model.showingCatalog)
             #expect(workspace.current.session.document != nil)
@@ -2220,6 +2220,13 @@ struct LensWorksCatalogBrowserTests {
         let outcome: String
         let encodedSHA256: String?
     }
+    /// A tab strip whose saves stay in the fixture: never in File › Open Recent, the shared working-version index or
+    /// the last-opened preference.
+    @MainActor static func isolatedWorkspace() -> ProjectWorkspace {
+        let workspace = ProjectWorkspace()
+        workspace.configureController = { $0.recordsRecentProjects = false; $0.sharesWorkingVersions = false }
+        return workspace
+    }
     @MainActor final class Fixture {
         let root: URL, photos: URL, catalog: URL
         let config: LWManagedSessionConfig
@@ -2549,7 +2556,7 @@ extension LensWorksCatalogBrowserTests {
             let output = fixture.root.appendingPathComponent("Versions")
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
             await model.setOutput(output.path)
-            let workspace = ProjectWorkspace()
+            let workspace = Self.isolatedWorkspace()
             await model.select(first)
             await model.createWorkingVersion(workspace: workspace)
             let version = try #require(workspace.current.controller.workingVersion)
@@ -2631,7 +2638,7 @@ extension LensWorksCatalogBrowserTests {
             try await model.organize(.flag(.Pick))
             #expect(try row(ids[0]).rating == 5 && row(ids[0]).flag == "pick")
             // A document carrying its own full-resolution layers still opens offline.
-            let reopened = ProjectWorkspace()
+            let reopened = Self.isolatedWorkspace()
             await model.select(try row(ids[0]))
             await model.openVersion(version, workspace: reopened)
             #expect(model.error == nil && reopened.current.controller.workingVersion?.id == version.id && reopened.current.session.document != nil)
@@ -2719,7 +2726,7 @@ extension LensWorksCatalogBrowserTests {
             try await model.browse()
             await model.select(try row(ids[0]))
             #expect(model.selectedVersions.map(\.id) == [version.id])
-            let afterRelink = ProjectWorkspace()
+            let afterRelink = Self.isolatedWorkspace()
             await model.openVersion(version, workspace: afterRelink)
             let relinkedVersion = try #require(afterRelink.current.controller.workingVersion)
             #expect(model.error == nil && relinkedVersion.id == version.id && relinkedVersion.photoID == version.photoID)

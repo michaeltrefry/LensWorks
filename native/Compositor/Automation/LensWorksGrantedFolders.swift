@@ -23,7 +23,7 @@ final class LensWorksGrantedFolders {
     private(set) var grants: [Grant]
     @ObservationIgnored private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = LensWorksUserState.defaults) {
         self.defaults = defaults
         grants = (defaults.data(forKey: Self.defaultsKey)).flatMap { try? JSONDecoder().decode([Grant].self, from: $0) } ?? []
     }

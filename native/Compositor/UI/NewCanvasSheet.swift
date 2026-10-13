@@ -92,7 +92,7 @@ struct NewCanvasSheet: View {
         Binding(get: { preset.wrappedValue == choice }, set: { if $0 { preset.wrappedValue = choice } })
     }
 
-    static func clipboardDimensions(_ pasteboard: NSPasteboard = .general) -> (width: Int, height: Int)? {
+    static func clipboardDimensions(_ pasteboard: NSPasteboard = LensWorksUserState.pasteboard) -> (width: Int, height: Int)? {
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             guard let data = pasteboard.data(forType: type),
                   let source = CGImageSourceCreateWithData(data as CFData, nil),

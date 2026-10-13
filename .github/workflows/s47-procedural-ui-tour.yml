@@ -90,6 +90,7 @@ jobs:
             -only-testing:CompositorTests/CommandRegistryTests \
             -only-testing:CompositorTests/LensWorksAutomationTests \
             -only-testing:CompositorTests/LensWorksAgentCommandTests \
+            -only-testing:CompositorTests/LensWorksUserStateTests \
             -only-testing:CompositorUITests/CompositorUITests/testS38LayerMenuAndEffectiveShortcutShareVisibilityAndSingleUndo \
             -only-testing:CompositorUITests/CompositorUITests/testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory \
             -only-testing:CompositorUITests/CompositorUITests/testS38DisabledRegisteredLayerMenuDisplaysTransformReason \
