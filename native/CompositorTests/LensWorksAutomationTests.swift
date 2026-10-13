@@ -272,7 +272,8 @@ struct LensWorksAutomationTests {
 
         let commands = try #require((try await bridge.call("list_commands"))["structuredContent"] as? [String: Any])["commands"] as? [[String: Any]]
         let rows = try #require(commands)
-        #expect(rows.count == LensWorksCommandRegistry.descriptors.count)
+        // Every built-in command; an installed plugin's own command (plugin.run.<id>) would follow them.
+        #expect(rows.filter { ($0["id"] as? String)?.hasPrefix(LensWorksCommandRegistry.pluginCommandPrefix) != true }.count == LensWorksCommandRegistry.descriptors.count)
         let hide = try #require(rows.first { $0["id"] as? String == "layer.visibility" })
         #expect(hide["available"] as? Bool == true && hide["agentInvocable"] as? Bool == true && hide["title"] as? String == "Hide/Show Layer")
         #expect(((hide["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])?["layers"] != nil)

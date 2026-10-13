@@ -82,7 +82,7 @@ struct LensWorksAgentArguments {
     /// Checks `values` against the command's registered parameters: no undeclared name, every required one present,
     /// each of its declared type, range and choices.
     static func check(_ values: [String: Any], for descriptor: LensWorksCommandDescriptor) throws -> LensWorksAgentArguments {
-        try LensWorksAgentTools.rejectUnknown(values, allowed: descriptor.parameters.map(\.name), in: descriptor.id.rawValue)
+        try LensWorksAgentTools.rejectUnknown(values, allowed: descriptor.parameters.map(\.name), in: descriptor.name)
         guard isBounded(values) else {
             throw LensWorksCommandRefusal(reason: "Every number in the arguments must be finite, and lists and objects at most \(nestingLimit) levels deep.")
         }
@@ -90,7 +90,7 @@ struct LensWorksAgentArguments {
         for parameter in descriptor.parameters {
             let name = parameter.name
             guard arguments.has(name) else {
-                if parameter.required { throw LensWorksCommandRefusal(reason: "\(descriptor.id.rawValue) needs \(name): \(parameter.description)") }
+                if parameter.required { throw LensWorksCommandRefusal(reason: "\(descriptor.name) needs \(name): \(parameter.description)") }
                 continue
             }
             var numeric: Double?
@@ -175,8 +175,10 @@ enum LensWorksAgentSchema {
         return schema
     }
     /// The JSON schema of a command's arguments.
-    static func inputSchema(_ id: LensWorksCommandID) -> [String: Any] {
-        let descriptor = LensWorksCommandRegistry.descriptor(id)
+    static func inputSchema(_ id: LensWorksCommandID) -> [String: Any] { inputSchema(LensWorksCommandRegistry.descriptor(id)) }
+    /// The JSON schema of a descriptor's arguments: a built-in command's, or an installed plugin's.
+    static func inputSchema(_ descriptor: LensWorksCommandDescriptor) -> [String: Any] {
+        let id = descriptor.id
         guard descriptor.agent.isRunnable else { return ["type": "object", "properties": [String: Any](), "additionalProperties": false] }
         var properties: [String: Any] = [:]
         for parameter in descriptor.parameters { properties[parameter.name] = schema(for: parameter, command: id) }

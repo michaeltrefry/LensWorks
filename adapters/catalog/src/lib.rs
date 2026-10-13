@@ -1,5 +1,8 @@
 //! LensWorks-owned, blocking C/JSON boundary over the owned catalog core.
 pub mod full_decode;
+// The filter-plugin C interface (adapters/plugins/include/LensWorksPlugins.h) is linked into the app through this
+// static library: two Rust static libraries in one binary would each carry the standard library.
+pub use lensworks_plugins::ffi::{lw_plugin_close, lw_plugin_filter_tile, lw_plugin_limits, lw_plugin_open, lw_plugin_validate};
 mod managed;
 pub use managed::{
     lw_catalog_buffer_copy, lw_catalog_buffer_release, lw_catalog_managed_request,

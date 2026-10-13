@@ -275,6 +275,7 @@ struct ContentView: View {
             set: { if !$0 { session.brushError = nil } })) {
                 Button("OK") { session.brushError = nil }
             } message: { Text(session.brushError ?? "") }
+        .modifier(LensWorksPluginPresentation(session: session))
         .alert("Couldn’t crop", isPresented: Binding(get: { session.cropError != nil },
             set: { if !$0 { session.cropError = nil } })) {
                 Button("OK") { session.cropError = nil }

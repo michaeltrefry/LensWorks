@@ -238,6 +238,17 @@ struct CompositorApp: App {
                         LensWorksCommandButton(.filter, argument: kind.rawValue, title: "\(kind.rawValue)…",
                                                reason: reason(.filter, kind.rawValue)) { session.beginFilter(kind) }
                     }
+                    Divider()
+                    // Installed plugins live in their own submenu, each named with its id: a plugin's name can never
+                    // sit among (or pass for) a built-in filter.
+                    Menu("Plugins") {
+                        ForEach(session.plugins.plugins) { plugin in
+                            LensWorksCommandButton(.pluginFilter, argument: plugin.id, title: plugin.manifest.menuTitle,
+                                                   reason: reason(.pluginFilter, plugin.id)) { session.beginPlugin(plugin.id) }
+                        }
+                        if !session.plugins.plugins.isEmpty { Divider() }
+                        LensWorksCommandButton(.pluginInstall) { session.plugins.chooseAndInstall() }
+                    }
                 }
                 CommandMenu("Layer") {
                     Menu("New Adjustment Layer") {
@@ -283,7 +294,7 @@ struct CompositorApp: App {
                     }
                 }
             }
-        Settings { LensWorksAutomationSettingsView(automation: applicationDelegate.automation) }
+        Settings { LensWorksAutomationSettingsView(automation: applicationDelegate.automation, plugins: .shared) }
     }
     /// The reason a menu-bar command is unavailable: the one answer the menu item shows and an agent is refused with.
     private func reason(_ id: LensWorksCommandID, _ argument: String? = nil) -> String? {

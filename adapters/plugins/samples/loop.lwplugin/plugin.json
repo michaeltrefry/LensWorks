@@ -1,0 +1,7 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.loop",
+  "name": "Sample Endless Loop",
+  "version": "1.0.0",
+  "parameters": []
+}

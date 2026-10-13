@@ -41,11 +41,20 @@ final class LensWorksAgentTools {
     static let stateRowLimit = 256
     static let stateTextLimit = 256
 
+    /// The `command` argument: a built-in command id, or an installed plugin's own command. Plugins come and go
+    /// while a client is connected, so theirs are admitted by shape here and by the installed list when called.
+    static func commandSchema(_ commands: [LensWorksCommandID]) -> [String: Any] {
+        ["type": "string", "description": "A command id from list_commands: a built-in command, or an installed plugin’s own command (plugin.run.<plugin id>).",
+         "anyOf": [["enum": commands.map(\.rawValue)], ["pattern": "^plugin\\.run\\.[a-z0-9]+([.-][a-z0-9]+)+$", "maxLength": LensWorksCommandRegistry.pluginCommandPrefix.count + LensWorksPluginManifest.idLimit]]]
+    }
+    /// The installed plugins this session's commands run.
+    var plugins: LensWorksPluginStore { session()?.plugins ?? .shared }
+
     static let toolNames: Set<String> = ["list_commands", "get_state", "invoke_command", "batch", "render_preview"]
     static var definitions: [[String: Any]] {
         let empty: [String: Any] = ["type": "object", "properties": [String: Any](), "additionalProperties": false]
         let member: [String: Any] = ["type": "object", "required": ["command"], "additionalProperties": false, "properties": [
-            "command": ["type": "string", "enum": agentCommands.filter(batchable).map(\.rawValue), "description": "A command id from list_commands."],
+            "command": commandSchema(agentCommands.filter(batchable)),
             "arguments": ["type": "object", "description": "Arguments matching that command's inputSchema from list_commands."]]]
         return [
             ["name": "list_commands", "title": "List LensWorks commands",
@@ -59,7 +68,7 @@ final class LensWorksAgentTools {
             ["name": "invoke_command", "title": "Run a LensWorks command",
              "description": "Runs one registered command as the agent. Document edits enter LensWorks history labeled “(Agent)”, so Undo in the app reverts them. edit.undo and edit.redo step only over the agent's own edits, as do the catalog's recipe Undo and Redo. A file path is accepted only inside a folder the person granted to automation, and so is every file a command reaches without naming it (a catalog photo’s original and working version, a project’s RAW originals). Permanent changes (deletes, saving over the project file, replacing an existing file, relinking a moved folder, opening another catalog over organize changes Undo could still revert) wait for the person to confirm in LensWorks and return a refusal when they decline. Unknown argument names are refused.",
              "inputSchema": ["type": "object", "required": ["command"], "additionalProperties": false, "properties": [
-                "command": ["type": "string", "enum": agentCommands.map(\.rawValue), "description": "A command id from list_commands."],
+                "command": commandSchema(agentCommands),
                 "arguments": ["type": "object", "description": "Arguments matching that command's inputSchema from list_commands."]]]],
             ["name": "batch", "title": "Run several LensWorks commands as one step",
              "description": "Runs up to \(batchLimit) commands in order. Every command's arguments are checked before any runs; one that cannot run refuses the whole batch. A batch is either all document commands (one “(Agent)” history entry that one Undo reverts; any failure rolls the whole batch back) or all catalog commands (checked against the catalog as it stands, run in order and stopped at the first failure; the catalog cannot roll back, so the two kinds never mix). Permanent deletes are confirmed by the person once, for the whole batch, before anything runs, and ride with no unconfirmed command that changes keywords or virtual folders, so what the person approved is what is deleted. History steps and project-file commands (list_commands says batchable: false) are not allowed in a batch. The reply lists a result per command.",
@@ -105,10 +114,12 @@ final class LensWorksAgentTools {
     // MARK: Listing
 
     func listCommands(prefix: String? = nil) -> [[String: Any]] {
-        LensWorksCommandRegistry.descriptors.filter { prefix == nil || $0.id.rawValue.hasPrefix(prefix!) }.map { descriptor in
-            let reason = agentAvailability(descriptor.id)
+        // Every built-in command, then one command per installed plugin, made from its manifest.
+        (LensWorksCommandRegistry.descriptors + LensWorksCommandRegistry.dynamicDescriptors(plugins)).filter { prefix == nil || $0.name.hasPrefix(prefix!) }.map { descriptor in
+            let plugin = descriptor.dynamicName.map { String($0.dropFirst(LensWorksCommandRegistry.pluginCommandPrefix.count)) }
+            let reason = agentAvailability(descriptor.id, plugin: plugin)
             var row: [String: Any] = [
-                "id": descriptor.id.rawValue, "title": descriptor.label, "menu": descriptor.menu,
+                "id": descriptor.name, "title": descriptor.label, "menu": descriptor.menu,
                 "undoable": descriptor.undoable, "history": descriptor.historyOwner.rawValue,
                 "agentInvocable": descriptor.agent.isRunnable,
                 "batchable": Self.batchable(descriptor.id),
@@ -116,10 +127,10 @@ final class LensWorksAgentTools {
                 "confirmation": descriptor.agentConfirmation.rawValue,
                 "available": reason == nil,
                 "parameters": descriptor.parameters.map { ["name": $0.name, "type": $0.type.rawValue, "description": $0.description, "required": $0.required] },
-                "inputSchema": Self.inputSchema(descriptor.id)
+                "inputSchema": LensWorksAgentSchema.inputSchema(descriptor)
             ]
             if let kind = descriptor.agent.kind { row["kind"] = kind.rawValue }
-            if let reason { row["reason"] = reason } else if let note = agentNote(descriptor.id) { row["note"] = note }
+            if let reason { row["reason"] = reason } else if let note = plugin == nil ? agentNote(descriptor.id) : "Acts on the selected layer, or on a layer id from get_state." { row["note"] = note }
             return row
         }
     }
@@ -130,7 +141,7 @@ final class LensWorksAgentTools {
 
     /// Why an agent cannot run `id` now (with its default arguments, or with ids it may pass), or nil when it can.
     /// A command agents never run answers with the reason specific to it.
-    func agentAvailability(_ id: LensWorksCommandID) -> String? {
+    func agentAvailability(_ id: LensWorksCommandID, plugin: String? = nil) -> String? {
         let descriptor = LensWorksCommandRegistry.descriptor(id)
         guard let kind = descriptor.agent.kind else { return descriptor.agent.exclusion?.rawValue }
         if descriptor.parameters.contains(where: { $0.type.namesPath && $0.required }), folders.grants.isEmpty {
@@ -162,7 +173,7 @@ final class LensWorksAgentTools {
             guard let session = session() else { return "Open a document first." }
             if session.document == nil, id != .importImages { return "Open a document first." }
             if session.document != nil, let reason = session.agentModalReason { return reason }
-            return LensWorksAgentDocumentCommands(session: session, context: context).reason(id)
+            return LensWorksAgentDocumentCommands(session: session, context: context).reason(id, plugin)
         case .catalog:
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             if catalog.isBusy { return "Finish the current catalog operation first." }
@@ -302,6 +313,8 @@ final class LensWorksAgentTools {
     struct Call {
         let admission: LensWorksAgentAdmission
         var id: LensWorksCommandID { admission.id }
+        /// The id the agent named: the command's own, or an installed plugin's.
+        var name: String { admission.name }
         var arguments: LensWorksAgentArguments { admission.arguments }
         var kind: LensWorksAgentCommandKind { LensWorksAgentTools.kind(id) ?? .standalone }
         var isDocument: Bool { kind == .document }
@@ -311,10 +324,19 @@ final class LensWorksAgentTools {
     /// parameters declare, each of the declared shape, and every path inside a granted folder.
     func parse(_ request: [String: Any]) throws -> Call {
         try Self.rejectUnknown(request, allowed: ["command", "arguments"], in: "a command")
-        guard let raw = request["command"] as? String, let id = LensWorksCommandID(rawValue: raw) else {
-            throw LensWorksCommandRefusal(reason: "Name a command id from list_commands.")
-        }
-        let descriptor = LensWorksCommandRegistry.descriptor(id)
+        guard let raw = request["command"] as? String else { throw LensWorksCommandRefusal(reason: "Name a command id from list_commands.") }
+        // A built-in command by its id, or an installed plugin's command by the plugin's id. A plugin command is the
+        // pluginFilter family: the same classification, and its manifest's parameters as the registered ones.
+        var plugin: LensWorksPluginManifest?
+        let descriptor: LensWorksCommandDescriptor
+        if let id = LensWorksCommandID(rawValue: raw) { descriptor = LensWorksCommandRegistry.descriptor(id) }
+        else if raw.hasPrefix(LensWorksCommandRegistry.pluginCommandPrefix) {
+            guard let installed = plugins.plugin(String(raw.dropFirst(LensWorksCommandRegistry.pluginCommandPrefix.count))) else {
+                throw LensWorksCommandRefusal(reason: "No plugin with that id is installed: list_commands lists each installed plugin’s command.")
+            }
+            plugin = installed.manifest; descriptor = LensWorksCommandRegistry.pluginDescriptor(installed.manifest)
+        } else { throw LensWorksCommandRefusal(reason: "Name a command id from list_commands.") }
+        let id = descriptor.id
         guard descriptor.agent.isRunnable else {
             throw LensWorksCommandRefusal(reason: "Agents cannot run \(id.rawValue). " + (descriptor.agent.exclusion?.rawValue ?? ""))
         }
@@ -330,12 +352,12 @@ final class LensWorksAgentTools {
             guard !named.isEmpty else { throw LensWorksCommandRefusal(reason: "\(parameter.name) must name at least one path.") }
             arguments.paths[parameter.name] = try named.map(folders.admit)
         }
-        return Call(admission: .init(id: id, arguments: arguments))
+        return Call(admission: .init(id: id, arguments: arguments, plugin: plugin))
     }
 
     func invoke(_ arguments: [String: Any], caller: LensWorksAutomationCaller = .inProcess) async throws -> [String: Any] {
         let call = try parse(arguments)
-        let label = LensWorksCommandRegistry.descriptor(call.id).label
+        let label = call.admission.descriptor.label
         switch call.kind {
         case .document:
             guard let session = session() else { throw LensWorksCommandRefusal(reason: "Open a document first.") }
@@ -353,7 +375,7 @@ final class LensWorksAgentTools {
             }
             let changed = session.history.currentRevision != revision
             let transient = call.id.reversal == .transient
-            return ["command": call.id.rawValue, "changed": changed || transient, "history": changed ? session.history.undoName : NSNull(),
+            return ["command": call.name, "changed": changed || transient, "history": changed ? session.history.undoName : NSNull(),
                     "message": changed ? "\(session.history.undoName) is in LensWorks history; Undo in the app reverts it."
                         : transient ? "\(label) ran (Agent)." : "Nothing changed."]
         case .standalone where Self.historyCommands.contains(call.id):
@@ -465,7 +487,7 @@ final class LensWorksAgentTools {
 
     private static func naming(_ index: Int, of calls: [Call], _ error: Error) -> LensWorksCommandRefusal {
         let reason = error is CancellationError ? "The catalog, photo, version or revision is no longer current." : String(error.localizedDescription.prefix(messageLimit))
-        return .init(reason: calls.count == 1 ? reason : "Command \(index + 1) (\(calls[index].id.rawValue)): \(reason)")
+        return .init(reason: calls.count == 1 ? reason : "Command \(index + 1) (\(calls[index].name)): \(reason)")
     }
 
     /// What the person approved, by index, each with the check that what they saw is still what would run. The check
@@ -678,7 +700,7 @@ final class LensWorksAgentTools {
                         let before = session.document
                         if Self.layerCommands.contains(call.id) { try session.dispatchCommand(session.admitCommand(try layerCommand(call), origin: .agent)) }
                         else { try await LensWorksCommandDispatcher.dispatch(call.admission, in: session, context: context) }
-                        results.append(["index": index + 1, "command": call.id.rawValue, "status": "ran", "changed": session.document != before])
+                        results.append(["index": index + 1, "command": call.name, "status": "ran", "changed": session.document != before])
                     } catch { throw Self.naming(index, of: calls, error) }
                 }
             }

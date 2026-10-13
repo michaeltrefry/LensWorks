@@ -1,0 +1,42 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.brightness",
+  "name": "Sample Brightness",
+  "version": "1.0.0",
+  "parameters": [
+    {
+      "name": "amount",
+      "label": "Amount",
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "default": 0.25
+    },
+    {
+      "name": "channel",
+      "label": "Channel",
+      "type": "choice",
+      "choices": [
+        "all",
+        "red",
+        "green",
+        "blue"
+      ],
+      "default": "all"
+    },
+    {
+      "name": "clamp",
+      "label": "Clamp to 0-1",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "repeat",
+      "label": "Repeat",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4,
+      "default": 1
+    }
+  ]
+}

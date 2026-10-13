@@ -57,6 +57,7 @@ extension EditorSession {
         case .mergeLayers: return commandReason(!canMergeLayers, "Select layers that can be merged first.")
         case .flipLayerHorizontal, .flipLayerVertical: return commandReason(!canTransform, "Select a layer that can be transformed first.")
         case .deleteLayer: return layerEditReason ?? commandReason(activeLayer == nil, "Select a layer first.")
+        case .pluginFilter: return pluginReason(argument)
         default: return nil
         }
     }

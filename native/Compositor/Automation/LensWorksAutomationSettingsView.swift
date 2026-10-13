@@ -3,6 +3,7 @@ import SwiftUI
 /// Settings › Automation: the on/off switch (off by default), the secret and the MCP client configuration.
 struct LensWorksAutomationSettingsView: View {
     @Bindable var automation: LensWorksAutomation
+    var plugins: LensWorksPluginStore = .shared
     var body: some View {
         TabView {
             Form {
@@ -59,6 +60,8 @@ struct LensWorksAutomationSettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Automation", systemImage: "point.3.connected.trianglepath.dotted") }
+            LensWorksPluginSettingsView(store: plugins)
+                .tabItem { Label("Plugins", systemImage: "puzzlepiece.extension") }
         }
         .frame(width: 620, height: 640)
     }

@@ -20,6 +20,8 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case newCanvasSheet = "It picks a preset in the New Canvas sheet the person has open; file.newCanvas takes width and height directly."
     case shortcutEditor = "It is the Save or Cancel button of the Keyboard Shortcuts window the person has open."
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
+    case pluginTrust = "It installs, removes or reloads a filter plugin: third-party code LensWorks will run, which only the person at the Mac decides to trust."
+    case pluginProgress = "It is the Cancel button of the progress panel the person sees while a plugin filter runs; an agent’s own request just waits for that run to end."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
 }
 
@@ -95,7 +97,9 @@ extension LensWorksCommandID {
              .newAdjustment, .editAdjustment, .transform, .layerViaCopy, .duplicateLayer, .clippingMask, .groupLayers, .ungroupLayers, .moveOutOfFolder,
              .newBlankLayer, .moveLayerUp, .moveLayerDown, .mergeLayers, .flipLayerHorizontal, .flipLayerVertical, .deleteLayer,
              .addMask, .toggleMask, .deleteMask, .linkMask, .addEffect, .blendMode,
-             .swapColors, .resetColors, .canvasDelete, .nudge, .movePixels:
+             .swapColors, .resetColors, .canvasDelete, .nudge, .movePixels,
+             // An installed plugin's filter: its own command (plugin.run.<id>) is this family and is admitted as it is.
+             .pluginFilter:
             .runnable(.document)
         // The open catalog.
         case .firstVariants, .moreVariants, .selectVariant, .copy, .exposure, .undoRecipe, .redoRecipe, .rating,
@@ -133,6 +137,8 @@ extension LensWorksCommandID {
         case .saveShortcuts, .cancelShortcuts: .notRunnable(.shortcutEditor)
         case .beginRename: .notRunnable(.nameEditor)
         case .opacityDigit: .notRunnable(.opacityKeys)
+        case .pluginInstall, .pluginRemove, .pluginReload: .notRunnable(.pluginTrust)
+        case .pluginCancel: .notRunnable(.pluginProgress)
         }
     }
 
@@ -166,7 +172,7 @@ extension LensWorksCommandID {
                         .invert, .canvasSize, .imageSize, .trim, .flipCanvasHorizontal, .flipCanvasVertical, .filter, .newAdjustment, .editAdjustment,
                         .transform, .layerViaCopy, .duplicateLayer, .clippingMask, .groupLayers, .ungroupLayers, .moveOutOfFolder, .newBlankLayer,
                         .moveLayerUp, .moveLayerDown, .mergeLayers, .flipLayerHorizontal, .flipLayerVertical, .deleteLayer, .addMask, .toggleMask,
-                        .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels,
+                        .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels, .pluginFilter,
                         .exposure, .undoRecipe, .redoRecipe, .addToVirtualFolder, .removeFromVirtualFolder, .addKeyword, .removeKeyword,
                         .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .undo, .redo])
         ]

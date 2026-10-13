@@ -31,6 +31,8 @@ struct LensWorksAgentCommandTests {
             try FileManager.default.createDirectory(at: granted, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
             harness.session = session
+            // Its own (empty) plugin store: what another test installs is never among this session's commands.
+            session.plugins = LensWorksPluginStore(directory: root.appendingPathComponent("plugins", isDirectory: true))
             let controller = controller
             harness.automation.tools.projects = { controller }
             if grant { try harness.automation.folders.grant(granted) }
@@ -259,6 +261,10 @@ struct LensWorksAgentCommandTests {
             .init(id: .movePixels, arguments: { _ in ["step": "down.10"] },
                   prepare: { $0.session.applySelection(CGPath(rect: CGRect(x: 0, y: 0, width: 50, height: 50), transform: nil), mode: .replace, name: "Marquee"); $0.session.history.reset() }),
             .init(id: .invert),
+            // An installed plugin's filter, by the family command: the sample invert turns the blue layer yellow.
+            .init(id: .pluginFilter, arguments: { _ in ["plugin": LensWorksPluginSamples.id("invert")] },
+                  prepare: { try $0.session.plugins.install(from: LensWorksPluginSamples.package("invert")) },
+                  verify: { $0.session.history.undoName == "Plugin: Sample Invert (Agent)" && $0.session.plugins.plugins.count == 1 }),
             .init(id: .curves, arguments: { _ in ["settings": ["channels": [[["x": 0, "y": 0], ["x": 128, "y": 200], ["x": 255, "y": 255]], [["x": 0, "y": 0], ["x": 255, "y": 255]], [["x": 0, "y": 0], ["x": 255, "y": 255]], [["x": 0, "y": 0], ["x": 255, "y": 255]]]]] }),
             .init(id: .levels, arguments: { _ in ["settings": ["ranges": [["black": 40, "gamma": 1, "white": 200, "outputBlack": 0, "outputWhite": 255], ["black": 0, "gamma": 1, "white": 255, "outputBlack": 0, "outputWhite": 255],
                                                                     ["black": 0, "gamma": 1, "white": 255, "outputBlack": 0, "outputWhite": 255], ["black": 0, "gamma": 1, "white": 255, "outputBlack": 0, "outputWhite": 255]]]] }),

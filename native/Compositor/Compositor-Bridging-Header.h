@@ -10,3 +10,4 @@
 
 #import "../../adapters/catalog/include/LensWorksCatalog.h"
 #import "../../adapters/inference/include/LensWorksInference.h"
+#import "../../adapters/plugins/include/LensWorksPlugins.h"

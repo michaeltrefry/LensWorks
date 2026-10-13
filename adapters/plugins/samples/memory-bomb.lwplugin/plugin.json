@@ -1,0 +1,7 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.memory-bomb",
+  "name": "Sample Memory Bomb",
+  "version": "1.0.0",
+  "parameters": []
+}

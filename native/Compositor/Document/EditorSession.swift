@@ -392,6 +392,14 @@ final class EditorSession {
     var hueSaturation: HueSaturationEdit?
     /// The open filter (Filter menu), and the settings the next one starts from.
     var filterEdit: FilterEdit?
+    /// The filter plugins this session runs: the person's installed ones (a test gives a session its own store).
+    @ObservationIgnored var plugins = LensWorksPluginStore.shared
+    /// The plugin filter running now, for the progress panel and its Cancel.
+    var pluginRun: LensWorksPluginRun?
+    /// The parameter sheet open for a plugin chosen from Filter › Plugins.
+    var pluginParameters: LensWorksPluginParameterEdit?
+    /// Why the plugin filter the person ran did not apply, for its alert.
+    var pluginError: String?
     var filterSettings = FilterSettings()
     @ObservationIgnored var hueSaturationTask: Task<Void, Never>?
     /// The newest preview request while one is already rendering.

@@ -1,0 +1,7 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.invert",
+  "name": "Sample Invert",
+  "version": "1.0.0",
+  "parameters": []
+}

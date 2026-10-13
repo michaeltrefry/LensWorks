@@ -1,0 +1,7 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.oob-write",
+  "name": "Sample Out-of-Bounds Write",
+  "version": "1.0.0",
+  "parameters": []
+}

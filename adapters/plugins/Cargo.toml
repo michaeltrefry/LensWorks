@@ -1,0 +1,20 @@
+[package]
+name = "lensworks-plugins"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "Sandboxed WebAssembly filter plugins for LensWorks: validation, bounded execution and the C interface the app calls."
+
+[lib]
+name = "lensworks_plugins"
+path = "src/lib.rs"
+
+[dependencies]
+# The WebAssembly interpreter. Exact pin; see docs/PLUGINS.md and DEPENDENCIES.json for the choice and provenance.
+wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "auto-dispatch", "deterministic"] }
+
+[dev-dependencies]
+# Assembles the sample plugins' text sources; the same pin scripts/build-sample-plugins.sh uses.
+wat = "=1.261.0"
+sha2 = "0.10"

@@ -1,0 +1,7 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.gradient",
+  "name": "Sample Position Gradient",
+  "version": "1.0.0",
+  "parameters": []
+}

@@ -33,6 +33,26 @@
     "ownership": "Retained SceneWorks runtime, unmodified; LensWorks owns only the adapter",
     "selection": "The revision SceneWorks main pins for its macOS worker (runtime-macos) at qualification time"
   },
+  "wasmi": {
+    "repository": "https://github.com/wasmi-labs/wasmi",
+    "revision": "2970aa871cc1001b57b267ccecdcd1e42306199e",
+    "version": "2.0.0",
+    "license": "MIT OR Apache-2.0 (LensWorks takes MIT)",
+    "adapter": "adapters/plugins",
+    "features": ["std", "validate", "auto-dispatch", "deterministic"],
+    "role": "The WebAssembly interpreter that runs filter plugins in a sandbox (docs/PLUGINS.md). Linked into the app through adapters/catalog's static library.",
+    "crates": {
+      "wasmi": {"version": "2.0.0", "checksum": "78693fcdd618e0fc34af59c6b8efa9ac5d58c68df940beff4bedddb6acfe7c27", "license": "MIT/Apache-2.0"},
+      "wasmi_core": {"version": "2.0.0", "checksum": "69372d5fda3ea3d1e0aa6603c7888110e0187e88ea17cd8fc2e2df0a0e1f37fa", "license": "MIT/Apache-2.0"},
+      "wasmi_ir": {"version": "2.0.0", "checksum": "8f17b774caa13c618c7244f1ee51fe23c5e7b8538a471fa46d9949779758aed6", "license": "MIT/Apache-2.0"},
+      "wasmi_collections": {"version": "2.0.0", "checksum": "8a8be2aa467cf2d29e96ff759472c36eeb44a3c81c67fc9cb76c9a24c519c557", "license": "MIT/Apache-2.0"},
+      "wasmparser": {"version": "0.228.0", "checksum": "4abf1132c1fdf747d56bbc1bb52152400c70f336870f968b85e89ea422198ae3", "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"},
+      "spin": {"version": "0.9.9", "checksum": "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e", "license": "MIT"},
+      "libm": {"version": "0.2.16", "checksum": "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981", "license": "MIT"}
+    },
+    "sample_plugin_assembler": {"crate": "wat", "version": "1.261.0", "checksum": "a7b4d1a49ea73a8f3326e74e3a05db667001b16bd1035ed3356fc1a0ed05ca7f", "shipped": false,
+      "role": "Development only: assembles adapters/plugins/samples/*.lwplugin/filter.wat (scripts/build-sample-plugins.sh). Not linked into the app."}
+  },
   "AdobeDNGSDK": {
     "version": "1.7.1.2724",
     "archive_sha256": "740fbe95c69e09e9cd17654a5e4fef2d7021254b06fd2b8c5557b79a1496b50c",

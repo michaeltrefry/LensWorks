@@ -94,6 +94,11 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case automationRevokeSecret = "automation.secret.revoke", automationCopyConfiguration = "automation.configuration.copy"
     case automationAllow = "automation.confirmation.allow", automationDecline = "automation.confirmation.decline"
     case automationGrantFolder = "automation.folder.grant", automationRevokeFolder = "automation.folder.revoke"
+    // Filter plugins. `pluginFilter` is the family every installed plugin's own command (`plugin.run.<plugin id>`,
+    // made at runtime from its manifest) belongs to: a plugin command is classified, admitted, refused and recorded
+    // exactly as this id is. Installing, removing and reloading are the person's alone.
+    case pluginFilter = "plugin.run", pluginCancel = "plugin.cancel"
+    case pluginInstall = "plugin.install", pluginRemove = "plugin.remove", pluginReload = "plugin.reload"
 }
 nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
@@ -185,6 +190,11 @@ nonisolated struct LensWorksCommandDescriptor: Codable, Identifiable, Sendable {
     let historyOwner: LensWorksCommandHistoryOwner
     /// When an agent's request for this command waits for the person to confirm it in the app.
     let agentConfirmation: LensWorksAgentConfirmationRule
+    /// Set on a command made at runtime (an installed plugin's): the id agents name it by. Its `id` is the built-in
+    /// family it belongs to, which classifies it.
+    var dynamicName: String? = nil
+    /// The id this command is listed and invoked by.
+    var name: String { dynamicName ?? id.rawValue }
     /// A change nothing in the app can undo (always, or when it replaces a file): when an agent asks for it, the
     /// person confirms it in the app before it runs.
     var requiresAgentConfirmation: Bool { agentConfirmation != .never }
@@ -262,7 +272,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation, plugins]
         return groups.flatMap { $0 }
     }()
 
@@ -503,6 +513,29 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .automationGrantFolder, label: "Grant Folder…", menu: "Settings/Automation"),
         .init(id: .automationRevokeFolder, label: "Remove", menu: "Settings/Automation", parameters: reference("folder", "A folder granted to automation."))
     ]
+
+    private static let plugins: [LensWorksCommandDescriptor] = [
+        .init(id: .pluginFilter, label: "Run Plugin Filter", menu: "Filter/Plugins", titleMatch: .any, parameters: reference("plugin", "An installed plugin’s id (list_commands lists each as plugin.run.<id>). This runs it with its default parameter values; to pass its parameters, run its own command plugin.run.<id>.") + [Argument.layer], undoable: true, historyOwner: .document),
+        .init(id: .pluginCancel, label: "Cancel", menu: "Plugin Progress"),
+        .init(id: .pluginInstall, label: "Install Plugin…", menu: "Settings/Plugins", menus: ["Settings/Plugins", "Filter/Plugins"]),
+        .init(id: .pluginRemove, label: "Remove", menu: "Settings/Plugins", parameters: reference("plugin", "An installed plugin’s id.")),
+        .init(id: .pluginReload, label: "Reload", menu: "Settings/Plugins", parameters: reference("plugin", "An installed plugin’s id."))
+    ]
+    /// What every installed plugin's command id starts with; the plugin's own id follows.
+    static let pluginCommandPrefix = "plugin.run."
+    /// The command of one installed plugin: the `pluginFilter` family's descriptor with the plugin's id as its
+    /// name and the parameters its manifest declares (typed and ranged) as its arguments, plus the layer to act on.
+    static func pluginDescriptor(_ manifest: LensWorksPluginManifest) -> LensWorksCommandDescriptor {
+        let family = descriptor(.pluginFilter)
+        var made = LensWorksCommandDescriptor(id: .pluginFilter, label: manifest.name + " (" + manifest.id + ")", menu: family.menu, titles: [manifest.menuTitle], titleMatch: .any,
+            parameters: manifest.commandParameters + [Argument.layer], undoable: family.undoable, historyOwner: family.historyOwner, agentConfirmation: family.agentConfirmation)
+        made.dynamicName = manifest.commandName
+        return made
+    }
+    /// The commands made at runtime: one per installed plugin, in id order.
+    @MainActor static func dynamicDescriptors(_ store: LensWorksPluginStore) -> [LensWorksCommandDescriptor] {
+        store.plugins.map { pluginDescriptor($0.manifest) }
+    }
 
     static func menuLabel(_ label: String, reason: String?) -> String { label + (reason.map { " — " + $0 } ?? "") }
     static func descriptor(_ id: LensWorksCommandID) -> LensWorksCommandDescriptor {

@@ -46,3 +46,9 @@ jobs:
       - name: MCP bridge tests
         timeout-minutes: 10
         run: cargo test --manifest-path adapters/mcp/Cargo.toml --locked
+      - name: Filter-plugin sandbox tests, and the sample plugins rebuilt from source
+        timeout-minutes: 10
+        # The sandbox's limits and refusals (forbidden imports, endless loops, recursion, memory bombs, traps,
+        # out-of-bounds writes, malformed modules), and that every committed sample filter.wasm is byte-for-byte
+        # what its filter.wat assembles to with the pinned assembler (scripts/build-sample-plugins.sh).
+        run: cargo test --manifest-path adapters/plugins/Cargo.toml --locked

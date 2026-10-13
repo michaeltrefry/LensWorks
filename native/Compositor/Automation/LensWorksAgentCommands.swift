@@ -7,8 +7,12 @@ import Foundation
 struct LensWorksAgentAdmission {
     let id: LensWorksCommandID
     let arguments: LensWorksAgentArguments
+    /// The installed plugin whose own command (plugin.run.<id>) this is; nil for a built-in command.
+    var plugin: LensWorksPluginManifest? = nil
     let origin = LensWorksCommandOrigin.agent
-    var descriptor: LensWorksCommandDescriptor { LensWorksCommandRegistry.descriptor(id) }
+    var descriptor: LensWorksCommandDescriptor { plugin.map(LensWorksCommandRegistry.pluginDescriptor) ?? LensWorksCommandRegistry.descriptor(id) }
+    /// The id the agent named.
+    var name: String { descriptor.name }
 }
 
 /// What an agent's command runs against: the project tab on screen, its controller, the tab strip and the catalog.
@@ -167,11 +171,26 @@ struct LensWorksAgentDocumentCommands {
     func run(_ admission: LensWorksAgentAdmission) async throws {
         let arguments = admission.arguments, id = admission.id
         try aim(arguments)
-        try await reporting { try await perform(id, arguments) }
+        try await reporting { if id == .pluginFilter { try await runPlugin(admission) } else { try await perform(id, arguments) } }
+    }
+
+    /// An installed plugin's filter. Its own command carries the manifest its arguments were checked against (the
+    /// declared types and ranges); the family command names the plugin and runs it with its defaults. A plugin
+    /// replaced since the request was checked is refused rather than run with another manifest's values.
+    private func runPlugin(_ admission: LensWorksAgentAdmission) async throws {
+        let arguments = admission.arguments
+        let plugin = try admission.plugin?.id ?? arguments.required("plugin", try arguments.string("plugin"))
+        try check(.pluginFilter, plugin)
+        guard let installed = session.plugins.plugin(plugin), admission.plugin == nil || admission.plugin == installed.manifest else {
+            throw refuse("The plugin \(String(plugin.prefix(LensWorksPluginManifest.idLimit))) changed since the request was checked: read list_commands again.")
+        }
+        let values = admission.plugin == nil ? installed.manifest.defaults : try installed.manifest.values(from: arguments)
+        try await session.runPlugin(plugin, values: values, origin: .agent)
     }
 
     private func perform(_ id: LensWorksCommandID, _ arguments: LensWorksAgentArguments) async throws {
         switch id {
+        case .pluginFilter: throw refuse("Run a plugin with its own command.")
         case .selectLayers:
             let ids = try arguments.required("layers", try arguments.uuids("layers"))
             guard Set(ids).count == ids.count else { throw refuse("Name each layer once.") }

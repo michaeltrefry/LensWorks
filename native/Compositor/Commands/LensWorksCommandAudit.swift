@@ -60,25 +60,25 @@ import AppKit
         return violations
     }
     /// A context or pull-down menu built in AppKit, under `path`.
-    static func audit(menu: NSMenu, path: String) -> [Violation] {
+    static func audit(menu: NSMenu, path: String, plugins: LensWorksPluginStore = .shared) -> [Violation] {
         var claimed: [ShortcutChord: Int] = [:]
-        return audit(menu: menu, path: path, claimed: &claimed)
+        return audit(menu: menu, path: path, claimed: &claimed, plugins: plugins)
     }
 
-    private static func audit(menu: NSMenu, path: String, claimed: inout [ShortcutChord: Int]) -> [Violation] {
+    private static func audit(menu: NSMenu, path: String, claimed: inout [ShortcutChord: Int], plugins: LensWorksPluginStore = .shared) -> [Violation] {
         var violations: [Violation] = []
         for item in menu.items where !item.isSeparatorItem {
             // A hidden item still answers its key equivalent when it allows that, so it is audited too.
             if item.isHidden && item.submenu == nil && !(item.allowsKeyEquivalentWhenHidden && !item.keyEquivalent.isEmpty) { continue }
             if let submenu = item.submenu {
                 if submenu === NSApp.servicesMenu { continue }
-                violations += audit(menu: submenu, path: path + "/" + item.title, claimed: &claimed)
+                violations += audit(menu: submenu, path: path + "/" + item.title, claimed: &claimed, plugins: plugins)
                 continue
             }
             let chord = Self.chord(item)
             if let chord { claimed[chord, default: 0] += 1 }
             if isSystem(item, path: path) { continue }
-            guard let command = command(for: item, path: path) else {
+            guard let command = command(for: item, path: path, plugins: plugins) else {
                 violations.append(.init(path: path, title: item.title, problem: "menu item is not a registered command"
                     + (chord.map { " (and its shortcut \($0.label) bypasses the registry)" } ?? "")))
                 continue
@@ -93,18 +93,23 @@ import AppKit
 
     /// The titles a menu of user files lists right now. An item in a menu whose command accepts any title (the
     /// user's files, tabs) must carry its command identifier or be one of these, so a rogue item there is caught.
-    static func currentTitles(_ path: String) -> [String]? {
-        path == "File/Open Recent" ? RecentProjects.shared.urls.map(RecentProjects.menuTitle) : nil
+    static func currentTitles(_ path: String, plugins: LensWorksPluginStore = .shared) -> [String]? {
+        switch path {
+        case "File/Open Recent": RecentProjects.shared.urls.map(RecentProjects.menuTitle)
+        // Filter › Plugins lists the installed plugins, each by its name with its id alongside.
+        case "Filter/Plugins": plugins.plugins.map(\.manifest.menuTitle)
+        default: nil
+        }
     }
 
     /// The registered command a rendered item is: its identifier, else the one command whose menu path and titles
     /// accept it (preferring the one whose shortcut it carries, for same-titled items like View › Snap).
-    static func command(for item: NSMenuItem, path: String) -> LensWorksCommandInvocation? {
+    static func command(for item: NSMenuItem, path: String, plugins: LensWorksPluginStore = .shared) -> LensWorksCommandInvocation? {
         if let raw = item.identifier?.rawValue, let invocation = LensWorksCommandInvocation(identifier: raw),
            LensWorksCommandRegistry.descriptor(invocation.id).menus.contains(path) {
             return invocation
         }
-        let listed = currentTitles(path)?.contains(item.title) == true
+        let listed = currentTitles(path, plugins: plugins)?.contains(item.title) == true
         let candidates = LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch != .any && $0.accepts(title: item.title) }
             + LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch == .any && listed }
         let chord = Self.chord(item)

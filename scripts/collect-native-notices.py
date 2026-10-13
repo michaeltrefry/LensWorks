@@ -36,9 +36,11 @@ stage = output.parent / (output.name + '-inputs')
 if stage.exists():
     raise SystemExit('Notice input staging must be new')
 (stage / 'desktop/src-tauri').mkdir(parents=True)
-# Every Rust payload the app ships: the catalog adapter and engine, and the MCP bridge (Contents/Helpers/LensWorksMCP).
-manifests = ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml', 'adapters/mcp/Cargo.toml')
-locks = [root / 'adapters/catalog/Cargo.lock', root / 'engines/catalog/Cargo.lock', root / 'adapters/mcp/Cargo.lock']
+# Every Rust payload the app ships: the catalog adapter and engine, the MCP bridge (Contents/Helpers/LensWorksMCP),
+# and the filter-plugin sandbox (adapters/plugins: the wasmi WebAssembly runtime, linked through the catalog
+# adapter's static library and inventoried from its own lock as well).
+manifests = ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml', 'adapters/mcp/Cargo.toml', 'adapters/plugins/Cargo.toml')
+locks = [root / 'adapters/catalog/Cargo.lock', root / 'engines/catalog/Cargo.lock', root / 'adapters/mcp/Cargo.lock', root / 'adapters/plugins/Cargo.lock']
 lock_bytes = {lock: lock.read_bytes() for lock in locks}
 lock_hashes = {str(lock.relative_to(root)): hashlib.sha256(data).hexdigest() for lock, data in lock_bytes.items()}
 manifest_bytes = {root / name: (root / name).read_bytes() for name in manifests}
@@ -65,6 +67,12 @@ excluded = [record for identity, record in sorted(packages.items()) if identity[
 packages = {identity: record for identity, record in packages.items() if identity[:2] in payload_identities}
 if {identity[:2] for identity in packages} != payload_identities:
     raise SystemExit('Cargo payload dependency graph does not match locked identities')
+# The plugin runtime is in the shipped payload at exactly the pinned crate archives: its notices cannot be left out.
+plugin_runtime = json.loads((root / 'DEPENDENCIES.json').read_text())['wasmi']['crates']
+for name, pin in sorted(plugin_runtime.items()):
+    shipped = [record for identity, record in packages.items() if identity[:2] == (name, pin['version'])]
+    if len(shipped) != 1 or shipped[0].get('checksum') != pin['checksum']:
+        raise SystemExit('Plugin runtime crate missing from the shipped payload inventory: ' + name + '@' + pin['version'])
 # This is a notice input, never a build lock. The retained collector reads only
 # the desktop lock, so inventory the union of every independently built payload.
 union = 'version = 4\n' + ''.join('\n[[package]]\n' + ''.join(key + ' = ' + json.dumps(value) + '\n' for key, value in record.items()) for _, record in sorted(packages.items()))
@@ -98,6 +106,7 @@ if any(path.read_bytes() != data for path, data in {**lock_bytes, **manifest_byt
 report['native_input_locks'] = lock_hashes
 report['native_input_manifests'] = {str(path.relative_to(root)): hashlib.sha256(data).hexdigest() for path, data in manifest_bytes.items()}
 report['native_dependency_graphs'] = graphs
+report['plugin_runtime'] = {'crates': plugin_runtime, 'basis': 'DEPENDENCIES.json wasmi; each crate is in the locked payload graph above at this checksum and carries a Rust notice record.'}
 report['excluded_lock_packages'] = {'basis': 'Not reachable through default-feature normal/build dependencies for the actual Apple-silicon payloads; development/test and other-target packages are not redistributed.', 'packages': excluded}
 expected = {(record['name'] + '@' + record['version'], record.get('source'), record.get('checksum')) for record in packages.values()}
 actual = {(record['identity'], record.get('source'), record.get('checksum')) for record in report['rust']}
@@ -106,7 +115,7 @@ if actual != expected:
 # This absent component is intentional and directly evidenced by the empty lock;
 # all other missing notices remain errors rather than a redistribution claim.
 report['missing'] = [entry for entry in report['missing'] if entry.get('component') != 'frontend-dependencies']
-report['native_adaptation'] = 'Union of actual default-feature Apple-silicon normal/build dependency graphs from every locked payload (catalog adapter, catalog engine, MCP bridge); excluded lock entries recorded explicitly; no npm runtime/frontend component is linked.'
+report['native_adaptation'] = 'Union of actual default-feature Apple-silicon normal/build dependency graphs from every locked payload (catalog adapter, catalog engine, MCP bridge, filter-plugin sandbox); excluded lock entries recorded explicitly; no npm runtime/frontend component is linked.'
 report['status'] = 'NOTICE_INVENTORY_COMPLETE' if not report['missing'] else 'NOTICE_INVENTORY_INCOMPLETE'
 report_path.write_text(json.dumps(report, indent=2) + '\n')
 if report['missing']:
