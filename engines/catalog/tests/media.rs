@@ -198,6 +198,7 @@ fn psd_rgb_composite_precision_and_corrupt_bounds() {
 
     let rendered = decode_full(&path).unwrap();
     assert_eq!(rendered.provenance.source_bits_per_channel, 16);
+    assert!(rendered.provenance.neutral_clip.is_none(), "a raster source has no sensor white");
     assert_eq!((rendered.width, rendered.height), (2, 1));
     assert!(rendered.pixels[0][0] < rendered.pixels[1][0]);
     bytes.pop();
@@ -231,6 +232,8 @@ fn linear_dng_profile_matrix_matches_independent_oracle_and_retains_mask() {
     assert!(image.pixels[5][0] > 1.0);
     assert!(image.pixels[5][1] < 0.0);
     assert_eq!(image.pixels, decode_full(&path).unwrap().pixels);
+    // Floating-point samples have no sensor saturation level to report.
+    assert!(image.provenance.neutral_clip.is_none());
 }
 
 #[test]
@@ -464,6 +467,8 @@ fn dng_spatial_gain_matches_independent_position_intensity_gamma_oracle() {
             }
         }
         let applied = image.provenance.spatial_calibration.as_ref().unwrap();
+        // A gain map scales highlights by position: no single clip level is reported.
+        assert!(image.provenance.neutral_clip.is_none());
         assert_eq!(applied.applied_pixels, 576);
         assert_eq!(applied.bypassed_pixels, 0);
         assert!(image.pixels.iter().any(|p| p[0] > 1.0));

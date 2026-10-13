@@ -3,6 +3,7 @@ import Testing
 import CryptoKit
 import CoreGraphics
 import ImageIO
+import SQLite3
 import simd
 @testable import Compositor
 
@@ -273,6 +274,93 @@ extension HDRMergeTests {
         #expect(checked >= 3)
     }
 
+    /// A RAW frame's clip level is the decoder's, wherever the sensor's white lands: here a
+    /// neutral subject saturates at 0.7, where the raster estimate (never below 1.0) sees nothing.
+    @Test func aSourceWhiteLevelBelowOneIsDetectedAsClipping() throws {
+        let white = SIMD3<Float>(repeating: 0.7)
+        func frame(stops: Float) throws -> LWHDRFrame {
+            var pixels: [SIMD4<Float>] = []
+            for _ in 0..<64 { for x in 0..<64 {
+                let value = min(HDRSyntheticBracket.radiance(x, width: 64, low: 0.01, high: 0.6) * exp2(stops), 0.7)
+                pixels.append(SIMD4(value, value, value, 1))
+            } }
+            return try LWHDRFrame(width: 64, height: 64, pixels: pixels, whiteLevel: white)
+        }
+        let dark = try frame(stops: 0), bright = try frame(stops: 2)
+        #expect(LWHDRMerger.clipLevel(bright) == 0.98 * white)
+        let result = try LWHDRMerger.merge([dark, bright], options: LWHDRMergeOptions(deghost: true, align: false))
+        #expect(result.referenceIndex == 0 && abs(result.exposures[1] - 4) < 0.05)
+        var checked = 0
+        for x in 0..<64 {
+            let scene = HDRSyntheticBracket.radiance(x, width: 64, low: 0.01, high: 0.6)
+            guard scene * 4 > 0.72 else { continue }  // Saturated at 0.7 in the bright frame.
+            let merged = result.radiance[32 * 64 + x]
+            #expect(abs(merged.x - scene) / scene < 0.01 && abs(merged.y - scene) / scene < 0.01 && abs(merged.z - scene) / scene < 0.01, "x \(x): \(merged) for scene \(scene)")
+            checked += 1
+        }
+        #expect(checked >= 10)
+    }
+
+    /// A saturated red subject reads 2.0 in red while a neutral highlight's red is clipped at 1.0.
+    /// The frame's own red maximum would hide the clipped neutrals; the decoder's level does not.
+    @Test func aSaturatedColouredSubjectDoesNotHideClippedNeutralHighlights() throws {
+        let white = SIMD3<Float>(repeating: 1)
+        func frame(stops: Float) throws -> LWHDRFrame {
+            var pixels: [SIMD4<Float>] = []
+            for y in 0..<64 { for x in 0..<64 {
+                let gain = exp2(stops)
+                if y < 8 {  // The red subject: its red saturates at 2.0 in the bright frame.
+                    pixels.append(SIMD4(min(0.6 * gain, 2.0), 0.02 * gain, 0.02 * gain, 1))
+                } else {    // Neutral: red is the first channel to saturate, at 1.0; the others reach 1.5.
+                    let value = HDRSyntheticBracket.radiance(x, width: 64, low: 0.01, high: 0.9) * gain
+                    pixels.append(SIMD4(min(value, 1.0), min(value, 1.5), min(value, 1.5), 1))
+                }
+            } }
+            return try LWHDRFrame(width: 64, height: 64, pixels: pixels, whiteLevel: white)
+        }
+        let dark = try frame(stops: 0), bright = try frame(stops: 2)
+        #expect(bright.pixels[0].x == 2.0 && LWHDRMerger.clipLevel(bright) == SIMD3(repeating: 0.98))
+        let result = try LWHDRMerger.merge([dark, bright], options: LWHDRMergeOptions(deghost: true, align: false))
+        #expect(result.referenceIndex == 0 && abs(result.exposures[1] - 4) < 0.05)
+        var checked = 0
+        for x in 0..<64 {
+            let scene = HDRSyntheticBracket.radiance(x, width: 64, low: 0.01, high: 0.9)
+            guard scene * 4 > 1.05, scene * 4 < 1.4 else { continue }  // Only red is clipped in the bright frame.
+            let merged = result.radiance[32 * 64 + x]
+            #expect(abs(merged.x - scene) / scene < 0.01, "x \(x): red \(merged.x) for scene \(scene)")
+            #expect(abs(merged.y - scene) / scene < 0.01 && abs(merged.z - scene) / scene < 0.01)
+            checked += 1
+        }
+        #expect(checked >= 3)
+        // The red subject itself comes from the frame that holds it unclipped.
+        let subject = result.radiance[4 * 64 + 32]
+        #expect(abs(subject.x - 0.6) < 0.006 && abs(subject.y - 0.02) < 0.001 && abs(subject.z - 0.02) < 0.001, "\(subject)")
+    }
+
+    /// The level reaches the merge from the decode worker: a camera DNG's frame carries where a
+    /// neutral subject first clips, though its white-level block develops to twice that in red;
+    /// a raster frame carries none and falls back to the estimate.
+    @Test func aCameraRawFrameCarriesTheDecodersNeutralClipLevelAndARasterFrameNone() async throws {
+        let physical = try #require(realpath(FileManager.default.temporaryDirectory.path, nil)); defer { free(physical) }
+        let root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWHDR-white-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false); defer { try? FileManager.default.removeItem(at: root) }
+        let raw = root.appendingPathComponent("procedural.dng")
+        try ProceduralDNG.write(to: raw, width: 96, height: 64)
+        let frame = try await LensWorksCatalog.developHDRFrame(original: try LWCatalogNativePath(fileURL: raw), url: raw)
+        let white = try #require(frame.whiteLevel)
+        #expect(abs(white.x - 1) < 0.01 && abs(white.y - 1) < 0.01 && abs(white.z - 1) < 0.01, "\(white)")
+        #expect(LWHDRMerger.clipLevel(frame) == 0.98 * white)
+        // The saturated block (as-shot neutral 0.5, 1, 0.75) develops far above that level in red
+        // and blue and below it in green. A level estimated from the frame would be this block's
+        // own red and blue, and 1.0 in green, and would call the block's surroundings well exposed.
+        let block = frame.pixels[4 * 96 + 4]
+        #expect(block.x > 1.9 && block.y < 0.98 && block.z > 1.2, "\(block)")
+        #expect(LWHDRMerger.clipped(SIMD3(block.x, block.y, block.z), LWHDRMerger.clipLevel(frame)))
+        let fixture = try HDRBracketFixture.make(); defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let raster = try await HDRBracketFixture.develop(fixture.files[0])
+        #expect(raster.whiteLevel == nil && LWHDRMerger.clipLevel(raster) == SIMD3(repeating: 0.98))
+    }
+
     /// The budget's unit is bytes per pixel: 6 per frame plus 32 shared (docs/HDR_MERGE.md, "Memory").
     @Test func theMemoryBudgetAdmitsOrdinaryBracketsAndRefusesOversizedOnesWithTheNumbers() throws {
         let budget = LWHDRMerger.minimumBudgetBytes
@@ -364,26 +452,30 @@ extension HDRMergeTests {
 @Suite(.serialized)
 @MainActor
 struct HDRMergeCatalogTests {
-    /// A catalog over the generated bracket's folder with its three photos imported.
-    private func withBracketCatalog(_ body: (LensWorksCatalog, HDRBracketFixture, [LensWorksCatalogAsset], UserDefaults) async throws -> Void) async throws {
-        let fixture = try HDRBracketFixture.make(); defer { try? FileManager.default.removeItem(at: fixture.root) }
+    private func catalogModel(_ fixture: HDRBracketFixture, defaults: UserDefaults? = nil) throws -> (model: LensWorksCatalog, defaults: UserDefaults) {
         let photos = fixture.root.appendingPathComponent("Photos")
         let worker = try #require(ProcessInfo.processInfo.environment["LW_CATALOG_TEST_WORKER"], "Explicit retained fixture helper is required.")
         let decode = ProcessInfo.processInfo.environment["LW_CATALOG_TEST_DECODE_WORKER"] ?? worker
         let config = LWManagedSessionConfig(worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: worker)), decode_worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: decode)),
             cache_root: try LWCatalogNativePath(fileURL: fixture.root.appendingPathComponent("Cache")), original_roots: [try LWCatalogNativePath(fileURL: photos)],
             limits: LWApplicationLimits(queued: 128, request_bytes: 1048576, reply_bytes: 1048576, page_rows: 100, scan_rows: 512, page_bytes: 131072, tickets: 128, ttl_seconds: 60, binary_bytes: 16777216), preview_policy: nil, preview_limits: nil)
-        let defaults = try #require(UserDefaults(suiteName: "LWHDR-\(UUID())"))
-        let model = LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false)
+        let defaults = try defaults ?? #require(UserDefaults(suiteName: "LWHDR-\(UUID())"))
+        return (LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false), defaults)
+    }
+    /// A catalog over the generated bracket's folder with its three photos imported.
+    private func withBracketCatalog(_ body: (LensWorksCatalog, HDRBracketFixture, [LensWorksCatalogAsset], UserDefaults) async throws -> Void) async throws {
+        let fixture = try HDRBracketFixture.make(); defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let photos = fixture.root.appendingPathComponent("Photos")
+        let (model, defaults) = try catalogModel(fixture)
         await model.connect(fixture.root.appendingPathComponent("Catalog").path, create: true)
         do {
             if let error = model.error { throw LensWorksCatalogError.message(error) }
             try await model.startImport(photos.path); try await model.waitImport(terminal: true)
             #expect(model.assets.count == 3)
             try await body(model, fixture, model.assets, defaults)
-            try await model.close()
+            if model.catalogPath != nil { try await model.close() }
         } catch {
-            try? await model.close()
+            if model.catalogPath != nil { try? await model.close() }
             throw error
         }
     }
@@ -521,7 +613,8 @@ struct HDRMergeCatalogTests {
             #expect(try await model.recentCatalogRow(original: outcome.dng)?.image_id == outcome.asset.id)
             #expect(try await model.recentCatalogRow(original: other.appendingPathComponent("absent-HDR.dng")) == nil)
             #expect(try await model.hdrMergeSources(of: outcome.asset).count == 3)
-            #expect(try await model.hdrMergeSources(of: decoy).isEmpty)
+            // The decoy keeps its own link, rebuilt from its own record: one source this catalog never had.
+            #expect(try await model.hdrMergeSources(of: decoy) == [LensWorksDerivedSource(imageID: "elsewhere", assetID: "elsewhere", variantID: "master", filename: "elsewhere.png", missing: true)])
             let output = fixture.root.appendingPathComponent("Versions")
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
             await model.setOutput(output.path)
@@ -581,5 +674,96 @@ struct HDRMergeCatalogTests {
             #expect(model.assets.count == 4)
             #expect(try leftovers(fixture) == [outcome.dng.lastPathComponent])
         }
+    }
+
+    /// The catalog index is rebuildable: without it, a merged photo's link comes back from the
+    /// record in its own DNG, matched to the catalog by asset ID and the sources' bytes.
+    @Test func theLinkIsRebuiltFromTheMergedFileWhenTheCatalogIndexIsDeleted() async throws {
+        try await withBracketCatalog { model, fixture, sources, defaults in
+            await selectAll(model, sources)
+            let outcome = try await model.mergeSelectionToHDR()
+            let recorded = try await model.hdrMergeSources(of: outcome.asset)
+            #expect(recorded.count == 3 && recorded.allSatisfy { !$0.missing })
+            let catalog = try #require(model.catalogPath), indexFile = fixture.root.appendingPathComponent("Index.sqlite3")
+            try await model.close()
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: indexFile.path + suffix) }
+            #expect(!FileManager.default.fileExists(atPath: indexFile.path))
+
+            let (reopened, _) = try catalogModel(fixture, defaults: defaults)
+            await reopened.connect(catalog)
+            do {
+                if let error = reopened.error { throw LensWorksCatalogError.message(error) }
+                #expect(reopened.assets.count == 4)
+                let merged = try #require(reopened.assets.first { $0.filename == outcome.dng.lastPathComponent })
+                let fresh = LensWorksCatalogIndex(url: indexFile)
+                #expect(try await fresh.sources(catalog: catalog, image: merged.id).isEmpty, "the new index starts without the link")
+                let rebuilt = try await reopened.hdrMergeSources(of: merged)
+                #expect(rebuilt == recorded)
+                // It is stored again, so the file is read once.
+                #expect(try await fresh.sources(catalog: catalog, image: merged.id) == recorded)
+                // A photo that is not a LensWorks merge has no link, DNG or not.
+                let plain = try #require(reopened.assets.first { $0.id == sources[0].id })
+                #expect(try await reopened.hdrMergeSources(of: plain).isEmpty)
+                try await reopened.selectHDRMergeSources(of: merged)
+                #expect(reopened.selectionCount == 3 && reopened.selection == Set(sources.map(\.id)))
+                try await reopened.close()
+            } catch { try? await reopened.close(); throw error }
+        }
+    }
+
+    /// A rebuilt link keeps every source the file names. One that is no longer in the catalog,
+    /// or whose original no longer has the recorded bytes, is kept as missing under its file name.
+    @Test func aRebuiltLinkKeepsSourcesThatAreNoLongerInTheCatalogAsMissing() async throws {
+        try await withBracketCatalog { model, fixture, sources, _ in
+            // A merged DNG whose record names: a source still in the catalog with its bytes; a
+            // source in the catalog whose bytes have changed since; a source the catalog does not have.
+            let photos = fixture.root.appendingPathComponent("Photos")
+            func recorded(_ asset: LensWorksCatalogAsset, hash: String?) async throws -> LWHDRMergeProvenance.Source {
+                let key = try #require(asset.key), file = try await model.service.originalLocation(key).localFileURL()
+                return .init(catalogImageID: asset.id, assetID: key.asset_id, variantID: key.variant_id, fileName: file.lastPathComponent,
+                    sha256: try hash ?? LensWorksCatalog.sha256(file), relativeExposureEV: 0, offset: LWHDROffset(x: 0, y: 0), profile: nil)
+            }
+            let record = LWHDRMergeProvenance(documentID: UUID().uuidString, deghost: true, referenceIndex: 0, baselineExposure: 0, sources: [
+                try await recorded(sources[0], hash: nil),
+                try await recorded(sources[1], hash: String(repeating: "0", count: 64)),
+                .init(catalogImageID: "removed-image", assetID: "removed-asset", variantID: "master", fileName: "removed-from-catalog.png", sha256: String(repeating: "1", count: 64), relativeExposureEV: 1, offset: LWHDROffset(x: 0, y: 0), profile: nil)])
+            let small = try LWHDRMerger.merge([try HDRSyntheticBracket.frame(stops: 0), try HDRSyntheticBracket.frame(stops: 2)])
+            let file = photos.appendingPathComponent("merged-elsewhere-HDR.dng")
+            try LWHDRDNGWriter.write(small, provenance: record, to: file)
+            let asset = try await model.importOriginal(file)
+            #expect(model.assets.count == 4)
+
+            let link = try await model.hdrMergeSources(of: asset)
+            let first = try #require(sources[0].key), second = try #require(sources[1].key)
+            #expect(link == [
+                LensWorksDerivedSource(imageID: sources[0].id, assetID: first.asset_id, variantID: first.variant_id, filename: sources[0].filename),
+                LensWorksDerivedSource(imageID: sources[1].id, assetID: second.asset_id, variantID: second.variant_id, filename: sources[1].filename, missing: true),
+                LensWorksDerivedSource(imageID: "removed-image", assetID: "removed-asset", variantID: "master", filename: "removed-from-catalog.png", missing: true)])
+            // Stored with the missing marks, and read back the same.
+            #expect(try await model.index.sources(catalog: try #require(model.catalogPath), image: asset.id) == link)
+            #expect(try await model.hdrMergeSources(of: asset) == link)
+            // Following the link selects only the source that is still there, and says so.
+            try await model.selectHDRMergeSources(of: asset)
+            #expect(model.selectionCount == 1 && model.selection == [sources[0].id])
+            #expect(model.status == "Selected 1 of the 3 source photos of merged-elsewhere-HDR.dng; the others are no longer in this catalog.")
+        }
+    }
+
+    /// An index written before sources could be recorded as missing is upgraded in place.
+    @Test func anIndexWithoutTheMissingColumnGainsItAndKeepsItsLinks() async throws {
+        let physical = try #require(realpath(FileManager.default.temporaryDirectory.path, nil)); defer { free(physical) }
+        let folder = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWHDR-index-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false); defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("Index.sqlite3")
+        var database: OpaquePointer?
+        #expect(sqlite3_open(file.path, &database) == SQLITE_OK)
+        #expect(sqlite3_exec(database, "PRAGMA application_id=1280792146; CREATE TABLE derived_sources(catalog TEXT NOT NULL,image TEXT NOT NULL,position INTEGER NOT NULL,source_image TEXT NOT NULL,source_asset TEXT NOT NULL,source_variant TEXT NOT NULL,source_name TEXT NOT NULL,PRIMARY KEY(catalog,image,position)); INSERT INTO derived_sources VALUES('/catalog','merged',0,'image-a','asset-a','master','a.png');", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(database)
+        let index = LensWorksCatalogIndex(url: file)
+        let kept = LensWorksDerivedSource(imageID: "image-a", assetID: "asset-a", variantID: "master", filename: "a.png")
+        #expect(try await index.sources(catalog: "/catalog", image: "merged") == [kept])
+        let gone = LensWorksDerivedSource(imageID: "image-b", assetID: "asset-b", variantID: "master", filename: "b.png", missing: true)
+        try await index.recordSources(catalog: "/catalog", image: "merged", sources: [kept, gone])
+        #expect(try await index.sources(catalog: "/catalog", image: "merged") == [kept, gone])
     }
 }

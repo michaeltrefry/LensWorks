@@ -10379,7 +10379,8 @@ nonisolated struct LWMediaFullRenderProvenance: Codable, Sendable {
     var calibration: LWMediaFullColorCalibration?
     var spatial_calibration: LWMediaFullColorCalibration?
     var notes: [String]
-    init(pipeline_version: String, decoder: String, source_bits_per_channel: UInt32, source_color: String, working_color: String, alpha: String, calibration: LWMediaFullColorCalibration?, spatial_calibration: LWMediaFullColorCalibration?, notes: [String]) {
+    var neutral_clip: LWCatalogTriple<LWCatalogFloat32,LWCatalogFloat32,LWCatalogFloat32>?
+    init(pipeline_version: String, decoder: String, source_bits_per_channel: UInt32, source_color: String, working_color: String, alpha: String, calibration: LWMediaFullColorCalibration?, spatial_calibration: LWMediaFullColorCalibration?, notes: [String], neutral_clip: LWCatalogTriple<LWCatalogFloat32,LWCatalogFloat32,LWCatalogFloat32>? = nil) {
         self.pipeline_version = pipeline_version
         self.decoder = decoder
         self.source_bits_per_channel = source_bits_per_channel
@@ -10389,6 +10390,7 @@ nonisolated struct LWMediaFullRenderProvenance: Codable, Sendable {
         self.calibration = calibration
         self.spatial_calibration = spatial_calibration
         self.notes = notes
+        self.neutral_clip = neutral_clip
     }
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: LWCatalogCodingKey.self)
@@ -10401,6 +10403,7 @@ nonisolated struct LWMediaFullRenderProvenance: Codable, Sendable {
         self.calibration = try container.decodeIfPresent(LWMediaFullColorCalibration.self, forKey: LWCatalogCodingKey("calibration"))
         self.spatial_calibration = try container.decodeIfPresent(LWMediaFullColorCalibration.self, forKey: LWCatalogCodingKey("spatial_calibration"))
         self.notes = try container.decode([String].self, forKey: LWCatalogCodingKey("notes"))
+        self.neutral_clip = try container.decodeIfPresent(LWCatalogTriple<LWCatalogFloat32,LWCatalogFloat32,LWCatalogFloat32>.self, forKey: LWCatalogCodingKey("neutral_clip"))
     }
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: LWCatalogCodingKey.self)
@@ -10413,6 +10416,7 @@ nonisolated struct LWMediaFullRenderProvenance: Codable, Sendable {
         try container.encode(calibration, forKey: LWCatalogCodingKey("calibration"))
         try container.encode(spatial_calibration, forKey: LWCatalogCodingKey("spatial_calibration"))
         try container.encode(notes, forKey: LWCatalogCodingKey("notes"))
+        try container.encodeIfPresent(neutral_clip, forKey: LWCatalogCodingKey("neutral_clip"))
     }
 }
 

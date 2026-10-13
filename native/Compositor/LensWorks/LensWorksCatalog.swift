@@ -1266,9 +1266,51 @@ final class LensWorksCatalog {
         return nil
     }
     /// The source photos a merged HDR photo is linked to in this catalog; empty for any other photo.
+    /// The catalog index holds the link. When it has none for a DNG (the index was deleted or
+    /// rebuilt, or the file was merged elsewhere) the link is rebuilt from the file's own merge
+    /// record and stored again.
     func hdrMergeSources(of asset: LensWorksCatalogAsset) async throws -> [LensWorksDerivedSource] {
         guard let catalogPath else { return [] }
-        return try await index.sources(catalog: catalogPath, image: asset.id)
+        let recorded = try await index.sources(catalog: catalogPath, image: asset.id)
+        if !recorded.isEmpty { return recorded }
+        return try await rebuildHDRMergeSources(of: asset, catalog: catalogPath)
+    }
+    /// Reads the merged DNG's XMP record and matches each source to this catalog by asset ID and
+    /// by the SHA-256 of its original. A source that is no longer in the catalog, or whose
+    /// original no longer has those bytes, is kept as missing under its recorded file name.
+    private func rebuildHDRMergeSources(of asset: LensWorksCatalogAsset, catalog: String) async throws -> [LensWorksDerivedSource] {
+        guard asset.filename.lowercased().hasSuffix(".dng"), let key = asset.key, let token = catalogToken else { return [] }
+        let scope = captureScope()
+        let record: LWHDRMergeProvenance
+        do {
+            let url = try await service.originalLocation(key).localFileURL()
+            try checkScope(scope)
+            record = try await Self.detached { try LWDNGInspection.provenance(at: url) }
+        } catch is CancellationError { throw CancellationError() }
+        catch { return [] }  // Not a LensWorks merge, or its original cannot be read now.
+        try checkScope(scope)
+        var sources: [LensWorksDerivedSource] = [], verified = true
+        for source in record.sources {
+            let missing = LensWorksDerivedSource(imageID: source.catalogImageID, assetID: source.assetID, variantID: source.variantID, filename: source.fileName, missing: true)
+            let row: LWApplicationDtoGridImage
+            do { row = try await service.catalogImage(catalog: token, key: LWCatalogEditsVariantKey(asset_id: source.assetID, variant_id: source.variantID)) }
+            catch is CancellationError { throw CancellationError() }
+            catch { try checkScope(scope); sources.append(missing); continue }  // No longer in the catalog.
+            try checkScope(scope)
+            let present = LensWorksDerivedSource(imageID: row.image_id, assetID: row.key.asset_id, variantID: row.key.variant_id, filename: URL(fileURLWithPath: row.filename).lastPathComponent)
+            let hash: String
+            do {
+                let file = try await service.originalLocation(row.key).localFileURL()
+                try checkScope(scope)
+                hash = try await Self.detached { try Self.sha256(file) }
+            } catch is CancellationError { throw CancellationError() }
+            catch { sources.append(present); verified = false; continue }  // Offline: matched by ID, checked again later.
+            try checkScope(scope)
+            sources.append(hash == source.sha256 ? present : missing)
+        }
+        // Stored only once every source still in the catalog has had its bytes checked.
+        if verified, !sources.isEmpty { try await index.recordSources(catalog: catalog, image: asset.id, sources: sources); try checkScope(scope) }
+        return sources
     }
     /// Follows a merged HDR photo's link: its source photos become the catalog selection.
     func selectHDRMergeSources(of asset: LensWorksCatalogAsset) async throws {
@@ -1277,14 +1319,16 @@ final class LensWorksCatalog {
         let sources = try await hdrMergeSources(of: asset)
         try checkScope(scope)
         guard !sources.isEmpty else { throw LensWorksCatalogError.message("“\(asset.filename)” has no recorded HDR merge sources in this catalog.") }
+        let present = sources.filter { !$0.missing }
+        guard !present.isEmpty else { throw LensWorksCatalogError.message("The source photos of “\(asset.filename)” are no longer in this catalog.") }
         catalogSelectionEpoch &+= 1
-        try await index.setSelection(owner: owner, rows: sources.map(\.row), replace: true)
+        try await index.setSelection(owner: owner, rows: present.map(\.row), replace: true)
         try checkScope(scope)
         guard owner == selectionOwner, query == queryOwner, generation == previewGeneration else { throw CancellationError() }
         selectionAnchor = nil
-        if let shown = assets.first(where: { row in sources.contains { $0.imageID == row.id } }) { selectedPhotoID = shown.id }
+        if let shown = assets.first(where: { row in present.contains { $0.imageID == row.id } }) { selectedPhotoID = shown.id }
         try await refreshSelectionProjection(owner: owner, query: query, scope: scope, generation: generation)
-        status = "Selected the \(sources.count) source photos of \(asset.filename)."
+        status = "Selected \(present.count) of the \(sources.count) source photos of \(asset.filename)" + (present.count < sources.count ? "; the others are no longer in this catalog." : ".")
     }
     func cancelImport() async throws {
         try admitCatalogWork()

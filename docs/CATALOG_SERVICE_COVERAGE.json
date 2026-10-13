@@ -4,7 +4,7 @@
   "baseline": {
     "revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
     "source": "engines/catalog",
-    "source_digest": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3"
+    "source_digest": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254"
   },
   "root_type_ids": [
     "application::dto::Request",
@@ -33026,6 +33026,20 @@
           "line": 110,
           "generic_parameter_refs": [],
           "type_refs": []
+        },
+        {
+          "name": "neutral_clip",
+          "rust_type": "Option<[f32; 3]>",
+          "serde": {
+            "raw": [
+              "serde(default, skip_serializing_if = \"Option::is_none\")"
+            ],
+            "skip_serializing_if": "Option::is_none",
+            "default": true
+          },
+          "line": 111,
+          "generic_parameter_refs": [],
+          "type_refs": []
         }
       ],
       "variants": [],
@@ -33040,7 +33054,7 @@
       "name": "RenderedImage",
       "kind": "struct",
       "file": "engines/catalog/src/media/full.rs",
-      "line": 115,
+      "line": 120,
       "visibility": "pub",
       "serde": {
         "raw": []
@@ -33052,7 +33066,7 @@
           "serde": {
             "raw": []
           },
-          "line": 115,
+          "line": 120,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -33067,7 +33081,7 @@
           "serde": {
             "raw": []
           },
-          "line": 116,
+          "line": 121,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -33077,7 +33091,7 @@
           "serde": {
             "raw": []
           },
-          "line": 117,
+          "line": 122,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -33087,7 +33101,7 @@
           "serde": {
             "raw": []
           },
-          "line": 118,
+          "line": 123,
           "generic_parameter_refs": [],
           "type_refs": []
         },
@@ -33097,7 +33111,7 @@
           "serde": {
             "raw": []
           },
-          "line": 119,
+          "line": 124,
           "generic_parameter_refs": [],
           "type_refs": [
             {
@@ -34504,7 +34518,7 @@
     },
     {
       "file": "engines/catalog/src/edit/render.rs",
-      "sha256": "332d9aebbe4be60559f4d375d4393af8b1f408a4285a9d077f2596201cf58704"
+      "sha256": "7b4b42cdcfb1857c5c6eb6a8b31ee7c300ee407aea524d2f42433fd6928f225b"
     },
     {
       "file": "engines/catalog/src/filesystem_worker/wire.rs",
@@ -34544,11 +34558,11 @@
     },
     {
       "file": "engines/catalog/src/media/full.rs",
-      "sha256": "9c2b6ecc65885891dd5d1f4fe58039bd1a3057924cd845721d92a514c49281bb"
+      "sha256": "2a664bc5577567e6e2706752cc49979d7a4d33b9993cc9cfaedc2ec7a4bf5d8a"
     },
     {
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "sha256": "c390d2b51be9ae282449826296b89a55837897ff4ecdeb45992ec1b02f68bf9d"
+      "sha256": "0ca63be9de7a1e89355a8cf6c855cf3336799ad0bf17a624135f516919ebf9f6"
     },
     {
       "file": "engines/catalog/src/organization.rs",
@@ -34572,7 +34586,7 @@
     },
     {
       "file": "engines/catalog/src/preview/store.rs",
-      "sha256": "93c0b2e967593f1f339d732970901fe8f37d8ef182fd6486be2c4911d5503357"
+      "sha256": "2c7e2c4943c1ffcc137e86133942c9fe80659fad6d9bfccea9e78053c29abe16"
     },
     {
       "file": "engines/catalog/src/storage_volume.rs",
@@ -69677,7 +69691,7 @@
       "source": {
         "file": "engines/catalog/src/media/full.rs",
         "symbol": "decode_full_limited",
-        "line": 337
+        "line": 344
       },
       "fixture_profile": "full-float-original",
       "actions": [
@@ -69742,7 +69756,7 @@
         "Use a foreign catalog token: Reply::Error StaleSession.",
         "Use page limit 0: InvalidRequest; request bytes over configured cap: ResourceLimit."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69813,7 +69827,7 @@
         "Reject stale token/generation/review digest and wrong epoch; no overwrite from a stale review.",
         "Interrupted publication retains recovery evidence instead of reporting successful rollback."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69842,7 +69856,7 @@
         "Stale image revision rejects the edit without changing rating/member rows.",
         "Collection placement cycle and deleting an in-use keyword fail; current rows remain unchanged."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69943,7 +69957,7 @@
         "Changed candidate bytes or stale plan revision prevents Apply.",
         "Ambiguous candidates remain unresolved until explicit review; cancellation preserves the previous mapping."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70008,7 +70022,7 @@
         "Mutate target recipe after Append; Run reports conflict and preserves newer target.",
         "Active cancellation requires the matching operation id; no overwrite of newer edits."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70067,7 +70081,7 @@
         "Overlapping original/cache roots reject admission.",
         "Stale original-root review token or changed storage epoch cannot validate another mapping; StepRelocation selects exact tier."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70138,7 +70152,7 @@
         "Wrong offset, byte total, digest, role, operation or Guard fails before migration authority is admitted.",
         "Cancel with uncertain drain reports DrainPending; no false successful close/discard."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70563,7 +70577,7 @@
         "Stale workbench/generation/evidence or wrong input offset rejects the action.",
         "Open read-only never writes source SQLite; Cancel/Close drains before releasing authority."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70670,7 +70684,7 @@
         "Stale plan authority/source fingerprint or changed destination blocks publication.",
         "Existing output is preserved when overwrite=false; truncated staged output is recoverable and is never reported complete."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71005,7 +71019,7 @@
         "Open missing path fails without creating it.",
         "Wrong catalog token returns StaleSession; request after shutdown reports Closed."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71232,7 +71246,7 @@
         "Relative source path is InvalidRequest.",
         "Overlapping import is Busy; wrong import id cannot cancel another operation."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71399,7 +71413,7 @@
         "Wrong restore_id fails; refusal to acknowledge pending jobs leaves jobs held.",
         "Existing restore destination or altered bundle digest fails without replacing existing catalog."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71518,7 +71532,7 @@
         "Search rating6 or limit0 is InvalidRequest.",
         "Stale edit/metadata revision cannot overwrite a newer recipe or cull."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71685,7 +71699,7 @@
         "Expired/unknown ticket gives StaleSession.",
         "Canceled or superseded viewport request cannot deliver current-generation authority."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71879,78 +71893,78 @@
       "faults": [
         "Invalid VariantKey fails; mixed source/image key is rejected."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 540,
+          "line": 541,
           "symbol": "neutral_is_exact_and_exposure_preserves_signed_hdr_straight_alpha",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 556,
+          "line": 557,
           "symbol": "combined_tone_color_matches_separate_f64_equations",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 583,
+          "line": 584,
           "symbol": "crop_fixed_canvas_rotation_and_alpha_aware_resize",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 631,
+          "line": 632,
           "symbol": "spatial_controls_retain_flat_hdr_and_reduce_noise_then_sharpen_edges",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 678,
+          "line": 679,
           "symbol": "admitted_100mp_requires_sufficient_live_allowance_without_allocating",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 695,
+          "line": 696,
           "symbol": "low_admission_cancel_and_wrong_wb_never_produce_result",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 748,
+          "line": 749,
           "symbol": "temporary_same_inode_rewrite_during_decode_cannot_claim_restored_source_identity",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 829,
+          "line": 830,
           "symbol": "growing_or_short_sources_stop_at_the_declared_revision",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 856,
+          "line": 857,
           "symbol": "oversized_original_is_refused_before_the_decoder_and_cancel_before_open",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 892,
+          "line": 893,
           "symbol": "fifo_and_symlink_originals_are_rejected_without_opening_a_stream",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 928,
+          "line": 929,
           "symbol": "source_row_mutation_refuses_final_graph_publication",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 944,
+          "line": 945,
           "symbol": "row_cancellation_stops_next_row_and_refuses_source_result",
           "status": "source_discovered_not_executed_here"
         },
@@ -71980,20 +71994,26 @@
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 199,
+          "line": 208,
           "symbol": "raw_sensor_admission_precedes_unpack",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 237,
+          "line": 246,
           "symbol": "custom_raw_white_uses_camera_response_before_development",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 282,
+          "line": 291,
           "symbol": "requested_dng_white_maps_independent_camera_neutrals_to_gray",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/media/raw_highlight_tests.rs",
+          "line": 382,
+          "symbol": "integer_raw_provenance_carries_the_neutral_clip_level",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -72014,78 +72034,78 @@
         "Wrong fingerprint or decoded allocation limit fails before admission.",
         "Cancellation/stale source blocks publication."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 540,
+          "line": 541,
           "symbol": "neutral_is_exact_and_exposure_preserves_signed_hdr_straight_alpha",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 556,
+          "line": 557,
           "symbol": "combined_tone_color_matches_separate_f64_equations",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 583,
+          "line": 584,
           "symbol": "crop_fixed_canvas_rotation_and_alpha_aware_resize",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 631,
+          "line": 632,
           "symbol": "spatial_controls_retain_flat_hdr_and_reduce_noise_then_sharpen_edges",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 678,
+          "line": 679,
           "symbol": "admitted_100mp_requires_sufficient_live_allowance_without_allocating",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 695,
+          "line": 696,
           "symbol": "low_admission_cancel_and_wrong_wb_never_produce_result",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 748,
+          "line": 749,
           "symbol": "temporary_same_inode_rewrite_during_decode_cannot_claim_restored_source_identity",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 829,
+          "line": 830,
           "symbol": "growing_or_short_sources_stop_at_the_declared_revision",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 856,
+          "line": 857,
           "symbol": "oversized_original_is_refused_before_the_decoder_and_cancel_before_open",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 892,
+          "line": 893,
           "symbol": "fifo_and_symlink_originals_are_rejected_without_opening_a_stream",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 928,
+          "line": 929,
           "symbol": "source_row_mutation_refuses_final_graph_publication",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/edit/render.rs",
-          "line": 944,
+          "line": 945,
           "symbol": "row_cancellation_stops_next_row_and_refuses_source_result",
           "status": "source_discovered_not_executed_here"
         },
@@ -72115,20 +72135,26 @@
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 199,
+          "line": 208,
           "symbol": "raw_sensor_admission_precedes_unpack",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 237,
+          "line": 246,
           "symbol": "custom_raw_white_uses_camera_response_before_development",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 282,
+          "line": 291,
           "symbol": "requested_dng_white_maps_independent_camera_neutrals_to_gray",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/media/raw_highlight_tests.rs",
+          "line": 382,
+          "symbol": "integer_raw_provenance_carries_the_neutral_clip_level",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -72148,7 +72174,7 @@
       "faults": [
         "Unknown enum discriminator/denied unknown field and noncanonical decimal forms fail."
       ],
-      "source_revision": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": []
     }
@@ -94308,6 +94334,11 @@
         },
         "notes": [
           "fixture-notes"
+        ],
+        "neutral_clip": [
+          0.0,
+          0.0,
+          0.0
         ]
       },
       "source": {
