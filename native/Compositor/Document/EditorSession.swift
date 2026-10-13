@@ -780,7 +780,7 @@ final class EditorSession {
     }
 
     /// Nestable transaction boundary; future tools can group a complete gesture.
-    @discardableResult func beginEdit(_ name:String,layerCapacity:Int? = nil,additionalMetadataBytes:Int=0,forceSourceMetadata:Bool=false) -> Bool {
+    @discardableResult func beginEdit(_ name:String,layerCapacity:Int? = nil,additionalMetadataBytes:Int=0,forceSourceMetadata:Bool=false,origin:LensWorksCommandOrigin = .user) -> Bool {
         do {
             let admitted=try document?.admittingMetadataMutation(layerCapacity:layerCapacity,additionalBytes:additionalMetadataBytes,force:forceSourceMetadata)
             let emptyOwner:LWSourceMetadataStorage?
@@ -789,7 +789,7 @@ final class EditorSession {
                 emptyOwner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.sum(4096,
                     LWSourceMetadataStorage.collectionBytes(count:capacity,stride:MemoryLayout<ImageLayer>.stride)))
             } else { emptyOwner=nil }
-            history.begin(name,document:document,selection:activeLayerID,afterMetadataStorage:admitted?.metadataStorage ?? emptyOwner)
+            history.begin(name,document:document,selection:activeLayerID,afterMetadataStorage:admitted?.metadataStorage ?? emptyOwner,origin:origin)
             document=admitted;return true
         } catch { brushError=error.localizedDescription;return false }
     }

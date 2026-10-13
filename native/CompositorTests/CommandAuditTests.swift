@@ -135,6 +135,18 @@ struct CommandAuditTests {
         #expect(LensWorksCommandDispatcher.lastInvocation?.id == .cancelField)
     }
 
+    /// S40 added the Settings window: its standard app-menu item is macOS's, and nothing else passes as it.
+    @Test func onlyTheStandardSettingsItemIsTreatedAsTheSystemSettingsCommand() async throws {
+        let menu = try await mainMenu()
+        let app = try #require(menu.items.first?.submenu)
+        let settings = try #require(app.items.first { $0.title == "Settings…" })
+        #expect(LensWorksCommandAudit.chord(settings) == ShortcutChord(",", 1) && LensWorksCommandAudit.isSystem(settings, path: "App"))
+        let rebound = NSMenuItem(title: "Settings…", action: Selector(("rogueSettings:")), keyEquivalent: "k")
+        let misplaced = NSMenuItem(title: "Settings…", action: Selector(("rogueSettings:")), keyEquivalent: ",")
+        let renamed = NSMenuItem(title: "Rogue Settings", action: Selector(("rogueSettings:")), keyEquivalent: ",")
+        #expect(!LensWorksCommandAudit.isSystem(rebound, path: "App") && !LensWorksCommandAudit.isSystem(misplaced, path: "Edit") && !LensWorksCommandAudit.isSystem(renamed, path: "App"))
+    }
+
     @Test func hiddenItemsThatKeepTheirKeyEquivalentAndUnidentifiedItemsInFileMenusAreAudited() async throws {
         let menu = try await mainMenu()
         let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)

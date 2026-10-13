@@ -285,6 +285,7 @@ struct CompositorApp: App {
                     }
                 }
             }
+        Settings { LensWorksAutomationSettingsView(automation: applicationDelegate.automation) }
     }
     private var startReason: String? {
         LensWorksCommandRegistry.unavailable(!applicationDelegate.projects.canStart, "Finish the current project operation first.")

@@ -20,10 +20,10 @@ notice_root = args.notices.resolve()
 notice_report = json.loads((notice_root / 'inventory.json').read_text())
 if notice_report.get('missing'):
     raise SystemExit('Missing notice records prevent installation')
-for name in ('adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock'):
+for name in ('adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock', 'adapters/mcp/Cargo.lock'):
     if notice_report.get('native_input_locks', {}).get(name) != hashlib.sha256((root / name).read_bytes()).hexdigest():
         raise SystemExit('Notice inventory does not match current payload lock: ' + name)
-for name in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml'):
+for name in ('adapters/catalog/Cargo.toml', 'engines/catalog/Cargo.toml', 'adapters/mcp/Cargo.toml'):
     if notice_report.get('native_input_manifests', {}).get(name) != hashlib.sha256((root / name).read_bytes()).hexdigest():
         raise SystemExit('Notice inventory does not match current payload manifest: ' + name)
 notice_manifest = json.loads((notice_root / 'manifest.json').read_text())
@@ -42,10 +42,10 @@ info = plistlib.loads((source / 'Contents/Info.plist').read_bytes())
 executable = source / 'Contents/MacOS' / info['CFBundleExecutable']
 helpers_root = source / 'Contents/Helpers'
 helpers = sorted(helpers_root.iterdir()) if helpers_root.exists() else []
-required_helpers = {'PhotoCatalogWorker', 'LensWorksDecodeWorker'}
+required_helpers = {'PhotoCatalogWorker', 'LensWorksDecodeWorker', 'LensWorksMCP'}
 inference_library = 'liblensworks_inference.dylib'
 if {path.name for path in helpers} - {inference_library} != required_helpers or any(not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK) for path in helpers):
-    raise SystemExit('Require both regular executable PhotoCatalogWorker and LensWorksDecodeWorker helpers')
+    raise SystemExit('Require regular executable PhotoCatalogWorker, LensWorksDecodeWorker and LensWorksMCP helpers')
 # The inference runtime pins the metallib sealed in Contents/Resources (scripts/build-native.sh).
 if (helpers_root / inference_library).exists() and not (source / 'Contents/Resources/mlx.metallib').is_file():
     raise SystemExit('The inference runtime requires Contents/Resources/mlx.metallib')

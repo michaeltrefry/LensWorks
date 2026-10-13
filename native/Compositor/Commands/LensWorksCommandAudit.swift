@@ -28,10 +28,14 @@ import AppKit
         "toggleAutomaticTextReplacement:", "uppercaseWord:", "lowercaseWord:", "capitalizeWord:", "startSpeaking:",
         "stopSpeaking:", "toggleAutomaticTextCompletion:", "showWritingTools:"
     ]
-    /// Window-menu tiling items (Fill, Center, Move & Resize, Full Screen Tile) use private AppKit selectors.
+    /// Window-menu tiling items (Fill, Center, Move & Resize, Full Screen Tile) use private AppKit selectors. The
+    /// app menu's Settings… item comes from the SwiftUI Settings scene with a SwiftUI action rather than
+    /// `showSettingsWindow:`; it is that standard command only with its standard title and ⌘, (which
+    /// ShortcutSettings reserves for macOS, so no registered command can take it).
     static func isSystem(_ item: NSMenuItem, path: String) -> Bool {
         guard let action = item.action.map(NSStringFromSelector) else { return false }
         if systemActions.contains(action) { return true }
+        if path == "App", item.title == "Settings…", chord(item) == ShortcutChord(",", 1) { return true }
         return path.hasPrefix("Window") && action.hasPrefix("_")
     }
 

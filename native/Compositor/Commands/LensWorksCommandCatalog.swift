@@ -84,6 +84,11 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case moveCatalogSelection = "catalog.selection.move", filterRating = "catalog.filter.rating"
     case filterFlag = "catalog.filter.flag", filterLabel = "catalog.filter.label"
     case filterAnyKeyword = "catalog.filter.anyKeyword", clearFilters = "catalog.filter.clear"
+    // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
+    case automationEnabled = "automation.enabled", automationShowSecret = "automation.secret.show"
+    case automationCopySecret = "automation.secret.copy", automationRegenerateSecret = "automation.secret.regenerate"
+    case automationRevokeSecret = "automation.secret.revoke", automationCopyConfiguration = "automation.configuration.copy"
+    case automationAllow = "automation.confirmation.allow", automationDecline = "automation.confirmation.decline"
 }
 nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
@@ -147,14 +152,19 @@ nonisolated struct LensWorksCommandDescriptor: Codable, Identifiable, Sendable {
     let parameters: [LensWorksCommandParameter]
     let undoable: Bool
     let historyOwner: LensWorksCommandHistoryOwner
+    /// A permanent change nothing in the app can undo: when an agent asks for it, the person confirms it in the app
+    /// before it runs.
+    let requiresAgentConfirmation: Bool
     /// The first default chord, for single-binding commands.
     var shortcut: LensWorksCommandShortcut? { bindings.first?.chord }
     init(id: LensWorksCommandID, label: String, menu: String, menus: [String]? = nil, titles: [String]? = nil,
          titleMatch: LensWorksTitleMatch = .exact, bindings: [LensWorksCommandBinding] = [],
-         parameters: [LensWorksCommandParameter] = [], undoable: Bool = false, historyOwner: LensWorksCommandHistoryOwner = .none) {
+         parameters: [LensWorksCommandParameter] = [], undoable: Bool = false, historyOwner: LensWorksCommandHistoryOwner = .none,
+         requiresAgentConfirmation: Bool = false) {
         self.id = id; self.label = label; self.menu = menu; self.menus = menus ?? [menu]
         self.titles = titles ?? [label]; self.titleMatch = titleMatch; self.bindings = bindings
         self.parameters = parameters; self.undoable = undoable; self.historyOwner = historyOwner
+        self.requiresAgentConfirmation = requiresAgentConfirmation
     }
     /// Whether a rendered menu item titled `title` is this command (a disabled reason may follow " — ").
     func accepts(title: String) -> Bool {
@@ -188,7 +198,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
         return groups.flatMap { $0 }
     }()
 
@@ -384,7 +394,7 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .removeFromVirtualFolder, label: "Remove Selected Photos", menu: "Catalog Virtual Folder", parameters: reference("folder", "A virtual folder."), undoable: true, historyOwner: .nativeMetadata),
         .init(id: .renameVirtualFolder, label: "Rename…", menu: "Catalog Virtual Folder", parameters: reference("folder", "A virtual folder."), historyOwner: .nativeMetadata),
         .init(id: .moveVirtualFolder, label: "Move Into…", menu: "Catalog Virtual Folder", parameters: reference("folder", "A virtual folder."), historyOwner: .nativeMetadata),
-        .init(id: .deleteVirtualFolder, label: "Delete Empty Folder", menu: "Catalog Virtual Folder", parameters: reference("folder", "An empty virtual folder."), historyOwner: .nativeMetadata),
+        .init(id: .deleteVirtualFolder, label: "Delete Empty Folder", menu: "Catalog Virtual Folder", parameters: reference("folder", "An empty virtual folder."), historyOwner: .nativeMetadata, requiresAgentConfirmation: true),
         .init(id: .showNestedKeywords, label: "Show Nested Keywords", menu: "Catalog Keyword", parameters: reference("keyword", "A hierarchical keyword.")),
         .init(id: .addKeyword, label: "Add to Selected Photos", menu: "Catalog Keyword", parameters: reference("keyword", "A catalog keyword."), undoable: true, historyOwner: .nativeMetadata),
         .init(id: .removeKeyword, label: "Remove from Selected Photos", menu: "Catalog Keyword", parameters: reference("keyword", "A catalog keyword."), undoable: true, historyOwner: .nativeMetadata),
@@ -413,6 +423,17 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .filterLabel, label: "Filter by Label", menu: "Catalog Filter/Label", titles: ["Any"] + catalogLabels, parameters: choice("label", ["any"] + catalogLabels)),
         .init(id: .filterAnyKeyword, label: "Any Keyword", menu: "Catalog Filter"),
         .init(id: .clearFilters, label: "Clear Filters", menu: "Catalog Filter")
+    ]
+
+    private static let automation: [LensWorksCommandDescriptor] = [
+        .init(id: .automationEnabled, label: "Allow AI Agents to Control LensWorks", menu: "Settings/Automation"),
+        .init(id: .automationShowSecret, label: "Show Secret", menu: "Settings/Automation"),
+        .init(id: .automationCopySecret, label: "Copy Secret", menu: "Settings/Automation"),
+        .init(id: .automationRegenerateSecret, label: "Regenerate Secret", menu: "Settings/Automation"),
+        .init(id: .automationRevokeSecret, label: "Revoke Secret", menu: "Settings/Automation"),
+        .init(id: .automationCopyConfiguration, label: "Copy Client Configuration", menu: "Settings/Automation"),
+        .init(id: .automationAllow, label: "Allow", menu: "Agent Confirmation"),
+        .init(id: .automationDecline, label: "Don’t Allow", menu: "Agent Confirmation")
     ]
 
     static func menuLabel(_ label: String, reason: String?) -> String { label + (reason.map { " — " + $0 } ?? "") }

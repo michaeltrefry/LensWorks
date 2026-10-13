@@ -11,6 +11,13 @@ nonisolated enum LensWorksLayerCommand: Codable, Equatable, Sendable {
         switch self { case .visibility(let ids, _), .opacity(let ids, _): ids; case .rename(let id, _), .beginRename(let id): [id] }
     }
 }
+/// Who asked for a command: the person at the Mac (menus, shortcuts, panels) or an AI agent over automation (MCP).
+/// An agent's document edits carry "(Agent)" in their history entry so Undo names them.
+nonisolated enum LensWorksCommandOrigin: String, Codable, Sendable {
+    case user, agent
+    /// The history entry name for a command named `name` that this origin dispatched.
+    func historyName(_ name: String) -> String { self == .agent ? name + " (Agent)" : name }
+}
 nonisolated struct LensWorksCommandRefusal: LocalizedError, Equatable {
     let reason: String
     var errorDescription: String? { reason }
@@ -23,6 +30,7 @@ struct LensWorksLayerAdmission {
     let revision: UUID
     let epoch: UInt64
     let interactionToken: UUID?
+    var origin: LensWorksCommandOrigin = .user
 }
 struct LensWorksCommandInteraction {
     let token: UUID
@@ -71,14 +79,66 @@ extension EditorSession {
         guard !isProjectBusy, !isImporting else { return "Finish the current project operation first." }
         return "Select a layer first."
     }
-    func admitCommand(_ command: LensWorksLayerCommand) throws -> LensWorksLayerAdmission {
+    func admitCommand(_ command: LensWorksLayerCommand, origin: LensWorksCommandOrigin = .user) throws -> LensWorksLayerAdmission {
         if let reason = commandAvailability(command) { throw LensWorksCommandRefusal(reason: reason) }
+        // An agent never joins a person's open layer interaction or name editor: its edit gets its own labeled entry.
+        if origin == .agent, commandInteraction != nil || renamingLayerID != nil || command.id == .beginRename {
+            throw LensWorksCommandRefusal(reason: "Finish the current layer interaction first.")
+        }
         guard let document else { throw LensWorksCommandRefusal(reason: "Open a document first.") }
         if case .rename(let id, _) = command, renamingLayerID == id {
             guard let starting = commandRenameAdmission else { throw LensWorksCommandRefusal(reason: "This name editor no longer owns a command admission.") }
-            return .init(command: command, document: starting.document, selection: starting.selection, selected: starting.selected, revision: starting.revision, epoch: starting.epoch, interactionToken: starting.interactionToken)
+            return .init(command: command, document: starting.document, selection: starting.selection, selected: starting.selected, revision: starting.revision, epoch: starting.epoch, interactionToken: starting.interactionToken, origin: origin)
         }
-        return .init(command: command, document: document, selection: activeLayerID, selected: selectedLayerIDs, revision: history.currentRevision, epoch: commandContextEpoch, interactionToken: commandInteraction?.token)
+        return .init(command: command, document: document, selection: activeLayerID, selected: selectedLayerIDs, revision: history.currentRevision, epoch: commandContextEpoch, interactionToken: commandInteraction?.token, origin: origin)
+    }
+    /// The person's open interaction an agent must not act under (a layer interaction, a name editor, a pending
+    /// crop or gradient, any tool stroke, dialog or modal edit), or nil when there is none.
+    var agentModalReason: String? {
+        guard document != nil else { return "Open a document first." }
+        if isProjectBusy || isImporting { return "Finish the current project operation first." }
+        if commandInteraction != nil || renamingLayerID != nil { return "Finish the current layer interaction first." }
+        if gradientEdit != nil || !canUseHistory || cropRect != nil || pixelMove != nil || hueSaturation != nil
+            || filterEdit != nil || adjustmentEditingID != nil { return "Finish the current edit in LensWorks first." }
+        return nil
+    }
+    /// Why an agent cannot step document history now, or nil when it can. An agent never steps history under a
+    /// person's open edit, and steps only over its own entries: undoing the person's edits and then editing would
+    /// discard their redo history.
+    func agentHistoryAvailability(redo: Bool) -> String? {
+        if let reason = agentModalReason { return reason }
+        guard redo ? canRedo : canUndo else { return redo ? "There is nothing to redo." : "There is nothing to undo." }
+        guard (redo ? history.redoOrigin : history.undoOrigin) == .agent else {
+            return redo ? "The next edit to redo is the person’s own: an agent redoes only its own edits."
+                : "The last edit is the person’s own: an agent undoes only its own edits."
+        }
+        return nil
+    }
+    /// Runs `body` as one agent history entry named `name`. When it throws, the document and selection are restored
+    /// to where they started and history gains nothing.
+    func agentTransaction<T>(_ name: String, _ body: () throws -> T) throws -> T {
+        if let reason = agentModalReason { throw LensWorksCommandRefusal(reason: reason) }
+        let selected = selectedLayerIDs, revision = history.currentRevision
+        let admitted = try document?.admittingMetadataMutation()
+        guard let token = history.beginInteraction(LensWorksCommandOrigin.agent.historyName(name), document: document, selection: activeLayerID,
+                                                   afterMetadataStorage: admitted?.metadataStorage, origin: .agent) else {
+            throw LensWorksCommandRefusal(reason: "Finish the current history transaction first.")
+        }
+        document = admitted
+        do {
+            let value = try body()
+            guard history.endInteraction(token, document: document, selection: activeLayerID) else {
+                throw LensWorksCommandRefusal(reason: "The batch no longer owns this document transaction.")
+            }
+            if history.currentRevision != revision { commandContextEpoch &+= 1 }
+            return value
+        } catch {
+            if let snapshot = history.cancelInteraction(token) {
+                document = snapshot.document; activeLayerID = snapshot.activeLayerID; selectedLayerIDs = selected
+                commandContextEpoch &+= 1
+            }
+            throw error
+        }
     }
     func commandIsCurrent(_ admission: LensWorksLayerAdmission) -> Bool {
         document == admission.document && activeLayerID == admission.selection && selectedLayerIDs == admission.selected && history.currentRevision == admission.revision && commandContextEpoch == admission.epoch && commandInteraction?.token == admission.interactionToken
@@ -94,15 +154,16 @@ extension EditorSession {
             guard interaction.expected == document, interaction.starting.document.id == document?.id,
                   interaction.starting.selection == activeLayerID, interaction.starting.selected == selectedLayerIDs else { throw LensWorksCommandRefusal(reason: "The layer interaction's document or selection changed.") }
         }
-        let name: String
+        let label: String
         switch admission.command {
-        case .visibility(let ids, let explicit): name = explicit == false || (explicit == nil && document?.layers.first(where: { $0.id == ids[0] })?.isVisible == true) ? "Hide Layer" : "Show Layer"
-        default: name = LensWorksCommandRegistry.descriptor(admission.command.id).label
+        case .visibility(let ids, let explicit): label = explicit == false || (explicit == nil && document?.layers.first(where: { $0.id == ids[0] })?.isVisible == true) ? "Hide Layer" : "Show Layer"
+        default: label = LensWorksCommandRegistry.descriptor(admission.command.id).label
         }
+        let name = admission.origin.historyName(label)
         let ownsEdit = commandInteraction == nil && admission.command.id != .beginRename
         var stringBytes=0
         if case .rename(_,let value)=admission.command { stringBytes=try LWSourceMetadataStorage.product(value.utf8.count,2) }
-        if ownsEdit { guard beginEdit(name,additionalMetadataBytes:stringBytes) else { throw ProjectError.tooLarge } }
+        if ownsEdit { guard beginEdit(name,additionalMetadataBytes:stringBytes,origin:admission.origin) else { throw ProjectError.tooLarge } }
         switch admission.command {
         case .visibility(let ids, let value):
             for index in document!.layers.indices where ids.contains(document!.layers[index].id) {
@@ -162,6 +223,13 @@ extension EditorSession {
 nonisolated struct LensWorksCatalogCommandAdmission: Sendable {
     let id: LensWorksCommandID
     let native: LensWorksCatalogControlAdmission
+    var origin: LensWorksCommandOrigin = .user
+}
+/// A permanent catalog organization delete (a virtual folder), admitted against the folder row the caller saw.
+nonisolated struct LensWorksCatalogDeleteAdmission: Sendable {
+    let id: LensWorksCommandID
+    let folder: LWApplicationOrganizationCollection
+    let origin: LensWorksCommandOrigin
 }
 extension LensWorksCatalog {
     func commandID(_ action: LensWorksCatalogControlAction) -> LensWorksCommandID {
@@ -181,8 +249,20 @@ extension LensWorksCatalog {
         catch is CancellationError { return "The catalog, photo, version or revision is no longer current." }
         catch { return error.localizedDescription }
     }
-    func admitCommand(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant) throws -> LensWorksCatalogCommandAdmission {
-        .init(id: commandID(action), native: try captureCatalogControl(action, expected: expected))
+    func admitCommand(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant, origin: LensWorksCommandOrigin = .user) throws -> LensWorksCatalogCommandAdmission {
+        .init(id: commandID(action), native: try captureCatalogControl(action, expected: expected), origin: origin)
+    }
+    /// Why the virtual folder `id` cannot be deleted now, or nil when it can.
+    func folderDeleteAvailability(_ id: String) -> String? {
+        guard catalogPath != nil else { return "Open a catalog first." }
+        guard !isBusy else { return "Finish the current catalog operation first." }
+        do { try admitCatalogWork() } catch { return error.localizedDescription }
+        guard groups.contains(where: { $0.id == id }) else { return "The virtual folder is not on the current folder page." }
+        return nil
+    }
+    func admitFolderDelete(_ id: String, origin: LensWorksCommandOrigin) throws -> LensWorksCatalogDeleteAdmission {
+        if let reason = folderDeleteAvailability(id) { throw LensWorksCommandRefusal(reason: reason) }
+        return .init(id: .deleteVirtualFolder, folder: groups.first { $0.id == id }!, origin: origin)
     }
     func dispatchCommand(_ admission: LensWorksCatalogCommandAdmission) async throws {
         try await LensWorksCommandDispatcher.dispatch(admission, in: self)
@@ -207,20 +287,35 @@ struct LensWorksLayerCommandButton: View {
 /// One UI-thread dispatch namespace; native catalog history remains native, and document edits commit the atomic project/history snapshot.
 @MainActor enum LensWorksCommandDispatcher {
     @discardableResult static func dispatch(_ admission: LensWorksLayerAdmission, in session: EditorSession) throws -> Bool {
-        lastInvocation = .init(admission.command.id)
+        lastInvocation = .init(admission.command.id); lastOrigin = admission.origin
         return try session.applyAdmittedCommand(admission)
     }
     static func dispatch(_ admission: LensWorksCatalogCommandAdmission, in catalog: LensWorksCatalog) async throws {
-        lastInvocation = .init(admission.id)
+        lastInvocation = .init(admission.id); lastOrigin = admission.origin
         try await catalog.performCatalogControl(admission.native)
     }
+    static func dispatch(_ admission: LensWorksCatalogDeleteAdmission, in catalog: LensWorksCatalog) async throws {
+        lastInvocation = .init(admission.id, admission.folder.id); lastOrigin = admission.origin
+        try await catalog.deleteGroup(admission.folder)
+    }
+    /// Edit › Undo or Redo for an agent: the same document history step, refused under a person's open edit.
+    /// Returns the name of the history entry it stepped over.
+    @discardableResult static func dispatchHistory(redo: Bool, origin: LensWorksCommandOrigin, in session: EditorSession) throws -> String {
+        if let reason = session.agentHistoryAvailability(redo: redo) { throw LensWorksCommandRefusal(reason: reason) }
+        lastInvocation = .init(redo ? .redo : .undo); lastOrigin = origin
+        let name = redo ? session.history.redoName : session.history.undoName
+        if redo { session.redo() } else { session.undo() }
+        return name
+    }
+    /// Who dispatched `lastInvocation` through a typed admission.
+    private(set) static var lastOrigin: LensWorksCommandOrigin = .user
     /// The last command a menu item, button or key press dispatched, for diagnostics and the command audit tests.
     private(set) static var lastInvocation: LensWorksCommandInvocation?
     /// The last dispatch refused because its command was unavailable, with the reason the item showed.
     private(set) static var lastRefusal: (invocation: LensWorksCommandInvocation, reason: String)?
     /// Every menu item, context-menu item and pull-down item runs its command through here.
     @discardableResult static func perform(_ invocation: LensWorksCommandInvocation, reason: String? = nil, _ handler: () -> Void) -> Bool {
-        lastInvocation = invocation
+        lastInvocation = invocation; lastOrigin = .user
         if let reason { lastRefusal = (invocation, reason); return false }
         handler()
         return true

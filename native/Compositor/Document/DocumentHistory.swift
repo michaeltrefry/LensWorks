@@ -12,6 +12,8 @@ final class DocumentHistory {
     }
     private struct Entry {
         let name: String
+        /// Who made the edit: an agent may step only over its own entries.
+        let origin: LensWorksCommandOrigin
         let before: Snapshot
         let after: Snapshot
     }
@@ -22,6 +24,7 @@ final class DocumentHistory {
     private var pending: Snapshot?
     @ObservationIgnored private(set) var pendingAfterMetadataStorage:LWSourceMetadataStorage?
     private var pendingName = "Edit"
+    private var pendingOrigin = LensWorksCommandOrigin.user
     private var depth = 0
     private var interactionToken: UUID?
     /// Visit immutable owners in-place; Close must include a pending history
@@ -31,10 +34,10 @@ final class DocumentHistory {
         for entry in past { try visit(entry.before.document); try visit(entry.after.document) }
         for entry in future { try visit(entry.before.document); try visit(entry.after.document) }
     }
-    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil) -> UUID? {
+    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil, origin: LensWorksCommandOrigin = .user) -> UUID? {
         guard depth == 0 else { return nil }
         let token = UUID(); interactionToken = token
-        begin(name,document:document,selection:selection,afterMetadataStorage:afterMetadataStorage); return token
+        begin(name,document:document,selection:selection,afterMetadataStorage:afterMetadataStorage,origin:origin); return token
     }
     func endInteraction(_ token: UUID, document: CanvasDocument?, selection: UUID?) -> Bool {
         guard interactionToken == token, depth == 1 else { return false }
@@ -57,6 +60,9 @@ final class DocumentHistory {
     var canRedo: Bool { depth == 0 && !future.isEmpty }
     var undoName: String { past.last?.name ?? "" }
     var redoName: String { future.last?.name ?? "" }
+    /// Who made the entry Undo (Redo) would step over, or nil when there is none.
+    var undoOrigin: LensWorksCommandOrigin? { past.last?.origin }
+    var redoOrigin: LensWorksCommandOrigin? { future.last?.origin }
     var isModified: Bool { revision != savedRevision }
     var undoCount: Int { past.count }
     func markSaved() { savedRevision = revision }
@@ -74,8 +80,9 @@ final class DocumentHistory {
         savedRevision = revision
     }
 
-    func begin(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil) {
+    func begin(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil, origin: LensWorksCommandOrigin = .user) {
         if depth == 0 {
+            pendingOrigin = origin
             pendingAfterMetadataStorage=afterMetadataStorage
             pending = Snapshot(document: document, activeLayerID: selection, revision: revision)
             pendingName = name
@@ -91,7 +98,7 @@ final class DocumentHistory {
         // Selecting, navigating, and no-op edits must preserve redo history.
         guard before.document != document else { return }
         revision = UUID()
-        past.append(Entry(name: pendingName, before: before,
+        past.append(Entry(name: pendingName, origin: pendingOrigin, before: before,
             after: Snapshot(document: document, activeLayerID: selection, revision: revision)))
         future.removeAll()
         trim(current: document)
