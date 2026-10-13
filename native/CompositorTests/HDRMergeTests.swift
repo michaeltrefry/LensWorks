@@ -7,6 +7,59 @@ import SQLite3
 import simd
 @testable import Compositor
 
+/// Runs the checked-in procedural photograph generator (scripts/generate_s47_procedural_photos.py).
+nonisolated enum S47Generator {
+    static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    /// `output` must not exist; the generator creates it.
+    static func run(output: URL, seed: UInt32, arguments: [String] = []) throws {
+        let process = Process()
+        // The generator needs Python 3.10+ (the provisioned CI interpreter); macOS's /usr/bin/python3 is older.
+        let python = ProcessInfo.processInfo.environment["LW_PYTHON"]
+            ?? ["/opt/homebrew/opt/python@3.12/bin/python3.12", "/usr/local/bin/python3", "/usr/bin/python3"].first { FileManager.default.isExecutableFile(atPath: $0) }!
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = [repository.appendingPathComponent("scripts/generate_s47_procedural_photos.py").path, "--output", output.path, "--seed", String(seed)] + arguments
+        let errors = Pipe(); process.standardError = errors; process.standardOutput = Pipe()
+        try process.run()
+        let diagnostics = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("S47 generator exited \(process.terminationStatus): \(diagnostics)") }
+    }
+}
+
+/// A catalog model over a private fixture folder, driven by the retained test helpers.
+@MainActor enum MergeCatalogHarness {
+    static func model(root: URL, defaults: UserDefaults? = nil) throws -> (model: LensWorksCatalog, defaults: UserDefaults) {
+        let photos = root.appendingPathComponent("Photos")
+        let worker = try #require(ProcessInfo.processInfo.environment["LW_CATALOG_TEST_WORKER"], "Explicit retained fixture helper is required.")
+        let decode = ProcessInfo.processInfo.environment["LW_CATALOG_TEST_DECODE_WORKER"] ?? worker
+        let config = LWManagedSessionConfig(worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: worker)), decode_worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: decode)),
+            cache_root: try LWCatalogNativePath(fileURL: root.appendingPathComponent("Cache")), original_roots: [try LWCatalogNativePath(fileURL: photos)],
+            limits: LWApplicationLimits(queued: 128, request_bytes: 1048576, reply_bytes: 1048576, page_rows: 100, scan_rows: 512, page_bytes: 131072, tickets: 128, ttl_seconds: 60, binary_bytes: 16777216), preview_policy: nil, preview_limits: nil)
+        // In-memory preferences of this fixture's own: nothing reaches a preferences file.
+        let defaults = defaults ?? LensWorksUserState.defaults(testing: true)
+        return (LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false), defaults)
+    }
+    /// A catalog over `root/Photos` with its photos imported; closed when `body` returns or throws.
+    static func withCatalog(root: URL, photos count: Int, _ body: (LensWorksCatalog, [LensWorksCatalogAsset], UserDefaults) async throws -> Void) async throws {
+        let (model, defaults) = try model(root: root)
+        await model.connect(root.appendingPathComponent("Catalog").path, create: true)
+        do {
+            if let error = model.error { throw LensWorksCatalogError.message(error) }
+            try await model.startImport(root.appendingPathComponent("Photos").path); try await model.waitImport(terminal: true)
+            #expect(model.assets.count == count)
+            try await body(model, model.assets, defaults)
+            if model.catalogPath != nil { try await model.close() }
+        } catch {
+            if model.catalogPath != nil { try? await model.close() }
+            throw error
+        }
+    }
+    static func selectAll(_ model: LensWorksCatalog, _ sources: [LensWorksCatalogAsset]) async {
+        await model.select(sources[0])
+        for row in sources.dropFirst() { await model.select(row, extending: true) }
+    }
+}
+
 /// The S47 generated moving-subject bracket (scripts/generate_s47_procedural_photos.py),
 /// developed through the editor's own source development.
 nonisolated struct HDRBracketFixture {
@@ -14,7 +67,7 @@ nonisolated struct HDRBracketFixture {
     let root: URL
     let files: [URL]
     let frames: [Frame]
-    static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    static let repository = S47Generator.repository
 
     /// Generates the bracket with the checked-in generator into a fresh private folder and
     /// keeps only the three bracket photos in `photos`.
@@ -23,17 +76,7 @@ nonisolated struct HDRBracketFixture {
         let root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWHDR-\(UUID())")
         let generated = root.appendingPathComponent("generated")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)  // the generator creates `generated` itself
-        let process = Process()
-        // The generator needs Python 3.10+ (the provisioned CI interpreter); macOS's /usr/bin/python3 is older.
-        let python = ProcessInfo.processInfo.environment["LW_PYTHON"]
-            ?? ["/opt/homebrew/opt/python@3.12/bin/python3.12", "/usr/local/bin/python3", "/usr/bin/python3"].first { FileManager.default.isExecutableFile(atPath: $0) }!
-        process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [repository.appendingPathComponent("scripts/generate_s47_procedural_photos.py").path, "--output", generated.path, "--seed", String(seed)]
-        let errors = Pipe(); process.standardError = errors
-        try process.run()
-        let diagnostics = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("S47 generator exited \(process.terminationStatus): \(diagnostics)") }
+        try S47Generator.run(output: generated, seed: seed)
         struct Manifest: Decodable { let photos: [Record] }
         struct Record: Decodable { let kind: String; let path: String; let exposure_stops: Int?; let subject_bounds: [Int]?; let sha256: String }
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: generated.appendingPathComponent("fixture-manifest.json")))
@@ -453,37 +496,14 @@ extension HDRMergeTests {
 @MainActor
 struct HDRMergeCatalogTests {
     private func catalogModel(_ fixture: HDRBracketFixture, defaults: UserDefaults? = nil) throws -> (model: LensWorksCatalog, defaults: UserDefaults) {
-        let photos = fixture.root.appendingPathComponent("Photos")
-        let worker = try #require(ProcessInfo.processInfo.environment["LW_CATALOG_TEST_WORKER"], "Explicit retained fixture helper is required.")
-        let decode = ProcessInfo.processInfo.environment["LW_CATALOG_TEST_DECODE_WORKER"] ?? worker
-        let config = LWManagedSessionConfig(worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: worker)), decode_worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: decode)),
-            cache_root: try LWCatalogNativePath(fileURL: fixture.root.appendingPathComponent("Cache")), original_roots: [try LWCatalogNativePath(fileURL: photos)],
-            limits: LWApplicationLimits(queued: 128, request_bytes: 1048576, reply_bytes: 1048576, page_rows: 100, scan_rows: 512, page_bytes: 131072, tickets: 128, ttl_seconds: 60, binary_bytes: 16777216), preview_policy: nil, preview_limits: nil)
-        // In-memory preferences of this fixture's own: nothing reaches a preferences file.
-        let defaults = defaults ?? LensWorksUserState.defaults(testing: true)
-        return (LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false), defaults)
+        try MergeCatalogHarness.model(root: fixture.root, defaults: defaults)
     }
     /// A catalog over the generated bracket's folder with its three photos imported.
     private func withBracketCatalog(_ body: (LensWorksCatalog, HDRBracketFixture, [LensWorksCatalogAsset], UserDefaults) async throws -> Void) async throws {
         let fixture = try HDRBracketFixture.make(); defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let photos = fixture.root.appendingPathComponent("Photos")
-        let (model, defaults) = try catalogModel(fixture)
-        await model.connect(fixture.root.appendingPathComponent("Catalog").path, create: true)
-        do {
-            if let error = model.error { throw LensWorksCatalogError.message(error) }
-            try await model.startImport(photos.path); try await model.waitImport(terminal: true)
-            #expect(model.assets.count == 3)
-            try await body(model, fixture, model.assets, defaults)
-            if model.catalogPath != nil { try await model.close() }
-        } catch {
-            if model.catalogPath != nil { try? await model.close() }
-            throw error
-        }
+        try await MergeCatalogHarness.withCatalog(root: fixture.root, photos: 3) { model, sources, defaults in try await body(model, fixture, sources, defaults) }
     }
-    private func selectAll(_ model: LensWorksCatalog, _ sources: [LensWorksCatalogAsset]) async {
-        await model.select(sources[0])
-        for row in sources.dropFirst() { await model.select(row, extending: true) }
-    }
+    private func selectAll(_ model: LensWorksCatalog, _ sources: [LensWorksCatalogAsset]) async { await MergeCatalogHarness.selectAll(model, sources) }
     /// Files in the bracket's folder tree that the fixture did not put there.
     private func leftovers(_ fixture: HDRBracketFixture) throws -> [String] {
         let photos = fixture.root.appendingPathComponent("Photos"), known = Set(fixture.files.map(\.lastPathComponent))
@@ -701,7 +721,7 @@ struct HDRMergeCatalogTests {
 
             // A failure after the DNG is in place and before the catalog has it.
             var written: [URL] = []
-            model.hdrMergeWrittenFixture = { url in
+            model.mergeWrittenFixture = { url in
                 written.append(url)
                 #expect(FileManager.default.fileExists(atPath: url.path))
                 throw LensWorksCatalogError.message("fixture failure after the write")
@@ -712,7 +732,7 @@ struct HDRMergeCatalogTests {
             #expect(try leftovers(fixture).isEmpty)
 
             // The Cancel command at that same point.
-            model.hdrMergeWrittenFixture = { url in written.append(url); model.cancelHDRMerge() }
+            model.mergeWrittenFixture = { url in written.append(url); model.cancelHDRMerge() }
             await #expect(throws: CancellationError.self) { _ = try await model.mergeSelectionToHDR() }
             #expect(written.count == 2)
             #expect(try leftovers(fixture).isEmpty)
@@ -720,7 +740,7 @@ struct HDRMergeCatalogTests {
             #expect(try fixture.hashes() == before)
 
             // Nothing is left that stops the next merge.
-            model.hdrMergeWrittenFixture = nil
+            model.mergeWrittenFixture = nil
             let outcome = try await model.mergeSelectionToHDR()
             #expect(model.assets.count == 4)
             #expect(try leftovers(fixture) == [outcome.dng.lastPathComponent])

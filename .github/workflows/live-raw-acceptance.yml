@@ -31,12 +31,12 @@ jobs:
           ./scripts/build-native.sh
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath .build/xcode-app CODE_SIGN_IDENTITY=-
           test -x .build/xcode-app/Build/Products/Debug/LensWorks.app/Contents/Helpers/LensWorksDecodeWorker
-      - name: Run every S08 live RAW, S09 float renderer and S10 layer graph suite and the S43 HDR merge suite
+      - name: Run every S08 live RAW, S09 float renderer and S10 layer graph suite and the S43 HDR and S44 panorama merge suites
         # LiveRawSourceMatrixTests is not listed: it needs the licensed, hash-bound camera matrix
         # (LW_S08_RAW_MATRIX), which cannot be checked in, so CI can never execute it.
         timeout-minutes: 60
         env:
-          # HDRMergeCatalogTests drives a real catalog; development uses the app's installed helpers.
+          # HDRMergeCatalogTests and PanoramaMergeCatalogTests drive a real catalog; development uses the app's installed helpers.
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
           TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
         run: |
@@ -44,7 +44,8 @@ jobs:
             FloatRetouchTests FloatScratchWriterOwnershipTests LiveRawSourceTests
             LiveRawSampleAllAdmissionTests LiveRawAcceptanceTests
             FloatRendererPrecisionTests FloatTileResidencyTests
-            LayerGraphPixelTests LayerGraphOperationTests HDRMergeTests HDRMergeCatalogTests)
+            LayerGraphPixelTests LayerGraphOperationTests HDRMergeTests HDRMergeCatalogTests
+            PanoramaMergeTests PanoramaMergeCatalogTests)
           only=(); for suite in "${suites[@]}"; do only+=("-only-testing:CompositorTests/$suite"); done
           ./scripts/ci/xcodebuild_test.sh LiveRawAcceptance.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-app -parallel-testing-enabled NO \
             "${only[@]}"
@@ -54,7 +55,7 @@ jobs:
         # many argument cases it runs (verified against a local result bundle: 14 functions, 107 argument cases).
         # Raise S08_EXPECTED_TESTS when test functions are added; a filter typo, a skipped suite or an empty
         # bundle executes fewer and fails here.
-        env: {S08_EXPECTED_TESTS: "313"}
+        env: {S08_EXPECTED_TESTS: "333"}
         run: |
           test -d LiveRawAcceptance.xcresult
           xcrun xcresulttool get test-results summary --path LiveRawAcceptance.xcresult --format json > s08-summary.json

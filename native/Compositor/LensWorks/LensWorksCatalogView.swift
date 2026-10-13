@@ -6,8 +6,8 @@ struct LensWorksCatalogWorkspace: View {
     let applicationDelegate: CompositorApplicationDelegate
     private var catalog: LensWorksCatalog { applicationDelegate.catalog }
     private var workspace: ProjectWorkspace { applicationDelegate.workspace }
-    /// The selected photo's recorded HDR merge sources (empty for any other photo).
-    @State private var hdrSources: (photo: String, sources: [LensWorksDerivedSource]) = ("", [])
+    /// The selected photo's recorded merge sources, when it is an HDR merge or a panorama.
+    @State private var derivedLink: (photo: String, link: LensWorksDerivedLink?) = ("", nil)
     @State private var groupName = ""
     @State private var editingGroup: LWApplicationOrganizationCollection?
     @State private var groupPrompt = false
@@ -324,12 +324,12 @@ struct LensWorksCatalogWorkspace: View {
                         if let asset = catalog.selectedAsset {
                             Divider()
                             Text(asset.filename).font(.headline).lineLimit(2)
-                                .task(id: asset.id + "/" + String(catalog.catalogEpoch) + "/" + String(catalog.isMergingHDR)) {
-                                    let found = (try? await catalog.hdrMergeSources(of: asset)) ?? []
-                                    if !Task.isCancelled { hdrSources = (asset.id, found) }
+                                .task(id: asset.id + "/" + String(catalog.catalogEpoch) + "/" + String(catalog.isMerging)) {
+                                    let found = try? await catalog.derivedLink(of: asset)
+                                    if !Task.isCancelled { derivedLink = (asset.id, found) }
                                 }
-                            if hdrSources.photo == asset.id, !hdrSources.sources.isEmpty {
-                                LensWorksHDRSourcesView(catalog: catalog, asset: asset, sources: hdrSources.sources)
+                            if derivedLink.photo == asset.id, let link = derivedLink.link {
+                                LensWorksDerivedSourcesView(catalog: catalog, asset: asset, link: link)
                             }
                             LensWorksCatalogRecipeControls(catalog: catalog)
                             originalAvailability(asset)
@@ -454,6 +454,7 @@ struct LensWorksCatalogWorkspace: View {
                 .help(catalog.organizationRedo.last.map { "Redo " + $0.title } ?? "Nothing to redo")
                 .accessibilityIdentifier("LensWorks.redoOrganization")
             LensWorksHDRMergeButton(catalog: catalog, workspace: workspace).fixedSize()
+            LensWorksPanoramaMergeButton(catalog: catalog, workspace: workspace).fixedSize()
             Divider().frame(height: 16)
             Menu("Filter") {
                 Menu("Rating") {

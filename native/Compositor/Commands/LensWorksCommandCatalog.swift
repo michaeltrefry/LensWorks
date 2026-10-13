@@ -87,6 +87,7 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case filterFlag = "catalog.filter.flag", filterLabel = "catalog.filter.label"
     case filterAnyKeyword = "catalog.filter.anyKeyword", clearFilters = "catalog.filter.clear"
     case mergeHDR = "catalog.hdr.merge", cancelMergeHDR = "catalog.hdr.cancel", selectHDRSources = "catalog.hdr.selectSources"
+    case mergePanorama = "catalog.panorama.merge", cancelMergePanorama = "catalog.panorama.cancel", selectPanoramaSources = "catalog.panorama.selectSources"
     /// Choosing photos in the catalog grid: the selection every organize command acts on.
     case selectPhotos = "catalog.photo.select"
     // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
@@ -492,7 +493,12 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")]),
         .init(id: .mergeHDR, label: "Merge to HDR…", menu: "Catalog Photo", parameters: [Argument.flag("deghost", "Merges the current catalog selection: 2 through 9 bracketed photos whose originals are online; they are read, never modified, and the merged DNG is written beside the first. True (the default) keeps the reference frame where the subject moved; false merges every frame everywhere.")]),
         .init(id: .cancelMergeHDR, label: "Cancel Merge to HDR", menu: "Catalog Photo"),
-        .init(id: .selectHDRSources, label: "Select HDR Source Photos", menu: "Catalog Photo", parameters: reference("photo", "A merged HDR photo with recorded source photos."))
+        .init(id: .selectHDRSources, label: "Select HDR Source Photos", menu: "Catalog Photo", parameters: reference("photo", "A merged HDR photo with recorded source photos.")),
+        .init(id: .mergePanorama, label: "Merge to Panorama…", menu: "Catalog Photo", parameters:
+            choice("projection", LWPanoramaProjection.allCases.map(\.rawValue), required: false, "Merges the current catalog selection: 2 through 24 overlapping photos of the same pixel dimensions whose originals are online; they are read, never modified, and the panorama DNG is written beside the first. The surface it is laid out on; spherical when omitted. ")
+            + choice("edges", LWPanoramaBoundary.allCases.map(\.rawValue), required: false, "autoCrop (the default) keeps the largest rectangle the photos cover; fill keeps the whole canvas and extends colour and brightness smoothly into the uncovered border. ")),
+        .init(id: .cancelMergePanorama, label: "Cancel Merge to Panorama", menu: "Catalog Photo"),
+        .init(id: .selectPanoramaSources, label: "Select Panorama Source Photos", menu: "Catalog Photo", parameters: reference("photo", "A panorama with recorded source photos."))
     ]
 
     private static let automation: [LensWorksCommandDescriptor] = [

@@ -1,82 +1,14 @@
 import Foundation
 
-/// One bracket frame developed by the editor's source development into
-/// extended-linear sRGB, held as packed RGB half floats: 6 bytes per pixel
-/// (alpha is ignored by the merge). Half floats keep 11 significant bits per
-/// stop over ±65504, which is finer than a camera sample, at 3/8 of the memory
-/// of the developed float RGBA.
-nonisolated struct LWHDRFrame: Sendable {
-    let width: Int
-    let height: Int
-    /// R, G, B per pixel, row-major.
-    let samples: [Float16]
-    /// Where a neutral subject first clips in this frame, per channel, as the decoder reports
-    /// it from the sensor's white level and white balance (`RenderProvenance.neutral_clip`).
-    /// Nil for a raster source, which has no sensor white level.
-    let whiteLevel: SIMD3<Float>?
-    /// The frame's pixels as float RGB with alpha 1.
-    struct Pixels: RandomAccessCollection, Sendable {
-        let samples: [Float16]
-        var startIndex: Int { 0 }
-        var endIndex: Int { samples.count / 3 }
-        subscript(index: Int) -> SIMD4<Float> {
-            SIMD4(Float(samples[index * 3]), Float(samples[index * 3 + 1]), Float(samples[index * 3 + 2]), 1)
-        }
-    }
-    var pixels: Pixels { Pixels(samples: samples) }
-    init(width: Int, height: Int, samples: [Float16], whiteLevel: SIMD3<Float>? = nil) throws {
-        guard width > 0, height > 0, samples.count == width * height * 3 else { throw LWHDRMergeError.invalidFrame }
-        if let whiteLevel { guard whiteLevel.x.isFinite, whiteLevel.y.isFinite, whiteLevel.z.isFinite, whiteLevel.min() > 0 else { throw LWHDRMergeError.invalidFrame } }
-        self.width = width; self.height = height; self.samples = samples; self.whiteLevel = whiteLevel
-    }
-    init<C: Collection>(width: Int, height: Int, pixels: C, whiteLevel: SIMD3<Float>? = nil) throws where C.Element == SIMD4<Float> {
-        guard width > 0, height > 0, pixels.count == width * height else { throw LWHDRMergeError.invalidFrame }
-        var samples = [Float16](); samples.reserveCapacity(pixels.count * 3)
-        for p in pixels { samples.append(Self.pack(p.x)); samples.append(Self.pack(p.y)); samples.append(Self.pack(p.z)) }
-        try self.init(width: width, height: height, samples: samples, whiteLevel: whiteLevel)
-    }
-    /// A finite sample is clamped into the half-float range; a non-finite one stays non-finite.
-    @inline(__always) static func pack(_ value: Float) -> Float16 {
-        let limit = Float(Float16.greatestFiniteMagnitude)
-        return value.isFinite ? Float16(max(-limit, min(limit, value))) : Float16(value)
-    }
-    @inline(__always) func rgb(_ pixel: Int) -> SIMD3<Float> {
-        SIMD3(Float(samples[pixel * 3]), Float(samples[pixel * 3 + 1]), Float(samples[pixel * 3 + 2]))
-    }
-
-    /// Bytes of developed float RGBA one strip read asks the plane for. A read charges the shared
-    /// float working set (512 MiB) twice this plus two tiles, so strips stay far below it.
-    static let stripBytes = 32 * 1024 * 1024
-    /// Loads a developed plane in bounded row strips; the whole frame never passes through the
-    /// float working set at once.
-    @_optimize(speed) init(plane: LWFloatPlane, whiteLevel: SIMD3<Float>? = nil) throws {
-        let width = plane.width, height = plane.height
-        guard width > 0, height > 0 else { throw LWHDRMergeError.invalidFrame }
-        var samples = [Float16](repeating: 0, count: width * height * 3)
-        let rows = max(1, min(height, Self.stripBytes / (width * MemoryLayout<SIMD4<Float>>.stride)))
-        var y = 0
-        while y < height {
-            try Task.checkCancellation()
-            let count = min(rows, height - y)
-            let strip = try plane.read(LWFloatRange(x: 0, y: y, width: width, height: count)).surface.pixels
-            guard strip.count == width * count else { throw LWHDRMergeError.invalidFrame }
-            let base = y * width * 3
-            samples.withUnsafeMutableBufferPointer { target in
-                var o = base
-                for p in strip { target[o] = Self.pack(p.x); target[o + 1] = Self.pack(p.y); target[o + 2] = Self.pack(p.z); o += 3 }
-            }
-            y += count
-        }
-        try self.init(width: width, height: height, samples: samples, whiteLevel: whiteLevel)
-    }
-}
+/// A bracket frame is a developed merge frame (MergeFrame.swift), shared with the panorama merge.
+typealias LWHDRFrame = LWMergeFrame
 
 nonisolated enum LWHDRMergeError: LocalizedError, Equatable {
     case invalidFrame, tooFewFrames, tooManyFrames, sizeMismatch, insufficientOverlap
     case tooLarge(frames: Int, width: Int, height: Int, neededBytes: Int, budgetBytes: Int)
     var errorDescription: String? {
         switch self {
-        case .invalidFrame: "A bracketed photo did not develop to a usable image."
+        case .invalidFrame: LWMergeFrameError.invalid.localizedDescription
         case .tooFewFrames: "Select two or more bracketed photos."
         case .tooManyFrames: "Select at most \(LWHDRMerger.maximumFrames) bracketed photos."
         case .sizeMismatch: "Bracketed photos must all have the same pixel dimensions."
@@ -132,17 +64,16 @@ nonisolated enum LWHDRMerger {
     // MARK: Working memory (docs/HDR_MERGE.md, "Memory")
 
     /// Each loaded frame: packed RGB half floats.
-    static let frameBytesPerPixel = 6
+    static let frameBytesPerPixel = LWMergeFrame.bytesPerPixel
     /// Everything else at the peak: the radiance sum (12), weight total (4) and flags (1), one
     /// frame's motion-mask scratch (9), and the alignment scratch (about 6) that the allocator
     /// still holds after it is freed. Measured peak footprint on 3-, 5- and 9-frame 45 MP
     /// brackets is 31.1 to 31.3 bytes per pixel above the frames. The file is streamed to disk
     /// from the result, so writing adds no whole-file buffer.
     static let sharedBytesPerPixel = 32
-    /// The merge budget on the product-minimum 16 GB Mac.
-    static let minimumBudgetBytes = 6 * 1024 * 1024 * 1024
-    /// 3/8 of physical memory, and never less than the 16 GB Mac's budget.
-    static var budgetBytes: Int { max(minimumBudgetBytes, Int(clamping: ProcessInfo.processInfo.physicalMemory / 8 * 3)) }
+    /// The merge budget (MergeFrame.swift), shared with the panorama merge.
+    static var minimumBudgetBytes: Int { LWMergeBudget.minimumBytes }
+    static var budgetBytes: Int { LWMergeBudget.bytes }
     static func workingBytes(frames: Int, width: Int, height: Int) -> Int {
         let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
         let (bytes, overflowed) = pixels.multipliedReportingOverflow(by: frames * frameBytesPerPixel + sharedBytesPerPixel)
@@ -160,26 +91,8 @@ nonisolated enum LWHDRMerger {
     static func luminance(_ v: SIMD4<Float>) -> Float { 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z }
     static func luminance(_ v: SIMD3<Float>) -> Float { 0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z }
 
-    /// The level at or above which each of a frame's channels is treated as clipped.
-    ///
-    /// For camera RAW it comes from the source: just below the level at which the decoder says
-    /// a neutral subject's first sensor channel saturates. RAW development leaves highlights
-    /// unclipped, so above that level a neutral highlight is colour-shifted (DNG) or synthesized
-    /// (LibRaw highlight blending) while a saturated coloured subject can read far higher. The
-    /// frame's own maximum says nothing about either, and the level need not be 1.0.
-    ///
-    /// A raster source carries no white level. Its fallback is an estimate from the frame: just
-    /// below each channel's brightest sample, and never below 1.0, where raster data saturates.
-    static func clipLevel(_ frame: LWHDRFrame) -> SIMD3<Float> {
-        if let white = frame.whiteLevel { return 0.98 * white }
-        var white = SIMD3<Float>(repeating: 1)
-        frame.samples.withUnsafeBufferPointer { samples in
-            for p in stride(from: 0, to: samples.count, by: 3) {
-                white = pointwiseMax(white, SIMD3(Float(samples[p]), Float(samples[p + 1]), Float(samples[p + 2])))
-            }
-        }
-        return 0.98 * white
-    }
+    /// The level at or above which each of a frame's channels is treated as clipped (`LWMergeFrame.clipLevel`).
+    static func clipLevel(_ frame: LWHDRFrame) -> SIMD3<Float> { frame.clipLevel }
     @inline(__always) static func clipped(_ v: SIMD3<Float>, _ clip: SIMD3<Float>) -> Bool { v.x >= clip.x || v.y >= clip.y || v.z >= clip.z }
 
     /// The regular grid the exposure estimate reads: every pixel of a frame up to about 4 MP,

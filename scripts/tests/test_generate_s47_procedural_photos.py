@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 import struct
 import tempfile
@@ -136,6 +137,110 @@ class ProceduralS47FixtureTests(unittest.TestCase):
                         self.assertTrue(all(isinstance(channel, int) and 0 <= channel <= 255 for channel in actual))
                 if entry["exposure_stops"] == 1:
                     self.assertEqual(pixel(rows, entry["subject_x"], s47.SUBJECT_TOP)[0], 255, "foreground +1 EV red must saturate as declared")
+
+
+class RotationPanoramaFixtureTests(unittest.TestCase):
+    """The S44 rotated-camera set: opt-in, deterministic, and true to its declared camera."""
+
+    def test_the_default_output_is_unchanged_and_the_set_is_only_written_on_request(self):
+        with tempfile.TemporaryDirectory() as parent:
+            plain, extended = Path(parent) / "plain", Path(parent) / "extended"
+            without, with_set = s47.generate(plain, 25322), s47.generate(extended, 25322, rotation_panorama=True)
+            self.assertNotIn("rotation_panorama", without)
+            self.assertFalse((plain / "rotation-panorama").exists())
+            self.assertEqual(without, {key: value for key, value in with_set.items() if key != "rotation_panorama"})
+            self.assertEqual(file_hashes(plain), {name: digest for name, digest in file_hashes(extended).items() if name.startswith("photos/")})
+            self.assertEqual(json.loads((extended / "fixture-manifest.json").read_text()), with_set)
+            section = with_set["rotation_panorama"]
+            self.assertEqual(section["schema"], "lensworks.s44.rotation-panorama-fixtures.v1")
+            self.assertEqual([(entry["series"], entry["index"]) for entry in section["photos"]], [(series, index) for series in ("plain", "exposure") for index in range(3)])
+            self.assertEqual([entry["exposure_stops"] for entry in section["photos"]], [0.0, 0.0, 0.0, -0.6, 0.0, 0.5])
+            self.assertEqual([entry["vignetting"] for entry in section["photos"]], [0.0, 0.0, 0.0, 0.3, 0.3, 0.3])
+            for entry in section["photos"]:
+                data = (extended / entry["path"]).read_bytes()
+                self.assertEqual((entry["width"], entry["height"], entry["bytes"]), (320, 240, len(data)))
+                self.assertEqual(entry["sha256"], hashlib.sha256(data).hexdigest())
+            again = Path(parent) / "again"
+            s47.generate(again, 25322, rotation_panorama=True)
+            self.assertEqual(file_hashes(extended), file_hashes(again))
+
+    def test_each_declared_rotation_is_a_rotation_built_from_its_angles(self):
+        for name, yaw, pitch, roll in s47.ROTATION_VIEWS:
+            matrix = s47.rotation_matrix(yaw, pitch, roll)
+            for i in range(3):
+                for j in range(3):
+                    dot = sum(matrix[k][i] * matrix[k][j] for k in range(3))
+                    self.assertAlmostEqual(dot, 1.0 if i == j else 0.0, places=12, msg=name)
+            forward = [row[2] for row in matrix]
+            self.assertAlmostEqual(math.degrees(math.atan2(forward[0], forward[2])), yaw, places=9)
+            # Positive pitch turns the camera up: world y points down.
+            self.assertAlmostEqual(math.degrees(math.asin(-forward[1])), pitch, places=9)
+        self.assertEqual(s47.rotation_matrix(0, 0, 0), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+
+    def test_actual_frames_show_one_scene_through_the_declared_cameras(self):
+        """A world direction seen by two frames has the scene's colour in both, at the pixel the pinhole model gives."""
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent) / "fixtures"
+            section = s47.generate(root, 25322, rotation_panorama=True)["rotation_panorama"]
+            focal, (centre_x, centre_y) = section["parameters"]["focal_pixels"], section["parameters"]["principal_point"]
+            plain = [entry for entry in section["photos"] if entry["series"] == "plain"]
+            decoded = [rgb8_png(root / entry["path"])[2] for entry in plain]
+
+            def direction(entry, x, y):
+                m = entry["camera_to_world"]
+                u, v = (x - centre_x) / focal, (y - centre_y) / focal
+                return tuple(m[i * 3] * u + m[i * 3 + 1] * v + m[i * 3 + 2] for i in range(3))
+
+            def project(entry, d):
+                m = entry["camera_to_world"]
+                camera = [m[i] * d[0] + m[3 + i] * d[1] + m[6 + i] * d[2] for i in range(3)]
+                return focal * camera[0] / camera[2] + centre_x, focal * camera[1] / camera[2] + centre_y
+
+            # Every pixel is the scene along its own ray, sRGB-encoded.
+            for entry, rows in zip(plain, decoded, strict=True):
+                for y in range(0, 240, 7):
+                    for x in range(0, 320, 7):
+                        expected = tuple(s47._srgb8(channel) for channel in s47.scene_radiance(25322, direction(entry, x, y)))
+                        self.assertEqual(pixel(rows, x, y), expected)
+            # Neighbouring frames overlap by about half, and agree where a pixel of one lands on a pixel centre of the other.
+            for first, second in ((0, 1), (1, 2)):
+                shared = compared = 0
+                for y in range(240):
+                    for x in range(320):
+                        other_x, other_y = project(plain[second], direction(plain[first], x, y))
+                        if not (0 <= other_x <= 319 and 0 <= other_y <= 239):
+                            continue
+                        shared += 1
+                        nearest_x, nearest_y = round(other_x), round(other_y)
+                        if abs(other_x - nearest_x) < 0.02 and abs(other_y - nearest_y) < 0.02:
+                            compared += 1
+                            here, there = pixel(decoded[first], x, y), pixel(decoded[second], nearest_x, nearest_y)
+                            self.assertLessEqual(max(abs(a - b) for a, b in zip(here, there)), 8, (first, x, y))
+                self.assertGreater(shared, 0.4 * 320 * 240)
+                self.assertLess(shared, 0.6 * 320 * 240)
+                self.assertGreater(compared, 20)
+
+    def test_the_exposure_series_is_the_plain_series_with_declared_gain_and_falloff(self):
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent) / "fixtures"
+            section = s47.generate(root, 25322, rotation_panorama=True)["rotation_panorama"]
+            (centre_x, centre_y), focal = section["parameters"]["principal_point"], section["parameters"]["focal_pixels"]
+            low, high = section["parameters"]["scene_radiance_range"]
+            corner = centre_x ** 2 + centre_y ** 2
+            for entry in (photo for photo in section["photos"] if photo["series"] == "exposure"):
+                rows, m = rgb8_png(root / entry["path"])[2], entry["camera_to_world"]
+                brightest = 0
+                for y in range(0, 240, 5):
+                    for x in range(0, 320, 5):
+                        u, v = (x - centre_x) / focal, (y - centre_y) / focal
+                        scene = s47.scene_radiance(25322, tuple(m[i * 3] * u + m[i * 3 + 1] * v + m[i * 3 + 2] for i in range(3)))
+                        self.assertTrue(all(low <= channel <= high for channel in scene))
+                        falloff = 1 - entry["vignetting"] * ((x - centre_x) ** 2 + (y - centre_y) ** 2) / corner
+                        expected = tuple(s47._srgb8(channel * 2 ** entry["exposure_stops"] * falloff) for channel in scene)
+                        self.assertEqual(pixel(rows, x, y), expected)
+                        brightest = max(brightest, *pixel(rows, x, y))
+                # Nothing clips, so the frames differ by exposure alone.
+                self.assertLess(brightest, 250)
 
 
 if __name__ == "__main__":
