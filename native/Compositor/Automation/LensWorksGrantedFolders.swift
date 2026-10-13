@@ -41,6 +41,9 @@ final class LensWorksGrantedFolders {
             throw LensWorksCommandRefusal(reason: "Only an existing folder can be granted to automation.")
         }
         guard real != "/" else { throw LensWorksCommandRefusal(reason: "The whole disk cannot be granted to automation; choose a folder.") }
+        if Self.isTooBroad(real) {
+            throw LensWorksCommandRefusal(reason: "That folder holds LensWorks’s own data (as your home folder, your Library and every folder above them do), so it cannot be granted to automation; choose a folder of your pictures or projects.")
+        }
         if let existing = grants.first(where: { $0.path == real }) { return existing }
         let url = URL(fileURLWithPath: real, isDirectory: true)
         let bookmark = (try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil))
@@ -48,6 +51,20 @@ final class LensWorksGrantedFolders {
         let grant = Grant(id: UUID(), path: real, bookmark: bookmark)
         grants.append(grant); persist()
         return grant
+    }
+
+    /// The place no grant may take in: LensWorks's own data (its catalog index, models and settings), in the Library
+    /// of the home folder. A folder that holds it is the home folder, its Library, or a folder above them.
+    static var protectedPath: String {
+        let path = FileManager.default.homeDirectoryForCurrentUser.path + "/Library/Application Support/LensWorks"
+        return (try? realPath(path)) ?? path
+    }
+    /// Whether granting `real` (a resolved folder path) would grant the protected place: the folder is it, or holds
+    /// it. The data volume is the same disk under another name, so it and the paths under it are read as that disk's.
+    static func isTooBroad(_ real: String) -> Bool {
+        let volume = "/System/Volumes/Data"
+        if contains(real, volume) { return true }
+        return contains(real.hasPrefix(volume + "/") ? String(real.dropFirst(volume.count)) : real, protectedPath)
     }
 
     /// Takes a grant back: from now on every path inside it is refused.

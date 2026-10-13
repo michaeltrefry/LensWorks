@@ -83,6 +83,9 @@ struct LensWorksAgentArguments {
     /// each of its declared type, range and choices.
     static func check(_ values: [String: Any], for descriptor: LensWorksCommandDescriptor) throws -> LensWorksAgentArguments {
         try LensWorksAgentTools.rejectUnknown(values, allowed: descriptor.parameters.map(\.name), in: descriptor.id.rawValue)
+        guard isBounded(values) else {
+            throw LensWorksCommandRefusal(reason: "Every number in the arguments must be finite, and lists and objects at most \(nestingLimit) levels deep.")
+        }
         let arguments = LensWorksAgentArguments(id: descriptor.id, values: values)
         for parameter in descriptor.parameters {
             let name = parameter.name
@@ -111,6 +114,10 @@ struct LensWorksAgentArguments {
             case .expectedVersion:
                 let expected = try arguments.object(name) ?? [:]
                 try LensWorksAgentTools.rejectUnknown(expected, allowed: LensWorksAgentTools.expectedProperties, in: name)
+                // A value of the wrong type is refused: it must never read as "no guard given".
+                let guarded = LensWorksAgentArguments(id: descriptor.id, values: expected)
+                if guarded.has("variantId"), (try? guarded.string("variantId")) == nil { throw LensWorksCommandRefusal(reason: "\(name).variantId must be a string.") }
+                if guarded.has("revision"), (try? guarded.integer("revision")) == nil { throw LensWorksCommandRefusal(reason: "\(name).revision must be a whole number.") }
             case .settings: _ = try arguments.object(name)
             }
             if let numeric {
@@ -121,6 +128,18 @@ struct LensWorksAgentArguments {
             }
         }
         return arguments
+    }
+    /// The deepest lists and objects an argument may nest.
+    static let nestingLimit = 8
+    /// Whether every number anywhere in `value` is finite and nothing nests deeper than `nestingLimit`. A number
+    /// that is not finite cannot be written back as JSON, and nothing an agent sends is trusted to be.
+    static func isBounded(_ value: Any, depth: Int = 0) -> Bool {
+        switch value {
+        case let object as [String: Any]: return depth < nestingLimit && object.values.allSatisfy { isBounded($0, depth: depth + 1) }
+        case let list as [Any]: return depth < nestingLimit && list.allSatisfy { isBounded($0, depth: depth + 1) }
+        case let number as NSNumber: return number.doubleValue.isFinite
+        default: return true
+        }
     }
     static func plain(_ value: Double) -> String { value == value.rounded() ? String(Int(value)) : String(value) }
 }
@@ -237,7 +256,43 @@ enum LensWorksAgentSettings {
         }
         let changed = try overlay(base, overrides)
         if names.count == 1, all[names[0]] is [String: Any] { all[names[0]] = changed } else { all.merge(changed) { $1 } }
-        return try decoded(all)
+        let merged: FilterSettings = try decoded(all)
+        try check(kind, merged)
+        return merged
+    }
+    static let outside = "settings holds a value outside what that setting accepts."
+    /// Refuses settings the filter's dialog could never produce: a value its sliders clamp or repair (so the
+    /// settings differ from their normalized form), or a curve, mixer or guide list of a shape the renderer does
+    /// not expect. Decoding alone admits these; the renderer indexes fixed-size lists without checking.
+    static func check(_ kind: FilterKind, _ settings: FilterSettings) throws {
+        let valid: Bool
+        switch kind {
+        case .curves: valid = settings.curves.isValid
+        case .blackWhite: valid = settings.blackWhite.isValid
+        case .colorBalance: valid = settings.colorBalance.isValid
+        case .exposure: valid = settings.exposure.isValid
+        case .gradientMap: valid = settings.gradientMap.isValid
+        case .grain: valid = settings.grain.isValid
+        case .cameraRaw:
+            let raw = settings.cameraRaw
+            valid = raw.isValid && [raw.mixer.hue, raw.mixer.saturation, raw.mixer.luminance].allSatisfy { $0.count == CameraRawMixerSettings.names.count }
+        default: valid = true
+        }
+        guard valid, NSDictionary(dictionary: filterBase(kind, settings)).isEqual(to: filterBase(kind, settings.normalized)) else {
+            throw LensWorksCommandRefusal(reason: outside)
+        }
+    }
+    /// Refuses Levels settings the dialog could never produce: the renderer indexes all four channel ranges.
+    static func check(_ settings: LevelsSettings) throws {
+        guard settings.ranges.count == LevelsChannel.allCases.count, settings.ranges.allSatisfy({ $0 == $0.normalized }) else {
+            throw LensWorksCommandRefusal(reason: outside)
+        }
+    }
+    /// Levels settings with an agent's overrides applied.
+    static func levelsMerged(_ base: LevelsSettings, _ overrides: [String: Any]?) throws -> LevelsSettings {
+        let merged = try merged(base, overrides)
+        try check(merged)
+        return merged
     }
     private static func decoded<T: Decodable>(_ object: [String: Any]) throws -> T {
         do { return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: object)) }
@@ -290,7 +345,7 @@ enum LensWorksAgentSettings {
         var value = adjustment
         switch adjustment.kind {
         case .invert: throw LensWorksCommandRefusal(reason: "An Invert adjustment has no settings.")
-        case .levels: value.levels = try merged(adjustment.levels, overrides)
+        case .levels: value.levels = try levelsMerged(adjustment.levels, overrides)
         case .hsv: value.hsvSettings = try hueMerged(adjustment.resolvedHSV, overrides)
         default:
             guard let kind = adjustment.kind.filterKind else { throw LensWorksCommandRefusal(reason: "That adjustment has no settings.") }
@@ -327,25 +382,32 @@ enum LensWorksAgentSettings {
          "x-settings": "The object for the kind passed in `kind`: " + schemas.keys.sorted().map { kind in
             kind + " {" + ((schemas[kind]?["properties"] as? [String: Any])?.keys.sorted().joined(separator: ", ") ?? "") + "}" }.joined(separator: "; ") + "."]
     }
-    static func schema(for id: LensWorksCommandID) -> [String: Any] {
-        func filters(_ kinds: [FilterKind]) -> [String: Any] {
-            byKind(Dictionary(uniqueKeysWithValues: kinds.map { ($0.rawValue, describe(filterBase($0))) }))
-        }
+    static var hueDefaults: [String: Any] { ["range": ColorRange.master.rawValue, "hue": 0, "saturation": 0, "lightness": 0, "colorize": false, "invertRange": false] }
+    /// The default settings object of each kind a dialog command takes ("" when the command has one kind): what its
+    /// schema describes, and what an agent's object is laid over.
+    static func defaults(for id: LensWorksCommandID) -> [String: [String: Any]] {
+        func filters(_ kinds: [FilterKind]) -> [String: [String: Any]] { Dictionary(uniqueKeysWithValues: kinds.map { ($0.rawValue, filterBase($0)) }) }
         switch id {
-        case .curves: return describe(filterBase(.curves))
-        case .levels: return describe(json(LevelsSettings()))
-        case .hueSaturation: return hueSchema
+        case .curves: return ["": filterBase(.curves)]
+        case .levels: return ["": json(LevelsSettings())]
+        case .hueSaturation: return ["": hueDefaults]
         case .imageAdjustment: return filters(LensWorksCommandRegistry.imageAdjustmentKinds)
         case .filter: return filters(LensWorksCommandRegistry.filterMenuKinds)
         case .newAdjustment, .editAdjustment:
-            return byKind(Dictionary(uniqueKeysWithValues: AdjustmentKind.allCases.map { kind in
-                (kind.rawValue, kind == .hsv ? hueSchema : adjustmentBase(kind).map(describe) ?? ["type": "object", "properties": [String: Any](), "additionalProperties": false])
-            }))
+            return Dictionary(uniqueKeysWithValues: AdjustmentKind.allCases.map { ($0.rawValue, $0 == .hsv ? hueDefaults : adjustmentBase($0) ?? [:]) })
         case .addEffect:
             let effects = json(everyEffect)
-            return byKind(Dictionary(uniqueKeysWithValues: LayerEffectKind.allCases.map { ($0.rawValue, describe(effects[key($0)] as? [String: Any] ?? [:])) }))
-        default: return ["type": "object"]
+            return Dictionary(uniqueKeysWithValues: LayerEffectKind.allCases.map { ($0.rawValue, effects[key($0)] as? [String: Any] ?? [:]) })
+        default: return [:]
         }
+    }
+    static func schema(for id: LensWorksCommandID) -> [String: Any] {
+        let all = defaults(for: id)
+        func schema(_ kind: String) -> [String: Any] {
+            id == .hueSaturation || kind == AdjustmentKind.hsv.rawValue && id != .filter ? hueSchema : describe(all[kind] ?? [:])
+        }
+        if all.isEmpty { return ["type": "object"] }
+        return all.count == 1 && all[""] != nil ? schema("") : byKind(Dictionary(uniqueKeysWithValues: all.keys.map { ($0, schema($0)) }))
     }
 
     /// `base` with the keys `overrides` names replaced, recursively. A key `base` does not have, or a value of
@@ -359,7 +421,19 @@ enum LensWorksAgentSettings {
             }
             switch (existing, value) {
             case (let old as [String: Any], let new as [String: Any]): result[key] = try overlay(old, new, path: place)
-            case (is [Any], let new as [Any]): result[key] = new
+            case (let old as [Any], let new as [Any]):
+                // A list the dialog fixes the length of (a range or curve per channel, a value per color family)
+                // keeps that length; the few it lets grow are bounded. Either way each element has the shape of
+                // the list's own, so nothing foreign rides inside one.
+                if growingLists.contains(key) {
+                    guard new.count <= listLimit else { throw LensWorksCommandRefusal(reason: "\(place.prefix(96)) must list at most \(listLimit) values.") }
+                } else if new.count != old.count {
+                    throw LensWorksCommandRefusal(reason: "\(place.prefix(96)) must list exactly \(old.count) values.")
+                }
+                if let template = old.first, !new.allSatisfy({ matches($0, template) }) {
+                    throw LensWorksCommandRefusal(reason: "\(place.prefix(96)) has the wrong type for that setting.")
+                }
+                result[key] = new
             case (let old as NSNumber, let new as NSNumber):
                 guard (CFGetTypeID(old) == CFBooleanGetTypeID()) == (CFGetTypeID(new) == CFBooleanGetTypeID()), new.doubleValue.isFinite else {
                     throw LensWorksCommandRefusal(reason: "\(place.prefix(96)) must be \(CFGetTypeID(old) == CFBooleanGetTypeID() ? "true or false" : "a finite number").")
@@ -370,6 +444,26 @@ enum LensWorksAgentSettings {
             }
         }
         return result
+    }
+
+    /// The lists a dialog lets grow: Camera Raw's point curves, point colors and upright guides. Every other list in
+    /// a settings object has the length of its default, so a new one is fixed until it is named here.
+    static let growingLists: Set<String> = ["rgb", "red", "green", "blue", "points", "guides"]
+    /// The most values a growing list, or a curve inside a fixed one, may carry.
+    static let listLimit = 32
+    /// Whether `value` has the JSON shape of `template`: the same type, an object's keys all among the template's,
+    /// and a nested list bounded with elements of the template's own shape.
+    static func matches(_ value: Any, _ template: Any) -> Bool {
+        switch (template, value) {
+        case (let old as [String: Any], let new as [String: Any]):
+            return new.allSatisfy { key, value in old[key].map { matches(value, $0) } ?? false }
+        case (let old as [Any], let new as [Any]):
+            return new.count <= listLimit && (old.first.map { template in new.allSatisfy { matches($0, template) } } ?? true)
+        case (let old as NSNumber, let new as NSNumber):
+            return (CFGetTypeID(old) == CFBooleanGetTypeID()) == (CFGetTypeID(new) == CFBooleanGetTypeID()) && new.doubleValue.isFinite
+        case (is String, is String): return true
+        default: return false
+        }
     }
 
     /// `base` with `overrides` applied, decoded back into the settings type.

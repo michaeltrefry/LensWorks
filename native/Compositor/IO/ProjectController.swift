@@ -15,6 +15,9 @@ final class ProjectController {
     /// Whether opening and saving add the project to File › Open Recent (macOS keeps that list for the person; tests
     /// turn this off so a fixture never lands in it).
     var recordsRecentProjects = true
+    /// Whether saving a catalog working version records it in the app's shared version index and as the last one
+    /// opened (tests turn this off so a fixture never lands in the person's own).
+    var sharesWorkingVersions = true
     private(set) var sourceCloseRequested = false
     private var standaloneCloseConfirmed = false
     /// Keeps the document in step with its package when something else writes it. See ProjectController+ExternalChanges.
@@ -277,12 +280,12 @@ final class ProjectController {
                 if var version = savedVersion {
                     version.projectPath = destination.path
                     workingVersion = version
-                    UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion")
+                    if sharesWorkingVersions { UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion") }
                 }
                 // Register before publishing the URL: the catalog lists working versions again when the project URL
                 // changes, and a listing that reached the index before this registration would miss the saved version.
                 var registrationError: Error?
-                if savedVersion != nil {
+                if savedVersion != nil, sharesWorkingVersions {
                     do { guard try await LensWorksCatalogIndex.shared.register(destination) else { throw LensWorksCatalogError.message("The saved package no longer contains its LensWorks source record.") } }
                     catch { registrationError = error }
                 }
@@ -336,12 +339,14 @@ final class ProjectController {
         do {
             // Validate first. A corrupt project never discards the live document.
             var snapshot = try await ProjectStore.shared.load(from: source)
+            try agentRequest?.admit(snapshot)
             let previousSave = saveGeneration
             guard await confirmReplacement() else { return false }
             // Saving in the confirmation can replace the very file being opened.
             if saveGeneration != previousSave,
                session.projectURL?.resolvingSymlinksInPath() == source.resolvingSymlinksInPath() {
                 snapshot = try await ProjectStore.shared.load(from: source)
+                try agentRequest?.admit(snapshot)
             }
             session.installProject(snapshot, from: source)
             workingVersion = snapshot.workingVersion
@@ -424,10 +429,11 @@ final class ProjectController {
         return response == .alertThirdButtonReturn
     }
 
-    /// While an agent's command runs, an error goes back to the agent instead of into an alert in front of the person.
-    static var agentErrorSink: ((String) -> Void)?
+    /// Set on the one controller an agent's file command is driving, for as long as it runs: an error there goes back
+    /// to the agent instead of into an alert. Every other project's errors still reach the person.
+    var agentRequest: ProjectAgentRequest?
     private func showError(_ title: String, error: Error) async {
-        if let sink = Self.agentErrorSink { sink(title + ": " + error.localizedDescription); return }
+        if let agentRequest { agentRequest.failure = agentRequest.failure ?? title + ": " + error.localizedDescription; return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title
@@ -485,4 +491,11 @@ final class ProjectController {
         }
         processing = false
     }
+}
+
+/// What an agent's file command supplies in place of the person on the controller it drives: where a failure goes
+/// instead of an alert, and a check on a project that was read before it is installed.
+@MainActor final class ProjectAgentRequest {
+    var failure: String?
+    var admit: (ProjectSnapshot) throws -> Void = { _ in }
 }

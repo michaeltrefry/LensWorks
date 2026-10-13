@@ -24,6 +24,11 @@ final class ProjectWorkspace {
     var isManaging = false
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private var nextNumber = 2
+    /// Applied to every tab's controller, now and as tabs open (tests use it to keep their fixtures out of File › Open
+    /// Recent and the shared working-version index; see ProjectController).
+    @ObservationIgnored var configureController: (ProjectController) -> Void = { _ in } { didSet { for tab in tabs { configureController(tab.controller) } } }
+    /// An agent's file command in progress: the tabs it opens report to it (see `ProjectController.agentRequest`).
+    @ObservationIgnored var agentRequest: ProjectAgentRequest?
     var current: ProjectTab { tabs.first { $0.id == selectedID } ?? tabs[0] }
     var canSwitch: Bool {
         let s = current.session
@@ -42,6 +47,7 @@ final class ProjectWorkspace {
         let tab = ProjectTab(name: "Untitled \(nextNumber)")
         nextNumber += 1
         tab.controller.workspace = self; tab.controller.window = window
+        tab.controller.agentRequest = agentRequest; configureController(tab.controller)
         tabs.append(tab); selectedID = tab.id
         return tab
     }
@@ -92,6 +98,7 @@ final class ProjectWorkspace {
         // Load into an unattached session, so a failed open never leaves a broken tab.
         let tab = ProjectTab(name: url.deletingPathExtension().lastPathComponent)
         tab.controller.window = window
+        tab.controller.agentRequest = agentRequest; configureController(tab.controller)
         guard await tab.controller.open(url) else { return false }
         if tabs.count == 1, current.session.document == nil { tabs.removeAll() }
         tab.controller.workspace = self; tabs.append(tab); selectedID = tab.id

@@ -744,7 +744,7 @@ struct LensWorksAutomationTests {
     @Test func confirmationIsDrivenByTheRegistryAndItsNamesAreClipped() throws {
         let harness = try Harness(); defer { harness.cleanUp() }
         let rows = harness.automation.tools.listCommands()
-        let confirmed: Set<LensWorksCommandID> = [.deleteVirtualFolder, .deleteKeyword, .save, .saveAs, .exportPNG, .exportJPEG]
+        let confirmed: Set<LensWorksCommandID> = [.deleteVirtualFolder, .deleteKeyword, .save, .saveAs, .exportPNG, .exportJPEG, .locateFolder, .openCatalog, .newCatalog]
         #expect(Set(LensWorksCommandRegistry.descriptors.filter(\.requiresAgentConfirmation).map(\.id)) == confirmed
                 && Set(rows.filter { $0["requiresConfirmation"] as? Bool == true }.compactMap { $0["id"] as? String }) == Set(confirmed.map(\.rawValue)))
         // Document and catalog commands batch; history steps and project-file commands run one at a time.
@@ -840,7 +840,7 @@ struct LensWorksAutomationTests {
         let checks = Counter()
         let dropped = LensWorksAutomationCaller(connection: nil) { checks.next() <= 3 }
         let result = await tools.call("batch", arguments: ["commands": members], caller: dropped)
-        #expect(result["isError"] as? Bool == true && text(result) == "The automation connection or its secret changed before command 3. The whole batch was rolled back: the document and its history are unchanged."
+        #expect(result["isError"] as? Bool == true && text(result) == "The automation connection or its secret changed before command 3. The whole batch was rolled back: the document, its history, the selection and the palette colors are as they were (anything a cut or copy put on the clipboard stays there)."
                 && checks.value == 4 && LensWorksCommandDispatcher.lastInvocation?.id == .rename)
         #expect(session.document == starting && session.history.currentRevision == revision && session.history.undoCount == 1 && session.history.undoName == own
                 && session.history.undoOrigin == .user && !session.canRedo && session.activeLayerID == layer && session.selectedLayerIDs == [layer])

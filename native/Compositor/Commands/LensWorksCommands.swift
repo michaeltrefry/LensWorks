@@ -292,7 +292,7 @@ struct LensWorksLayerCommandButton: View {
     }
     static func dispatch(_ admission: LensWorksCatalogCommandAdmission, in catalog: LensWorksCatalog) async throws {
         lastInvocation = .init(admission.id); lastOrigin = admission.origin
-        try await catalog.performCatalogControl(admission.native)
+        try await catalog.performCatalogControl(admission.native, origin: admission.origin)
     }
     static func dispatch(_ admission: LensWorksCatalogDeleteAdmission, in catalog: LensWorksCatalog) async throws {
         lastInvocation = .init(admission.id, admission.folder.id); lastOrigin = admission.origin

@@ -21,7 +21,6 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case shortcutEditor = "It is the Save or Cancel button of the Keyboard Shortcuts window the person has open."
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
-    case relinkReview = "It opens the relink review, where the person chooses the folder’s new location and confirms each match."
 }
 
 /// Whether an agent can run a command.
@@ -51,6 +50,8 @@ nonisolated enum LensWorksAgentConfirmationRule: String, Codable, Sendable {
     case always
     /// When the file it writes already exists: the file's previous contents cannot be restored.
     case whenReplacingFile
+    /// When the open catalog has organize changes Undo could still revert: opening another catalog discards them.
+    case whenDiscardingCatalogHistory
 }
 
 /// How what a command changes can be put back.
@@ -65,14 +66,17 @@ nonisolated enum LensWorksCommandReversal: String, Codable, Sendable {
     case transient
     /// It writes a file: replacing an existing one destroys that file's previous contents.
     case replacesFile
+    /// It replaces the open catalog with another: the open one's organize Undo history is discarded.
+    case replacesCatalog
     /// It destroys something nothing can restore.
     case irreversible
     /// Whether `rule` puts the person's confirmation in front of everything this cannot put back.
     func isCovered(by rule: LensWorksAgentConfirmationRule) -> Bool {
         switch self {
         case .irreversible: rule == .always
-        case .replacesFile: rule != .never
-        default: true
+        case .replacesFile: rule == .always || rule == .whenReplacingFile
+        case .replacesCatalog: rule == .always || rule == .whenDiscardingCatalogHistory
+        case .history, .inverse, .additive, .transient: true
         }
     }
 }
@@ -102,7 +106,7 @@ extension LensWorksCommandID {
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
         case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
-             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor:
+             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder:
             .runnable(.standalone)
         case .automationEnabled, .automationShowSecret, .automationCopySecret, .automationRegenerateSecret, .automationRevokeSecret,
              .automationCopyConfiguration, .automationAllow, .automationDecline, .automationGrantFolder, .automationRevokeFolder:
@@ -129,30 +133,47 @@ extension LensWorksCommandID {
         case .saveShortcuts, .cancelShortcuts: .notRunnable(.shortcutEditor)
         case .beginRename: .notRunnable(.nameEditor)
         case .opacityDigit: .notRunnable(.opacityKeys)
-        case .locateFolder: .notRunnable(.relinkReview)
         }
     }
 
     /// How what the command changes can be put back. An agent reaches an irreversible change only through the
-    /// person's confirmation (`LensWorksCommandDescriptor.agentConfirmation`).
+    /// person's confirmation (`LensWorksCommandDescriptor.agentConfirmation`). Every command an agent can run is
+    /// classified by name in `agentReversals`; one that is not is treated as irreversible, so it never runs
+    /// unconfirmed. A command agents cannot run changes nothing through them.
     nonisolated var reversal: LensWorksCommandReversal {
-        switch self {
-        case .deleteVirtualFolder: return .irreversible
-        // The saved project file is replaced by the document as it stands.
-        case .save: return .irreversible
-        case .saveAs, .exportPNG, .exportJPEG: return .replacesFile
-        case .renameVirtualFolder, .moveVirtualFolder, .rating, .openCatalog, .closeProject: return .inverse
-        case .copy, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor: return .additive
-        case .firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
-             .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
-             .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors:
-            return .transient
-        default:
-            // Everything else an agent can run enters document history or the catalog's recipe or organization
-            // history (a deleted keyword too: the person is still asked, because its menu marks it destructive).
-            return agentAccess.isRunnable ? .history : .transient
-        }
+        Self.agentReversals[self] ?? (agentAccess.isRunnable ? .irreversible : .transient)
     }
+
+    /// Each admitted command's classification, by name: nothing is classified by falling through.
+    nonisolated static let agentReversals: [LensWorksCommandID: LensWorksCommandReversal] = {
+        let groups: [(LensWorksCommandReversal, [LensWorksCommandID])] = [
+            // The saved project file is replaced by the document as it stands; an emptied virtual folder is gone.
+            (.irreversible, [.save, .deleteVirtualFolder]),
+            (.replacesFile, [.saveAs, .exportPNG, .exportJPEG]),
+            (.replacesCatalog, [.openCatalog, .newCatalog]),
+            // Running it again with the previous value restores what it changed. A located folder goes back with the
+            // review's own Undo in Locate Originals; the person is still asked, because it re-points originals.
+            (.inverse, [.renameVirtualFolder, .moveVirtualFolder, .rating, .closeProject, .locateFolder]),
+            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor]),
+            (.transient, [.firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
+                          .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
+                          .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors]),
+            // Document history, or the catalog's own recipe and organization history (a deleted keyword too: the
+            // person is still asked, because its menu marks it destructive).
+            (.history, [.visibility, .opacity, .rename, .importImages, .cut, .paste, .fillForeground, .fillBackground, .clearSelectionPixels,
+                        .contentAwareFill, .clearGuides, .selectAll, .deselect, .inverseSelection, .selectLayerPixels, .selectSubject, .colorRange,
+                        .selectMaskBlack, .expandSelection, .contractSelection, .featherSelection, .curves, .levels, .hueSaturation, .imageAdjustment,
+                        .invert, .canvasSize, .imageSize, .trim, .flipCanvasHorizontal, .flipCanvasVertical, .filter, .newAdjustment, .editAdjustment,
+                        .transform, .layerViaCopy, .duplicateLayer, .clippingMask, .groupLayers, .ungroupLayers, .moveOutOfFolder, .newBlankLayer,
+                        .moveLayerUp, .moveLayerDown, .mergeLayers, .flipLayerHorizontal, .flipLayerVertical, .deleteLayer, .addMask, .toggleMask,
+                        .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels,
+                        .exposure, .undoRecipe, .redoRecipe, .addToVirtualFolder, .removeFromVirtualFolder, .addKeyword, .removeKeyword,
+                        .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .undo, .redo])
+        ]
+        var table: [LensWorksCommandID: LensWorksCommandReversal] = [:]
+        for (reversal, ids) in groups { for id in ids { table[id] = reversal } }
+        return table
+    }()
 }
 
 extension LensWorksCommandRegistry {

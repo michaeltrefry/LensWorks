@@ -72,7 +72,14 @@ struct LensWorksAgentConfirmation: Identifiable {
         let action: String
         /// What it acts on, clipped; the sheet shows it in its own one-line field.
         let name: String
-        init(action: String, name: String) { self.action = action; self.name = String(name.prefix(Self.nameLimit)) }
+        init(action: String, name: String) { self.action = action; self.name = Self.clipped(name) }
+        /// At most `nameLimit` characters, cut in the middle: a long path keeps the folder it starts in and the file
+        /// name it ends with, which is what the person is asked to let go of.
+        static func clipped(_ name: String) -> String {
+            guard name.count > nameLimit else { return name }
+            let head = (nameLimit - 1) / 2
+            return name.prefix(head) + "…" + name.suffix(nameLimit - 1 - head)
+        }
     }
     let id = UUID()
     let title: String

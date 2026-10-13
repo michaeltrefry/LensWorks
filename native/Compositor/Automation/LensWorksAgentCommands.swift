@@ -18,6 +18,8 @@ struct LensWorksAgentContext {
     let workspace: ProjectWorkspace?
     let catalog: LensWorksCatalog?
     let folders: LensWorksGrantedFolders
+    /// The person confirmed discarding the open catalog's organize Undo history for this command.
+    var discardsCatalogHistory = false
 }
 
 extension EditorSession {
@@ -27,6 +29,7 @@ extension EditorSession {
     func agentTransaction<T>(_ name: String, adoptingNestedName: Bool, requiresDocument: Bool = true, _ body: () async throws -> T) async throws -> T {
         if requiresDocument || document != nil, let reason = agentModalReason { throw LensWorksCommandRefusal(reason: reason) }
         let selected = selectedLayerIDs, revision = history.currentRevision, maskTarget = isMaskSelected
+        let foreground = foregroundColor, background = backgroundColor, effect = effectSelection
         let admitted = try document?.admittingMetadataMutation()
         guard let token = history.beginInteraction(LensWorksCommandOrigin.agent.historyName(name), document: document, selection: activeLayerID,
                                                    afterMetadataStorage: admitted?.metadataStorage, origin: .agent,
@@ -45,6 +48,9 @@ extension EditorSession {
             if let snapshot = history.cancelInteraction(token) {
                 document = snapshot.document; activeLayerID = snapshot.activeLayerID; selectedLayerIDs = selected
                 isMaskSelected = maskTarget && activeLayer?.mask != nil
+                // What a command set on the way to failing goes back too: a fill's palette color, and the effect
+                // the person had targeted before a named layer cleared it.
+                foregroundColor = foreground; backgroundColor = background; effectSelection = effect
                 commandContextEpoch &+= 1
             }
             throw error
@@ -199,6 +205,15 @@ struct LensWorksAgentDocumentCommands {
         case .paste:
             if context.workspace?.pasteCopiedLayer() == true { return }
             try check(id)
+            // An image file copied in Finder is on the clipboard as its path, and pasting reads that file: a file no
+            // argument names, held to the granted folders like one that is named.
+            if session.pixelClipboard?.changeCount != session.pasteboard.changeCount,
+               let files = session.pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+                for file in files {
+                    do { _ = try context.folders.admit(file.path) }
+                    catch let refusal as LensWorksCommandRefusal { throw refuse("The clipboard holds a file. " + refusal.reason) }
+                }
+            }
             session.paste()
         case .fillForeground, .fillBackground:
             if let color = try arguments.color("color") {
@@ -233,7 +248,7 @@ struct LensWorksAgentDocumentCommands {
             try check(id)
             session.beginLevels()
             guard let edit = session.levels else { throw refuse("Levels could not open on that layer.") }
-            do { session.updateLevels(try LensWorksAgentSettings.merged(edit.settings, try arguments.object("settings")), preview: false) }
+            do { session.updateLevels(try LensWorksAgentSettings.levelsMerged(edit.settings, try arguments.object("settings")), preview: false) }
             catch { session.cancelLevels(); throw error }
             await session.commitLevels()
             if session.levels != nil { session.cancelLevels(); throw refuse("Levels could not be applied.") }
@@ -530,28 +545,28 @@ struct LensWorksAgentCatalogCommands {
 
     func run(_ admission: LensWorksAgentAdmission) async throws {
         if let reason = availability(admission) { throw refuse(reason) }
-        let arguments = admission.arguments, scope = catalog.captureScope()
+        let arguments = admission.arguments, scope = catalog.captureScope(), origin = admission.origin
         let prior = catalog.error
         catalog.error = nil
         defer { if catalog.error == nil { catalog.error = prior } }
         func choice(_ name: String) throws -> String { try arguments.required(name, try arguments.string(name)) }
         switch admission.id {
-        case .addToVirtualFolder: try await catalog.setSelectedMembership(try folder(arguments))
-        case .removeFromVirtualFolder: try await catalog.setSelectedMembership(try folder(arguments), remove: true)
+        case .addToVirtualFolder: try await catalog.setSelectedMembership(try folder(arguments), origin: origin)
+        case .removeFromVirtualFolder: try await catalog.setSelectedMembership(try folder(arguments), remove: true, origin: origin)
         case .renameVirtualFolder: try await catalog.renameGroup(try folder(arguments), name: try choice("name"))
         case .moveVirtualFolder: try await catalog.placeGroup(try folder(arguments), parent: arguments.has("parent") ? try folder(arguments, "parent").id : nil)
         case .showNestedKeywords: try await catalog.enterKeyword(try keyword(arguments))
-        case .addKeyword: let keyword = try keyword(arguments); try await catalog.organize(.addKeyword(keyword.path, kind: keyword.kind))
-        case .removeKeyword: let keyword = try keyword(arguments); try await catalog.organize(.removeKeyword(keyword.path, kind: keyword.kind))
-        case .renameKeyword: try await catalog.renameKeyword(try keyword(arguments), to: try choice("name"))
-        case .moveKeyword: try await catalog.moveKeyword(try keyword(arguments), under: LensWorksCatalog.keywordPath(try choice("parent")))
-        case .addSynonym: try await catalog.addKeywordSynonym(try keyword(arguments), try choice("synonym"))
-        case .deleteKeyword: try await catalog.deleteKeyword(try keyword(arguments))
+        case .addKeyword: let keyword = try keyword(arguments); try await catalog.organize(.addKeyword(keyword.path, kind: keyword.kind), origin: origin)
+        case .removeKeyword: let keyword = try keyword(arguments); try await catalog.organize(.removeKeyword(keyword.path, kind: keyword.kind), origin: origin)
+        case .renameKeyword: try await catalog.renameKeyword(try keyword(arguments), to: try choice("name"), origin: origin)
+        case .moveKeyword: try await catalog.moveKeyword(try keyword(arguments), under: LensWorksCatalog.keywordPath(try choice("parent")), origin: origin)
+        case .addSynonym: try await catalog.addKeywordSynonym(try keyword(arguments), try choice("synonym"), origin: origin)
+        case .deleteKeyword: try await catalog.deleteKeyword(try keyword(arguments), origin: origin)
         case .sortBy: await catalog.setBrowseOrder(sort: Self.sorts[try choice("sort")] ?? .Sequence, direction: catalog.browseOptions.direction)
         case .sortDirection: await catalog.setBrowseOrder(sort: catalog.browseOptions.sort, direction: try choice("direction") == "descending" ? .Descending : .Ascending)
-        case .ratePhotos: try await catalog.organize(.rating(UInt8(try choice("rating")) ?? 0))
-        case .flagPhotos: try await catalog.organize(.flag(Self.flags[try choice("flag")] ?? .Unflagged))
-        case .labelPhotos: let label = try choice("label"); try await catalog.organize(.label(label == "None" ? "" : label))
+        case .ratePhotos: try await catalog.organize(.rating(UInt8(try choice("rating")) ?? 0), origin: origin)
+        case .flagPhotos: try await catalog.organize(.flag(Self.flags[try choice("flag")] ?? .Unflagged), origin: origin)
+        case .labelPhotos: let label = try choice("label"); try await catalog.organize(.label(label == "None" ? "" : label), origin: origin)
         case .moveCatalogSelection:
             let step = try choice("step")
             await catalog.moveSelection(step == "next" || step == "extendNext" ? 1 : -1, range: step.hasPrefix("extend"))
@@ -592,6 +607,11 @@ struct LensWorksAgentProjectCommands {
         case .addPhotos:
             guard let catalog = context.catalog, catalog.catalogPath != nil else { return "Open a catalog first." }
             return catalog.isBusy || catalog.isImporting ? "Finish the current catalog operation first." : nil
+        case .locateFolder:
+            guard let catalog = context.catalog, catalog.catalogPath != nil else { return "Open a catalog first." }
+            if catalog.isBusy || catalog.isImporting || catalog.relink.isRunning { return "Finish the current catalog operation first." }
+            do { try catalog.admitCatalogWork() } catch { return error.localizedDescription }
+            return nil
         case .openInEditor:
             guard let catalog = context.catalog, catalog.catalogPath != nil else { return "Open a catalog first." }
             guard let workspace = context.workspace else { return "There is no project window to open the photo in." }
@@ -640,15 +660,68 @@ struct LensWorksAgentProjectCommands {
         }
     }
 
+    /// A project's live RAW layers are developed from the original each one names: those are files the project
+    /// reaches without an argument naming them, so each must lie inside a granted folder before the project opens.
+    static func admitSources(_ snapshot: ProjectSnapshot, folders: LensWorksGrantedFolders) throws {
+        for layer in snapshot.manifest.layers {
+            guard layer.liveSourceFile == nil else { throw LensWorksCommandRefusal(reason: "The project has a RAW layer whose original could not be checked against the granted folders.") }
+            guard let source = layer.liveSource else { continue }
+            do { _ = try folders.admit(try source.original.localFileURL().path) }
+            catch let refusal as LensWorksCommandRefusal { throw LensWorksCommandRefusal(reason: "A RAW layer’s original: " + refusal.reason) }
+        }
+    }
+    /// Whether `url` is a catalog folder: it holds the catalog's database.
+    static func isCatalog(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.appendingPathComponent("catalog.sqlite3").path, isDirectory: &isDirectory) && !isDirectory.boolValue
+    }
+    /// The moved folder an agent named: a catalog folder id from get_state, or the path the folder had when its
+    /// photos were added (where its originals no longer are, so nothing is read there). With how the app shows it.
+    static func movedFolder(_ catalog: LensWorksCatalog, _ arguments: LensWorksAgentArguments) throws -> (from: LWCatalogStoragePathReference, label: String) {
+        let named = try arguments.required("folder", try arguments.string("folder"))
+        if named.hasPrefix("/") {
+            do { return (try LensWorksRelinkPaths.entered(named, windows: false), named) }
+            catch { throw LensWorksCommandRefusal(reason: error.localizedDescription) }
+        }
+        guard let folder = catalog.folders.first(where: { String($0.id.value) == named }) else {
+            throw LensWorksCommandRefusal(reason: "folder must be a catalog folder id from get_state, or the absolute path the folder had before it moved.")
+        }
+        return (.Native(folder.locator), LensWorksRelinkPaths.label(folder.locator))
+    }
+
+    /// Refuses a request whose target cannot be what the command needs, before the person is asked anything and
+    /// before the open catalog is let go: a folder that is not a catalog must not close the one that is open.
+    func validate(_ admission: LensWorksAgentAdmission) throws {
+        guard admission.id == .openCatalog || admission.id == .newCatalog else { return }
+        let url = try admission.arguments.url("path")
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        if admission.id == .openCatalog {
+            guard exists, isDirectory.boolValue else { throw refuse("There is no catalog folder at that path.") }
+            guard Self.isCatalog(url) else { throw refuse("That folder is not a catalog: it has no catalog database.") }
+        } else if exists {
+            guard isDirectory.boolValue, (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.isEmpty == true else {
+                throw refuse("A new catalog needs an empty or new folder: something is already at that path.")
+            }
+        }
+    }
+
     func run(_ admission: LensWorksAgentAdmission) async throws -> String {
         let id = admission.id, arguments = admission.arguments
         if let reason = availability(id) { throw refuse(reason) }
-        var failure: String?
-        let sink = ProjectController.agentErrorSink
-        ProjectController.agentErrorSink = { failure = failure ?? $0 }
-        defer { ProjectController.agentErrorSink = sink }
+        // Only the controller this command drives, and the tabs it opens, report to the agent; a failure in any
+        // other project still shows the person its alert.
+        let request = ProjectAgentRequest(), folders = context.folders
+        request.admit = { try Self.admitSources($0, folders: folders) }
+        context.projects?.agentRequest = request; context.workspace?.agentRequest = request
+        defer {
+            context.workspace?.agentRequest = nil
+            for controller in (context.workspace?.tabs.map(\.controller) ?? []) + [context.projects].compactMap({ $0 }) where controller.agentRequest === request {
+                controller.agentRequest = nil
+            }
+        }
         func finished(_ succeeded: Bool, _ fallback: String) throws {
-            if let failure { throw refuse(failure) }
+            if let failure = request.failure { throw refuse(failure) }
             if !succeeded { throw refuse(fallback) }
         }
         switch id {
@@ -715,21 +788,44 @@ struct LensWorksAgentProjectCommands {
         case .openCatalog, .newCatalog:
             guard let catalog = context.catalog else { throw refuse("The catalog is not available.") }
             let url = try arguments.url("path")
-            var isDirectory: ObjCBool = false
-            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-            if id == .openCatalog { guard exists, isDirectory.boolValue else { throw refuse("There is no catalog folder at that path.") } }
-            else if exists {
-                guard isDirectory.boolValue, (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.isEmpty == true else {
-                    throw refuse("A new catalog needs an empty or new folder: something is already at that path.")
-                }
+            try validate(admission)
+            // Opening another catalog discards the open one's organize Undo history: only with the person's answer.
+            guard context.discardsCatalogHistory || catalog.organizationUndo.isEmpty && catalog.organizationRedo.isEmpty else {
+                throw refuse("The open catalog has organize changes Undo can still revert, and the person has not confirmed discarding them.")
             }
-            let prior = catalog.error
+            let prior = catalog.error, previous = catalog.catalogPath
             catalog.error = nil
             try await context.folders.withAccess(to: url) { await catalog.connect(url.path, create: id == .newCatalog) }
-            if let failure = catalog.error { catalog.error = prior; throw refuse(failure) }
+            let failure = catalog.error
+            guard failure == nil, let opened = catalog.catalogPath, (try? LensWorksGrantedFolders.realPath(opened)) == url.path else {
+                // The person is not left without the catalog they had open.
+                if catalog.catalogPath == nil, let previous { await catalog.connect(previous) }
+                catalog.error = prior
+                throw refuse(failure ?? "The catalog could not be opened.")
+            }
             catalog.error = prior
-            guard let opened = catalog.catalogPath, (try? LensWorksGrantedFolders.realPath(opened)) == url.path else { throw refuse("The catalog could not be opened.") }
             return "The catalog is open."
+        case .locateFolder:
+            guard let catalog = context.catalog else { throw refuse("Open a catalog first.") }
+            let folder = try Self.movedFolder(catalog, arguments)
+            let url = try arguments.url("path")
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else { throw refuse("There is no folder at that path.") }
+            let review = catalog.relink
+            do {
+                return try await context.folders.withAccess(to: url) {
+                    // The engine's saved review: every original under the folder is matched by content at the same
+                    // relative path, and Apply publishes all of them or none. Originals are only read.
+                    try await review.beginFolder(from: folder.from, destinations: [try LWCatalogNativePath(fileURL: url)])
+                    if let reason = review.applyUnavailableReason {
+                        throw refuse(reason + " Nothing was relinked; the review is saved in Locate Originals for the person.")
+                    }
+                    try await review.apply()
+                    let count = review.plan?.total.value ?? 0
+                    return "\(count) original\(count == 1 ? "" : "s") under “\(folder.label.suffix(128))” now point\(count == 1 ? "s" : "") into that folder. Undo in Locate Originals restores the previous locations."
+                }
+            } catch let refusal as LensWorksCommandRefusal { throw refusal }
+            catch { throw refuse(error is CancellationError ? "The catalog changed while the folder was being located: nothing was relinked." : error.localizedDescription) }
         case .addPhotos:
             guard let catalog = context.catalog else { throw refuse("Open a catalog first.") }
             let url = try arguments.url("folder")
@@ -741,15 +837,43 @@ struct LensWorksAgentProjectCommands {
             guard let catalog = context.catalog, let workspace = context.workspace else { throw refuse("There is no project window to open the photo in.") }
             let photo = try arguments.required("photo", try arguments.string("photo"))
             guard let asset = catalog.assets.first(where: { $0.id == photo }) else { throw refuse("That photo is not on the current catalog page.") }
-            let scope = catalog.captureScope(), prior = catalog.error, tabs = workspace.tabs.map(\.id), shown = workspace.selectedID
+            // The files this reaches are not named by an argument, so each is found and held to the granted folders
+            // before it is touched: the photo's original before the photo is selected, and the working version (or
+            // the folder a new one is written into) before anything is opened or created.
+            let located: String, original: URL
+            do { located = try await catalog.service.resolve(asset).originalURL.path }
+            catch { throw refuse(error.localizedDescription) }
+            do { original = try folders.admit(located) }
+            catch let refusal as LensWorksCommandRefusal { throw refuse("The photo’s original: " + refusal.reason) }
+            let prior = catalog.error, tabs = workspace.tabs.map(\.id), shown = workspace.selectedID
+            guard catalog.catalogPath != nil, !catalog.isBusy, catalog.assets.contains(where: { $0.id == asset.id }) else { throw refuse("The catalog changed while the photo was being found.") }
+            let scope = catalog.captureScope()
             catalog.error = nil
+            // Selecting the photo is what loads its working versions; nothing is opened yet.
             await catalog.select(asset)
-            if catalog.scopeIsCurrent(scope), catalog.selectedAsset?.id == asset.id, catalog.error == nil {
-                if let version = catalog.selectedVersions.first { await catalog.openVersion(version, workspace: workspace) }
-                else { await catalog.createWorkingVersion(workspace: workspace) }
+            if let failure = catalog.error { catalog.error = prior; throw refuse(failure) }
+            catalog.error = prior
+            guard catalog.scopeIsCurrent(scope), catalog.selectedAsset?.id == asset.id else { throw refuse("The catalog changed while the photo was being selected.") }
+            catalog.error = nil
+            if let existing = catalog.selectedVersions.first {
+                let project: URL
+                do { project = try folders.admit(existing.projectPath) }
+                catch let refusal as LensWorksCommandRefusal { catalog.error = prior; throw refuse("The photo’s working version: " + refusal.reason) }
+                try await folders.withAccess(to: project) { await catalog.openVersion(existing, workspace: workspace) }
+            } else {
+                // The menu item asks the person to choose this folder; an agent never opens that chooser.
+                guard let output = catalog.outputDirectory else {
+                    catalog.error = prior
+                    throw refuse("No working-versions folder is chosen: the person chooses it in the catalog before an agent can create a working version.")
+                }
+                do { _ = try folders.admit(output) }
+                catch let refusal as LensWorksCommandRefusal { catalog.error = prior; throw refuse("The working-versions folder: " + refusal.reason) }
+                // What runs is held to exactly the original and folder admitted here.
+                try await folders.withAccess(to: original) { await catalog.createWorkingVersion(workspace: workspace, admitted: (located, output)) }
             }
             if let failure = catalog.error { catalog.error = prior; throw refuse(failure) }
             catalog.error = prior
+            try finished(true, "")
             guard workspace.tabs.map(\.id) != tabs || workspace.selectedID != shown || workspace.current.controller.workingVersion?.photoID == asset.photoID else {
                 throw refuse("The photo could not be opened in the editor.")
             }

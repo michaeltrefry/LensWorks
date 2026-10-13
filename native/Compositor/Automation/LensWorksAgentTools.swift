@@ -54,15 +54,15 @@ final class LensWorksAgentTools {
                 "prefix": ["type": "string", "maxLength": 64, "description": "Only commands whose id starts with this."]]],
              "annotations": ["readOnlyHint": true]],
             ["name": "get_state", "title": "Describe the open document and catalog",
-             "description": "The open document (size, selection, layers with id, name, visibility, opacity, blend mode, mask and effects, the selected layers, and who made the edits Undo and Redo would step over), the project tabs and recent projects, the folders granted to automation, and the open catalog (the photos, virtual folders and keywords on the current page, filters and sort, the selected photo, its catalog version and copies). Long lists are cut at \(stateRowLimit) rows and say so.",
+             "description": "The open document (size, selection, layers with id, name, visibility, opacity, blend mode, mask and effects, the selected layers, and who made the edits Undo and Redo would step over), the project tabs and recent projects, the folders granted to automation, and the open catalog (the photos, catalog folders, virtual folders and keywords on the current page, filters and sort, the selected photo, its catalog version and copies). Long lists are cut at \(stateRowLimit) rows and say so.",
              "inputSchema": empty, "annotations": ["readOnlyHint": true]],
             ["name": "invoke_command", "title": "Run a LensWorks command",
-             "description": "Runs one registered command as the agent. Document edits enter LensWorks history labeled “(Agent)”, so Undo in the app reverts them. edit.undo and edit.redo step only over the agent's own edits. A file path is accepted only inside a folder the person granted to automation. Permanent changes (deletes, saving over the project file, replacing an existing file) wait for the person to confirm in LensWorks and return a refusal when they decline. Unknown argument names are refused.",
+             "description": "Runs one registered command as the agent. Document edits enter LensWorks history labeled “(Agent)”, so Undo in the app reverts them. edit.undo and edit.redo step only over the agent's own edits. A file path is accepted only inside a folder the person granted to automation, and so is every file a command reaches without naming it (a catalog photo’s original and working version, a project’s RAW originals). Permanent changes (deletes, saving over the project file, replacing an existing file, relinking a moved folder, opening another catalog over organize changes Undo could still revert) wait for the person to confirm in LensWorks and return a refusal when they decline. Unknown argument names are refused.",
              "inputSchema": ["type": "object", "required": ["command"], "additionalProperties": false, "properties": [
                 "command": ["type": "string", "enum": agentCommands.map(\.rawValue), "description": "A command id from list_commands."],
                 "arguments": ["type": "object", "description": "Arguments matching that command's inputSchema from list_commands."]]]],
             ["name": "batch", "title": "Run several LensWorks commands as one step",
-             "description": "Runs up to \(batchLimit) commands in order. Every command's arguments are checked before any runs; one that cannot run refuses the whole batch. A batch is either all document commands (one “(Agent)” history entry that one Undo reverts; any failure rolls the whole batch back) or all catalog commands (checked against the catalog as it stands, run in order and stopped at the first failure; the catalog cannot roll back, so the two kinds never mix). Permanent deletes are confirmed by the person once, for the whole batch, before anything runs. History steps and project-file commands (list_commands says batchable: false) are not allowed in a batch. The reply lists a result per command.",
+             "description": "Runs up to \(batchLimit) commands in order. Every command's arguments are checked before any runs; one that cannot run refuses the whole batch. A batch is either all document commands (one “(Agent)” history entry that one Undo reverts; any failure rolls the whole batch back) or all catalog commands (checked against the catalog as it stands, run in order and stopped at the first failure; the catalog cannot roll back, so the two kinds never mix). Permanent deletes are confirmed by the person once, for the whole batch, before anything runs, and ride with no unconfirmed command that changes keywords or virtual folders, so what the person approved is what is deleted. History steps and project-file commands (list_commands says batchable: false) are not allowed in a batch. The reply lists a result per command.",
              "inputSchema": ["type": "object", "required": ["commands"], "additionalProperties": false, "properties": [
                 "commands": ["type": "array", "minItems": 1, "maxItems": batchLimit, "items": member]]]],
             ["name": "render_preview", "title": "Render a preview of the open document",
@@ -266,6 +266,7 @@ final class LensWorksAgentTools {
                  "label": Self.clip(asset.label), "selected": catalog.selection.contains(asset.id)] as [String: Any]
             }
             let folders = Self.rows(catalog.groups) { ["id": $0.id, "name": Self.clip($0.name)] }
+            let sources = Self.rows(catalog.folders) { ["id": String($0.id.value), "name": Self.clip($0.name), "path": Self.clip(LensWorksRelinkPaths.label($0.locator))] }
             let keywords = Self.rows(catalog.keywords) { ["id": Self.clip(LensWorksAgentCatalogCommands.keywordID($0)), "name": Self.clip($0.name), "kind": $0.kind.rawValue] }
             var described: [String: Any] = [
                 "path": path, "busy": catalog.isBusy, "importing": catalog.isImporting,
@@ -275,13 +276,14 @@ final class LensWorksAgentTools {
                 "copies": catalog.catalogVariants.prefix(Self.stateRowLimit).map(version),
                 "copiesCursor": catalog.catalogVariantsNext?.value ?? NSNull(),
                 "photos": photos.rows, "hasMorePhotos": catalog.hasMore,
-                "virtualFolders": folders.rows, "keywords": keywords.rows,
+                "folders": sources.rows, "virtualFolders": folders.rows, "keywords": keywords.rows,
                 "keywordParent": catalog.keywordParent.map { Self.clip(LensWorksAgentCatalogCommands.keywordID($0)) } ?? NSNull(),
                 "filters": catalog.filterSummary.prefix(16).map(Self.clip),
                 "sort": catalog.browseOptions.sort.rawValue, "sortDirection": catalog.browseOptions.direction.rawValue
             ]
             if photos.truncated { described["photosTruncated"] = true }
             if folders.truncated { described["virtualFoldersTruncated"] = true }
+            if sources.truncated { described["foldersTruncated"] = true }
             if keywords.truncated { described["keywordsTruncated"] = true }
             result["catalog"] = described
         }
@@ -357,8 +359,11 @@ final class LensWorksAgentTools {
             let commands = LensWorksAgentProjectCommands(context: context)
             if let reason = commands.availability(call.id) { throw LensWorksCommandRefusal(reason: reason) }
             if let session = session(), session.document != nil, let reason = session.agentModalReason { throw LensWorksCommandRefusal(reason: reason) }
+            try commands.validate(call.admission)
             let approved = try await confirm([call], caller: caller)
             try admitReplacement(call, approved: approved.indexes.contains(0))
+            var context = context
+            context.discardsCatalogHistory = approved.indexes.contains(0)
             let message = try await LensWorksCommandDispatcher.dispatchStandalone(call.admission, context: context)
             return ["command": call.id.rawValue, "changed": true, "message": message + (approved.indexes.isEmpty ? "" : " The person allowed it.")]
         case .catalog:
@@ -368,6 +373,10 @@ final class LensWorksAgentTools {
             return ["command": call.id.rawValue, "changed": true, "message": label + (approved.indexes.isEmpty ? " ran (Agent)." : " ran (Agent) after the person allowed it.")]
         }
     }
+    /// The catalog commands that change the keyword dictionary, the virtual folders, or which photos hold them.
+    static let catalogStructureCommands: Set<LensWorksCommandID> = [
+        .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .addKeyword, .removeKeyword,
+        .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder, .addToVirtualFolder, .removeFromVirtualFolder]
     /// History steps: never part of a batch.
     static let historyCommands: Set<LensWorksCommandID> = [.undo, .redo]
 
@@ -453,10 +462,11 @@ final class LensWorksAgentTools {
         return .init(reason: calls.count == 1 ? reason : "Command \(index + 1) (\(calls[index].id.rawValue)): \(reason)")
     }
 
-    /// What the person approved: by index, and for virtual-folder deletes the admission re-made after their answer.
+    /// What the person approved, by index, each with the check that what they saw is still what would run. The check
+    /// runs once when they answer and again immediately before its command is dispatched.
     struct Approval {
         var indexes: Set<Int> = []
-        var folders: [Int: LensWorksCatalogDeleteAdmission] = [:]
+        var rechecks: [Int: () throws -> LensWorksCatalogDeleteAdmission?] = [:]
     }
     /// One change waiting on the person: the row the sheet shows, and a check that what they saw is still what runs.
     private struct Pending {
@@ -474,6 +484,16 @@ final class LensWorksAgentTools {
         case .whenReplacingFile:
             guard let url = try LensWorksAgentProjectCommands(context: context).destination(call.admission), FileManager.default.fileExists(atPath: url.path) else { return nil }
             return Pending(index: index, item: .init(action: "Replace with " + label.replacingOccurrences(of: "…", with: ""), name: url.path)) { nil }
+        case .whenDiscardingCatalogHistory:
+            guard let catalog = catalog(), let path = catalog.catalogPath else { return nil }
+            let steps = catalog.organizationUndo.count + catalog.organizationRedo.count
+            guard steps > 0 else { return nil }
+            return Pending(index: index, item: .init(action: "Discard \(steps) organize change\(steps == 1 ? "" : "s") from Undo to " + label.replacingOccurrences(of: "…", with: ""), name: path)) { [weak self] in
+                guard let catalog = self?.catalog(), catalog.catalogPath == path, catalog.organizationUndo.count + catalog.organizationRedo.count == steps else {
+                    throw LensWorksCommandRefusal(reason: "The catalog changed while waiting for confirmation: nothing was opened.")
+                }
+                return nil
+            }
         case .always:
             switch call.id {
             case .deleteVirtualFolder:
@@ -496,6 +516,15 @@ final class LensWorksAgentTools {
                           let current = try? LensWorksAgentCatalogCommands(catalog: catalog, context: commands.context).keyword(call.arguments),
                           current.id.value == keyword.id.value, current.path == keyword.path else {
                         throw LensWorksCommandRefusal(reason: "A keyword changed while waiting for confirmation: nothing was run or deleted.")
+                    }
+                    return nil
+                }
+            case .locateFolder:
+                guard let catalog = catalog() else { throw LensWorksCommandRefusal(reason: "Open a catalog first.") }
+                let from = try LensWorksAgentProjectCommands.movedFolder(catalog, call.arguments).label, to = try call.arguments.url("path").path
+                return Pending(index: index, item: .init(action: label.replacingOccurrences(of: "…", with: ""), name: String(from.suffix(96)) + " → " + to)) { [weak self] in
+                    guard let catalog = self?.catalog(), (try? LensWorksAgentProjectCommands.movedFolder(catalog, call.arguments).label) == from else {
+                        throw LensWorksCommandRefusal(reason: "The catalog folder changed while waiting for confirmation: nothing was relinked.")
                     }
                     return nil
                 }
@@ -537,8 +566,8 @@ final class LensWorksAgentTools {
         guard caller.isCurrent() else { throw LensWorksCommandRefusal(reason: "The automation connection or its secret changed while waiting for confirmation: nothing was run or deleted.") }
         var approval = Approval()
         for pending in asked {
-            if let folder = try pending.recheck() { approval.folders[pending.index] = folder }
-            approval.indexes.insert(pending.index)
+            _ = try pending.recheck()
+            approval.indexes.insert(pending.index); approval.rechecks[pending.index] = pending.recheck
         }
         return approval
     }
@@ -546,9 +575,19 @@ final class LensWorksAgentTools {
     /// Refuses a file command that would replace a file the person was not asked about (one that appeared after the
     /// check, or a rule that was never satisfied).
     private func admitReplacement(_ call: Call, approved: Bool) throws {
+        // The person may have taken a grant back, or a folder on the way may have become a link, while the sheet was
+        // open: every path is admitted again from the words the agent sent and must reach the same file.
+        for parameter in LensWorksCommandRegistry.descriptor(call.id).parameters where parameter.type.namesPath {
+            guard let named = try call.arguments.strings(parameter.name) else { continue }
+            guard try named.map(folders.admit) == call.arguments.paths[parameter.name] else {
+                throw LensWorksCommandRefusal(reason: "\(parameter.name) no longer reaches the file it did when the request was checked: nothing was read or written.")
+            }
+        }
         let rule = LensWorksCommandRegistry.descriptor(call.id).agentConfirmation
         guard rule != .never, !approved else { return }
         if rule == .always { throw LensWorksCommandRefusal(reason: "The person has not confirmed \(call.id.rawValue).") }
+        // Opening another catalog: the command itself refuses when there is organize history and no approval.
+        if rule == .whenDiscardingCatalogHistory { return }
         if let url = try LensWorksAgentProjectCommands(context: context).destination(call.admission), FileManager.default.fileExists(atPath: url.path) {
             throw LensWorksCommandRefusal(reason: "A file appeared at that path, and the person has not confirmed replacing it: nothing was written.")
         }
@@ -558,12 +597,15 @@ final class LensWorksAgentTools {
     private func run(_ call: Call, index: Int, approved: Approval) async throws {
         guard let catalog = catalog() else { throw LensWorksCommandRefusal(reason: "Open a catalog first.") }
         if Self.requiresConfirmation(call.id), !approved.indexes.contains(index) { throw LensWorksCommandRefusal(reason: "The person has not confirmed \(call.id.rawValue).") }
+        // Checked again here, with nothing between the check and the dispatch: an earlier member of the batch, or
+        // the person, may have changed what the approved name stands for since they answered.
+        let rechecked = try approved.rechecks[index]?()
         switch call.id {
         case _ where Self.controlCommands.contains(call.id):
             let prepared = try catalogAction(call.id, call.arguments, checkingExpected: false)
             try await catalog.dispatchCommand(catalog.admitCommand(prepared.action, expected: prepared.current, origin: .agent))
         case .deleteVirtualFolder:
-            guard let folder = approved.folders[index] else { throw LensWorksCommandRefusal(reason: "The person has not confirmed this delete.") }
+            guard let folder = rechecked else { throw LensWorksCommandRefusal(reason: "The person has not confirmed this delete.") }
             try await LensWorksCommandDispatcher.dispatch(folder, in: catalog)
         case _ where call.kind == .catalog:
             try await LensWorksCommandDispatcher.dispatch(call.admission, in: catalog, context: context)
@@ -634,7 +676,7 @@ final class LensWorksAgentTools {
                     } catch { throw Self.naming(index, of: calls, error) }
                 }
             }
-        } catch { throw LensWorksCommandRefusal(reason: error.localizedDescription + " The whole batch was rolled back: the document and its history are unchanged.") }
+        } catch { throw LensWorksCommandRefusal(reason: error.localizedDescription + " The whole batch was rolled back: the document, its history, the selection and the palette colors are as they were (anything a cut or copy put on the clipboard stays there).") }
         let changed = session.history.currentRevision != revision
         return ["kind": "document", "completed": true, "changed": changed, "history": changed ? session.history.undoName : NSNull(), "results": results,
                 "message": changed ? "\(session.history.undoName) is one entry in LensWorks history; one Undo in the app reverts the whole batch." : "Nothing changed."]
@@ -644,6 +686,13 @@ final class LensWorksAgentTools {
         let unrun = " Nothing was run."
         guard let catalog = catalog(), catalog.catalogPath != nil else { throw LensWorksCommandRefusal(reason: "Open a catalog first." + unrun) }
         guard !catalog.isBusy else { throw LensWorksCommandRefusal(reason: "Finish the current catalog operation first." + unrun) }
+        // One answer covers a name, not what another member turns that name into: a member that needs the person
+        // rides only with others the person is asked about too, never with an unasked change to keywords or virtual
+        // folders.
+        if let index = calls.firstIndex(where: { Self.requiresConfirmation($0.id) }),
+           calls.contains(where: { Self.catalogStructureCommands.contains($0.id) && !Self.requiresConfirmation($0.id) }) {
+            throw LensWorksCommandRefusal(reason: Self.naming(index, of: calls, LensWorksCommandRefusal(reason: "It needs the person’s confirmation, so it cannot share a batch with another command that changes keywords or virtual folders; run it with invoke_command.")).reason + unrun)
+        }
         do { try admitCatalog(calls) } catch { throw LensWorksCommandRefusal(reason: error.localizedDescription + unrun) }
         let approved = try await confirm(calls, caller: caller)
         var results: [[String: Any]] = [], stopped: String?
