@@ -32,6 +32,10 @@ jobs:
           echo "CARGO_TARGET_DIR=$cache/rust-tests-target" >> "$GITHUB_ENV"
           python3 engines/catalog/scripts/fetch_dng_sdk.py --destination "$cache/deps"
           echo "PHOTOCATALOG_DNG_SDK=$cache/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1" >> "$GITHUB_ENV"
+      - name: Typed service coverage and the adapter wire fixture are current with the engine source
+        # Both are generated from the engine source; a DTO added there without regenerating
+        # them (as happened to two organization fixtures) fails here instead of going unnoticed.
+        run: ./scripts/ci/check_catalog_wire_fixture.sh
       - name: Engine tests
         timeout-minutes: 40
         run: cargo test --manifest-path engines/catalog/Cargo.toml --locked

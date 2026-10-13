@@ -4,7 +4,7 @@
   "baseline": {
     "revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
     "source": "engines/catalog",
-    "source_digest": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254"
+    "source_digest": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f"
   },
   "root_type_ids": [
     "application::dto::Request",
@@ -34562,7 +34562,7 @@
     },
     {
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "sha256": "0ca63be9de7a1e89355a8cf6c855cf3336799ad0bf17a624135f516919ebf9f6"
+      "sha256": "59ac04c00a0163b5a75a72400542342f43ec8e6435fa77303e51a0af82a7f8dd"
     },
     {
       "file": "engines/catalog/src/organization.rs",
@@ -69756,7 +69756,7 @@
         "Use a foreign catalog token: Reply::Error StaleSession.",
         "Use page limit 0: InvalidRequest; request bytes over configured cap: ResourceLimit."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69827,7 +69827,7 @@
         "Reject stale token/generation/review digest and wrong epoch; no overwrite from a stale review.",
         "Interrupted publication retains recovery evidence instead of reporting successful rollback."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69856,7 +69856,7 @@
         "Stale image revision rejects the edit without changing rating/member rows.",
         "Collection placement cycle and deleting an in-use keyword fail; current rows remain unchanged."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -69957,7 +69957,7 @@
         "Changed candidate bytes or stale plan revision prevents Apply.",
         "Ambiguous candidates remain unresolved until explicit review; cancellation preserves the previous mapping."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70022,7 +70022,7 @@
         "Mutate target recipe after Append; Run reports conflict and preserves newer target.",
         "Active cancellation requires the matching operation id; no overwrite of newer edits."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70081,7 +70081,7 @@
         "Overlapping original/cache roots reject admission.",
         "Stale original-root review token or changed storage epoch cannot validate another mapping; StepRelocation selects exact tier."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70152,7 +70152,7 @@
         "Wrong offset, byte total, digest, role, operation or Guard fails before migration authority is admitted.",
         "Cancel with uncertain drain reports DrainPending; no false successful close/discard."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70577,7 +70577,7 @@
         "Stale workbench/generation/evidence or wrong input offset rejects the action.",
         "Open read-only never writes source SQLite; Cancel/Close drains before releasing authority."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -70684,7 +70684,7 @@
         "Stale plan authority/source fingerprint or changed destination blocks publication.",
         "Existing output is preserved when overwrite=false; truncated staged output is recoverable and is never reported complete."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71019,7 +71019,7 @@
         "Open missing path fails without creating it.",
         "Wrong catalog token returns StaleSession; request after shutdown reports Closed."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71246,7 +71246,7 @@
         "Relative source path is InvalidRequest.",
         "Overlapping import is Busy; wrong import id cannot cancel another operation."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71413,7 +71413,7 @@
         "Wrong restore_id fails; refusal to acknowledge pending jobs leaves jobs held.",
         "Existing restore destination or altered bundle digest fails without replacing existing catalog."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71532,7 +71532,7 @@
         "Search rating6 or limit0 is InvalidRequest.",
         "Stale edit/metadata revision cannot overwrite a newer recipe or cull."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71699,7 +71699,7 @@
         "Expired/unknown ticket gives StaleSession.",
         "Canceled or superseded viewport request cannot deliver current-generation authority."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71893,7 +71893,7 @@
       "faults": [
         "Invalid VariantKey fails; mixed source/image key is rejected."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -71988,32 +71988,38 @@
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 125,
+          "line": 161,
           "symbol": "raw_clipped_neutral_and_real_colors_preserve_linear_headroom",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 208,
+          "line": 244,
           "symbol": "raw_sensor_admission_precedes_unpack",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 246,
+          "line": 282,
           "symbol": "custom_raw_white_uses_camera_response_before_development",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 291,
+          "line": 327,
           "symbol": "requested_dng_white_maps_independent_camera_neutrals_to_gray",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 382,
+          "line": 418,
           "symbol": "integer_raw_provenance_carries_the_neutral_clip_level",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/media/raw_highlight_tests.rs",
+          "line": 437,
+          "symbol": "integer_gain_mapped_dng_reports_no_neutral_clip_level",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -72034,7 +72040,7 @@
         "Wrong fingerprint or decoded allocation limit fails before admission.",
         "Cancellation/stale source blocks publication."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": [
         {
@@ -72129,32 +72135,38 @@
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 125,
+          "line": 161,
           "symbol": "raw_clipped_neutral_and_real_colors_preserve_linear_headroom",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 208,
+          "line": 244,
           "symbol": "raw_sensor_admission_precedes_unpack",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 246,
+          "line": 282,
           "symbol": "custom_raw_white_uses_camera_response_before_development",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 291,
+          "line": 327,
           "symbol": "requested_dng_white_maps_independent_camera_neutrals_to_gray",
           "status": "source_discovered_not_executed_here"
         },
         {
           "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-          "line": 382,
+          "line": 418,
           "symbol": "integer_raw_provenance_carries_the_neutral_clip_level",
+          "status": "source_discovered_not_executed_here"
+        },
+        {
+          "file": "engines/catalog/src/media/raw_highlight_tests.rs",
+          "line": 437,
+          "symbol": "integer_gain_mapped_dng_reports_no_neutral_clip_level",
           "status": "source_discovered_not_executed_here"
         }
       ]
@@ -72174,7 +72186,7 @@
       "faults": [
         "Unknown enum discriminator/denied unknown field and noncanonical decimal forms fail."
       ],
-      "source_revision": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
+      "source_revision": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f",
       "upstream_revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "baseline_test_evidence": []
     }

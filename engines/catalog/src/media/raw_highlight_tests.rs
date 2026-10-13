@@ -10,6 +10,30 @@ fn u32s(values: &[u32]) -> Vec<u8> {
 }
 
 fn fixture(neutral: [f64; 3]) -> Vec<u8> {
+    fixture_with(neutral, false)
+}
+
+/// A DNG 1.7 ProfileGainTableMap (tag 52525): 2 x 2 map points over the whole image, two table
+/// points per map point, with gains that rise across the image and with the pixel's weight.
+fn gain_table_map() -> Vec<u8> {
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&u32s(&[2, 2]));
+    for value in [1.0f64, 1.0, 0.0, 0.0] {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob.extend_from_slice(&u32s(&[2]));
+    for weight in [0.0f32, 0.25, 0.0, 0.0, 0.25] {
+        blob.extend_from_slice(&weight.to_le_bytes());
+    }
+    for (y, x, w) in (0..2).flat_map(|y| (0..2).flat_map(move |x| (0..2).map(move |w| (y, x, w)))) {
+        let gain = 1.0f32 + 0.2 * y as f32 + 0.4 * x as f32 + 0.6 * w as f32;
+        blob.extend_from_slice(&gain.to_le_bytes());
+    }
+    blob
+}
+
+/// The analytic integer RGGB DNG, optionally carrying a spatial gain map.
+fn fixture_with(neutral: [f64; 3], gain_map: bool) -> Vec<u8> {
     // Fixed IEC sRGB/D65 XYZ-to-RGB coefficients, independently specified.
     // ColorMatrix = diag(AsShotNeutral) * XYZ_to_sRGB makes the balanced
     // camera primaries sRGB. LibRaw may round its matrix, so allow 0.003 error.
@@ -92,6 +116,18 @@ fn fixture(neutral: [f64; 3]) -> Vec<u8> {
         (50728, 5, 3, as_shot),
         (50778, 3, 1, u16s(&[21])),
     ];
+    if gain_map {
+        // ProfileGainTableMap needs DNG 1.6 to read.
+        for tag in tags.iter_mut() {
+            match tag.0 {
+                50706 => tag.3 = vec![1, 7, 1, 0],
+                50707 => tag.3 = vec![1, 6, 0, 0],
+                _ => {}
+            }
+        }
+        let blob = gain_table_map();
+        tags.push((52525, 7, blob.len() as u32, blob));
+    }
     tags.sort_by_key(|t| t.0);
     let mut output = b"II\x2a\0\x08\0\0\0".to_vec();
     output.extend_from_slice(&(tags.len() as u16).to_le_bytes());
@@ -393,4 +429,33 @@ fn integer_raw_provenance_carries_the_neutral_clip_level() {
         let read: super::RenderProvenance = serde_json::from_value(wire).unwrap();
         assert_eq!(read.neutral_clip, Some(clip));
     }
+}
+
+/// The guard in the DNG decoder: integer sensor data normally reports where a neutral subject
+/// first clips, but a spatial gain map scales highlights by position, so no single level holds
+/// and none is reported. The same file without the map reports one.
+#[test]
+fn integer_gain_mapped_dng_reports_no_neutral_clip_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let neutral = [0.5, 1.0, 0.4];
+    let plain = dir.path().join("plain.dng");
+    std::fs::write(&plain, fixture_with(neutral, false)).unwrap();
+    let plain = super::decode_full(&plain).unwrap();
+    assert_eq!(plain.provenance.source_bits_per_channel, 16);
+    assert!(plain.provenance.spatial_calibration.is_none());
+    assert!(plain.provenance.neutral_clip.is_some());
+
+    let mapped = dir.path().join("mapped.dng");
+    std::fs::write(&mapped, fixture_with(neutral, true)).unwrap();
+    let mapped = super::decode_full(&mapped).unwrap();
+    // Integer samples (not the floating-point case, which reports no level for its own reason).
+    assert_eq!(mapped.provenance.source_bits_per_channel, 16);
+    let applied = mapped.provenance.spatial_calibration.as_ref().expect("the gain map was applied");
+    assert_eq!(applied.applied_pixels, 512 * 64);
+    assert!(mapped.provenance.neutral_clip.is_none(), "{:?}", mapped.provenance.neutral_clip);
+    // The map really changed the picture: gain rises from left to right over the neutral patches.
+    assert_eq!((mapped.width, mapped.height), (plain.width, plain.height));
+    let at = |image: &super::RenderedImage, x: usize| image.pixels[32 * image.width as usize + x];
+    let (left, right) = (at(&mapped, 32)[1] / at(&plain, 32)[1], at(&mapped, 160)[1] / at(&plain, 160)[1]);
+    assert!(left > 1.0 && right > left, "gain {left} then {right}");
 }

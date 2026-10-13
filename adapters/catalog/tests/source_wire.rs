@@ -1860,6 +1860,10 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
         "application::organization::ImageIdentity::struct",
         r####"{"image_id":"fixture-image_id","key":{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"},"metadata_revision":"1","pixel_generation":"1","shared_source_epoch":"1","physical_generation":"1"}"####,
     );
+    check::<photocatalog::application::organization::ImageState>(
+        "application::organization::ImageState::struct",
+        r####"{"identity":{"image_id":"fixture-image_id","key":{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"},"metadata_revision":"1","pixel_generation":"1","shared_source_epoch":"1","physical_generation":"1"},"rating":"fixture-rating","label":"Blue","flag":"unflagged","effective_flag":"unflagged","keywords":[{"kind":"flat","path":["fixture-path"]}],"member":false,"position":"1"}"####,
+    );
     check::<photocatalog::application::organization::Job>(
         "application::organization::Job::struct",
         r####"{"id":"fixture-id","operation":{"operation":"rating","value":4},"state":"fixture-state","pending":"1","applied":"1","failed":"1","skipped":"1"}"####,
@@ -1871,6 +1875,10 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
     check::<photocatalog::application::organization::Keyword>(
         "application::organization::Keyword::struct",
         r####"{"id":"1","kind":"flat","parent":"1","name":"Picks","path":["fixture-path"]}"####,
+    );
+    check::<photocatalog::application::organization::KeywordTarget>(
+        "application::organization::KeywordTarget::struct",
+        r####"{"kind":"flat","path":["fixture-path"]}"####,
     );
     check::<photocatalog::application::organization::Member>(
         "application::organization::Member::struct",
@@ -1905,12 +1913,20 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
         r####"{"command":"delete_keyword","args":{"id":"1"}}"####,
     );
     check::<photocatalog::application::organization::Request>(
+        "application::organization::Request::FindKeyword",
+        r####"{"command":"find_keyword","args":{"kind":"flat","path":["fixture-path"]}}"####,
+    );
+    check::<photocatalog::application::organization::Request>(
         "application::organization::Request::Synonyms",
         r####"{"command":"synonyms","args":{"keyword":"1","after":"fixture-after","limit":2}}"####,
     );
     check::<photocatalog::application::organization::Request>(
         "application::organization::Request::AddSynonym",
         r####"{"command":"add_synonym","args":{"keyword":"1","synonym":"LW"}}"####,
+    );
+    check::<photocatalog::application::organization::Request>(
+        "application::organization::Request::RemoveSynonym",
+        r####"{"command":"remove_synonym","args":{"keyword":"1","synonym":"LW"}}"####,
     );
     check::<photocatalog::application::organization::Request>(
         "application::organization::Request::Collections",
@@ -1953,6 +1969,10 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
         r####"{"command":"set_member","args":{"identity":{"image_id":"fixture-image_id","key":{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"},"metadata_revision":"1","pixel_generation":"1","shared_source_epoch":"1","physical_generation":"1"},"collection":"fixture-collection","position":"1"}}"####,
     );
     check::<photocatalog::application::organization::Request>(
+        "application::organization::Request::States",
+        r####"{"command":"states","args":{"keys":[{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"}],"keywords":[{"kind":"flat","path":["fixture-path"]}],"collection":"fixture-collection"}}"####,
+    );
+    check::<photocatalog::application::organization::Request>(
         "application::organization::Request::Apply",
         r####"{"command":"apply","args":{"key":{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"},"expected_revision":"1","operation":{"operation":"rating","value":4}}}"####,
     );
@@ -1971,6 +1991,10 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
     check::<photocatalog::application::organization::Request>(
         "application::organization::Request::Step",
         r####"{"command":"step","args":{"job":"00000000-0000-4000-8000-000000000004"}}"####,
+    );
+    check::<photocatalog::application::organization::Request>(
+        "application::organization::Request::Run",
+        r####"{"command":"run","args":{"job":"00000000-0000-4000-8000-000000000004","limit":2}}"####,
     );
     check::<photocatalog::application::organization::Request>(
         "application::organization::Request::Cancel",
@@ -2001,6 +2025,10 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
         r####"{"kind":"keyword_created","value":{"id":"1"}}"####,
     );
     check::<photocatalog::application::organization::Response>(
+        "application::organization::Response::Keyword",
+        r####"{"kind":"keyword","value":{"id":"1","kind":"flat","parent":"1","name":"Picks","path":["fixture-path"]}}"####,
+    );
+    check::<photocatalog::application::organization::Response>(
         "application::organization::Response::Synonyms",
         r####"{"kind":"synonyms","value":{"rows":[{"synonym":"LW","provenance_json":"fixture-provenance_json"}],"next":"fixture-next"}}"####,
     );
@@ -2027,6 +2055,10 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
     check::<photocatalog::application::organization::Response>(
         "application::organization::Response::Identity",
         r####"{"kind":"identity","value":{"image_id":"fixture-image_id","key":{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"},"metadata_revision":"1","pixel_generation":"1","shared_source_epoch":"1","physical_generation":"1"}}"####,
+    );
+    check::<photocatalog::application::organization::Response>(
+        "application::organization::Response::States",
+        r####"{"kind":"states","value":[{"identity":{"image_id":"fixture-image_id","key":{"asset_id":"00000000-0000-4000-8000-000000000001","variant_id":"master"},"metadata_revision":"1","pixel_generation":"1","shared_source_epoch":"1","physical_generation":"1"},"rating":"fixture-rating","label":"Blue","flag":"unflagged","effective_flag":"unflagged","keywords":[{"kind":"flat","path":["fixture-path"]}],"member":false,"position":"1"}]}"####,
     );
     check::<photocatalog::application::organization::Response>(
         "application::organization::Response::Changed",
@@ -2892,6 +2924,18 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
     check::<photocatalog::organization::Operation>(
         "organization::Operation::RemoveCollection",
         r####"{"operation":"remove_collection","collection":"fixture-collection"}"####,
+    );
+    check::<photocatalog::organization::Operation>(
+        "organization::Operation::RestoreRating",
+        r####"{"operation":"restore_rating","value":"fixture-value"}"####,
+    );
+    check::<photocatalog::organization::Operation>(
+        "organization::Operation::RestoreLabel",
+        r####"{"operation":"restore_label","value":"fixture-value"}"####,
+    );
+    check::<photocatalog::organization::Operation>(
+        "organization::Operation::RestoreFlag",
+        r####"{"operation":"restore_flag","value":"unflagged"}"####,
     );
     check::<photocatalog::organization_search::Direction>(
         "organization_search::Direction::Ascending",
