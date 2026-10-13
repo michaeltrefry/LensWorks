@@ -3,60 +3,6 @@ import CoreGraphics
 import CoreImage
 
 nonisolated enum LWFloatEffects {
-    static func local(_ source:LWLinearSurface,effects:LayerEffects) throws -> (surface:LWLinearSurface,inset:CGFloat) {
-        guard effects.isValid else { throw ProjectError.invalid }
-        let visible = effects.visible, inset = LayerEffectsRenderer.margin(for:visible)
-        let w = source.width + Int(inset) * 2,h = source.height + Int(inset) * 2
-        let count = try LWLinearSurface.extent(width:w,height:h,maximumBytes:source.maximumBytes)
-        // Padded source, result, scalar shape/filter/sweep and one colored layer.
-        guard count <= source.maximumBytes / 80 else { throw ProjectError.tooLarge }
-        var padded = try LWFloatCompositor.clear(w,h)
-        for y in 0..<source.height { for x in 0..<source.width {
-            padded.pixels[(y+Int(inset))*w+x+Int(inset)] = source.pixels[y*source.width+x]
-        } }
-        let shape = padded.pixels.map(\.w)
-        var result = try LWFloatCompositor.clear(w,h)
-        func coverage(offset:CGSize = .zero,blur:CGFloat = 0) throws -> [Float] {
-            var alpha = try LWFloatCompositor.clear(w,h)
-            for i in alpha.pixels.indices { alpha.pixels[i] = SIMD4(shape[i],shape[i],shape[i],1) }
-            var image = CIImage(cgImage:try alpha.cgImage()).transformed(by:CGAffineTransform(translationX:offset.width,y:-offset.height))
-            if blur > 0 { image = image.clampedToExtent().applyingGaussianBlur(sigma:blur/2) }
-            return try LWLinearSurface.render(image.cropped(to:CGRect(x:0,y:0,width:w,height:h)),width:w,height:h,maximumBytes:source.maximumBytes).pixels.map { max(0,min(1,$0.x)) }
-        }
-        func fill(_ color:PaletteColor,opacity:Double,_ mask:[Float]) throws {
-            func linear(_ x:CGFloat) -> Float { let v=Double(x); return Float(v <= 0.04045 ? v/12.92 : pow((v+0.055)/1.055,2.4)) }
-            var layer = try LWFloatCompositor.clear(w,h)
-            let rgb = SIMD3(linear(color.red),linear(color.green),linear(color.blue))
-            for i in layer.pixels.indices { layer.pixels[i] = SIMD4(rgb.x,rgb.y,rgb.z,mask[i]*Float(opacity)) }
-            result = try LWFloatCompositor.blend(layer,over:result,mode:.normal)
-        }
-        if let shadow=visible.shadow,shadow.opacity>0 { try fill(shadow.color,opacity:shadow.opacity,coverage(offset:shadow.offset,blur:shadow.blur)) }
-        if let glow=visible.outerGlow,glow.opacity>0 {
-            let soft=try coverage(blur:glow.size)
-            try fill(glow.color,opacity:glow.opacity,shape.indices.map { soft[$0]*(1-shape[$0]) })
-        }
-        func stroke(_ s:StrokeEffect) throws {
-            let moved=LayerEffectsRenderer.extreme(shape,width:w,height:h,reach:max(1,Int(s.size.rounded())),smallest:s.inside)
-            let ring=shape.indices.map { s.inside ? max(0,shape[$0]-moved[$0]) : max(0,moved[$0]-shape[$0]) }
-            try fill(s.color,opacity:s.opacity,ring)
-        }
-        if let s=visible.stroke,!s.inside,s.size>0,s.opacity>0 { try stroke(s) }
-        result=try LWFloatCompositor.blend(padded,over:result,mode:.normal)
-        if let overlay=visible.colorOverlay,overlay.opacity>0 { try fill(overlay.color,opacity:overlay.opacity,shape) }
-        if let glow=visible.innerGlow,glow.opacity>0 {
-            let soft=try coverage(blur:glow.size)
-            try fill(glow.color,opacity:glow.opacity,shape.indices.map { shape[$0]*(1-soft[$0]) })
-        }
-        if let shadow=visible.innerShadow,shadow.opacity>0 {
-            let moved=try coverage(offset:shadow.offset,blur:shadow.blur)
-            try fill(shadow.color,opacity:shadow.opacity,shape.indices.map { shape[$0]*(1-moved[$0]) })
-        }
-        if let s=visible.stroke,s.inside,s.size>0,s.opacity>0 { try stroke(s) }
-        return (result,inset)
-    }
-}
-
-nonisolated extension LWFloatEffects {
     /// Global local-layer effects. Margins, morphology and filter dependencies are
     /// evaluated in one padded coordinate system, never independently per tile.
     static func local(_ source: LWFloatPlane, effects: LayerEffects,

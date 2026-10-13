@@ -191,7 +191,9 @@ nonisolated enum LWFloatBlend {
         var count = Int32(n * 6)
         vvpowf(&powered, &exponent, &magnitude, &count)
         func encoded(_ index: Int, _ signed: Float) -> Float {
-            let a = magnitude[index], y = a <= 0.0031308 ? a * 12.92 : 1.055 * powered[index] - 0.055
+            // 1.055 p - 0.055 written so that white encodes to exactly 1 (in float, 1.055 - 0.055 is one unit short of
+            // it): the rules that turn on an operand reaching 1 (Color Burn's b >= 1, Hard Mix's b + s >= 1) see it.
+            let a = magnitude[index], p = powered[index], y = a <= 0.0031308 ? a * 12.92 : p + 0.055 * (p - 1)
             return signed < 0 ? -y : y
         }
         var mixed = [Float](repeating: 0, count: n * 3)

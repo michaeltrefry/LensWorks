@@ -187,7 +187,9 @@ extension EditorSession {
     func duplicateLayers(_ ids: [UUID], editName: String = "Duplicate Layer") {
         guard canEditLayers, !ids.isEmpty else { return }
         let active = activeLayerID
-        guard beginEdit(editName) else { return }
+        // A copy of a live source layer takes a node of its own, admitted with the document's source metadata.
+        let live = document?.layers.contains { layer in layer.liveSource != nil && ids.contains { $0 == layer.id || descendantIDs(of: $0).contains(layer.id) } } ?? false
+        guard beginEdit(editName, forceSourceMetadata: live) else { return }
         var copiesOf: [UUID: UUID] = [:]
         for id in ids { if let copy = insertCopy(of: id) { copiesOf[id] = copy } }
         guard !copiesOf.isEmpty else { endEdit(); return }
@@ -217,13 +219,19 @@ extension EditorSession {
         let originals = (document?.layers ?? []).filter { included.contains($0.id) }
         guard (document?.layers.count ?? 0) + originals.count <= 10_000 else { return nil }
         let mapping = Dictionary(uniqueKeysWithValues: originals.map { ($0.id, UUID()) })
-        let copies = originals.map { original in
-            ImageLayer(id: mapping[original.id]!, asset: original.asset,
+        var copies: [ImageLayer] = []
+        for original in originals {
+            var copy = ImageLayer(id: mapping[original.id]!, asset: original.asset,
                 name: original.name + (original.id == layer.id ? " copy" : ""), isVisible: original.isVisible,
                 transform: original.transform, parentID: original.parentID.map { mapping[$0] ?? $0 },
                 isGroup: original.isGroup, opacity: original.opacity, blendMode: original.blendMode,
                 mask: original.mask, maskSourceID: original.maskSourceID.map { mapping[$0] ?? $0 },
                 adjustment: original.adjustment, shape: original.shape, effects: original.effects, text: original.text)
+            // A live source layer's copy stays a live source layer, developed on its own from the same original.
+            if let node = original.liveSource {
+                do { copy.liveSource = try node.forked() } catch { brushError = error.localizedDescription; return nil }
+            }
+            copies.append(copy)
         }
         document?.layers.insert(contentsOf: copies, at: index + 1)
         for original in originals where collapsedGroupIDs.contains(original.id) {

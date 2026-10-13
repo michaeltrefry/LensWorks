@@ -72,10 +72,23 @@ extension EditorSession {
 }
 
 nonisolated enum LiveMaskBaker {
-    static func bake(_ snapshot: ProjectSnapshot, target: UUID) throws -> ImportedImage? {
+    /// What a bake leaves in the dependent layer. A layer developed from a live source keeps its pixels' authority
+    /// (they are developed afresh from the original on every export and recipe change), so the coverage goes into
+    /// its mask; any other layer takes it into its own pixels.
+    enum Baked: @unchecked Sendable {
+        case pixels(ImportedImage), mask(LayerMask)
+        func apply(to layer: inout ImageLayer) {
+            switch self {
+            case .pixels(let asset): layer.asset = asset
+            case .mask(let mask): layer.mask = mask
+            }
+        }
+    }
+    static func bake(_ snapshot: ProjectSnapshot, target: UUID) throws -> Baked? {
         guard let record = snapshot.manifest.layers.first(where: { $0.id == target }), let original = snapshot.images[target] else { return nil }
         let w = original.image.width, h = original.image.height
-        if original.linear != nil || original.linearPlane != nil { return try bakeFloat(snapshot, record: record, original: original) }
+        if record.liveSource != nil { return try bakeLiveSource(snapshot, record: record, original: original).map { .mask($0) } }
+        if original.linear != nil || original.linearPlane != nil { return .pixels(try bakeFloat(snapshot, record: record, original: original)) }
         let context = try BrushRaster.context(width: w, height: h, mask: false)
         let inverse = BrushRaster.pixelToDocument(record.transform, width: w, height: h).inverted()
         let records = Dictionary(uniqueKeysWithValues: snapshot.manifest.layers.map { ($0.id, $0) })
@@ -94,62 +107,102 @@ nonisolated enum LiveMaskBaker {
         }
         live.draw(target, in: context)
         guard let image = context.makeImage() else { throw ExportError.render }
-        return ImportedImage(image: image, thumbnail: try PixelAdjust.thumbnail(of: image), name: original.name)
+        return .pixels(ImportedImage(image: image, thumbnail: try PixelAdjust.thumbnail(of: image), name: original.name))
     }
 }
 
 nonisolated extension LiveMaskBaker {
-    /// A float layer keeps its float samples: only its alpha is multiplied, by the coverage its source lends it
-    /// (as the float document graph computes it) resampled into the layer's own grid. The target's own mask and
-    /// appearance stay live, as in the 8-bit bake.
-    fileprivate static func bakeFloat(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, original: ImportedImage) throws -> ImportedImage? {
-        guard let source = record.maskSourceID else { return original }
+    /// The coverage a layer's source lends it (as the float document graph computes it), in the layer's own
+    /// `width` × `height` grid. It is rendered on a canvas that is the layer's bounding box in the document, not the
+    /// document's own canvas, so the parts of a layer that hang off the canvas keep their coverage; a layer placed
+    /// pixel for pixel takes it without resampling.
+    fileprivate static func lentCoverage(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, width: Int, height: Int,
+                                         workspace: LWFloatWorkspace) throws -> LWFloatPlane? {
+        guard let source = record.maskSourceID else { return nil }
         let records = Dictionary(uniqueKeysWithValues: snapshot.manifest.layers.map { ($0.id, $0) })
         // The source drawn alone, without its folders' masks: its alpha is then exactly the coverage it lends.
         var shown = Set<UUID>(), next: UUID? = source
         while let id = next, shown.insert(id).inserted { next = records[id]?.parentID }
+        let toDocument = BrushRaster.pixelToDocument(record.transform, width: width, height: height)
+        let box = CGRect(x: 0, y: 0, width: width, height: height).applying(toDocument).integral
+        guard box.width >= 1, box.height >= 1 else { throw ProjectError.invalid }
+        func shifted(_ t: LayerTransform) -> LayerTransform { var t = t; t.origin.x -= box.minX; t.origin.y -= box.minY; return t }
         var manifest = snapshot.manifest
         for i in manifest.layers.indices {
             manifest.layers[i].isVisible = shown.contains(manifest.layers[i].id)
             if manifest.layers[i].isGroup == true { manifest.layers[i].maskFile = nil }
+            manifest.layers[i].transform = shifted(manifest.layers[i].transform)
+            manifest.layers[i].maskPlacement = manifest.layers[i].maskPlacement.map(shifted)
         }
-        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+        manifest.width = Int(box.width); manifest.height = Int(box.height)
         let coverage = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks), workspace: workspace)
-        let local = try original.linearPlane ?? LWFloatCompositor.from(original.linear ?? LWLinearSurface.read(original.image, maximumBytes: LWFloatCompositor.maximumBytes), workspace: workspace)
-        let toLocal = BrushRaster.pixelToDocument(record.transform, width: local.width, height: local.height).inverted()
-        let placed = try LWFloatCompositor.project(coverage, mapping: toLocal, width: local.width, height: local.height,
+        let toLocal = toDocument.concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY)).inverted()
+        if toLocal.isIdentity, coverage.width == width, coverage.height == height { return coverage }
+        return try LWFloatCompositor.project(coverage, mapping: toLocal, width: width, height: height,
             workspace: workspace, sampling: record.transform.sampling)
-        let sampler = placed.sampler()
+    }
+    /// A float layer keeps its float samples: only its alpha is multiplied, by the coverage its source lends it.
+    /// The target's own mask and appearance stay live, as in the 8-bit bake.
+    fileprivate static func bakeFloat(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, original: ImportedImage) throws -> ImportedImage {
+        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+        let local = try original.linearPlane ?? LWFloatCompositor.from(original.linear ?? LWLinearSurface.read(original.image, maximumBytes: LWFloatCompositor.maximumBytes), workspace: workspace)
+        guard let sampler = try lentCoverage(snapshot, record: record, width: local.width, height: local.height, workspace: workspace)?.sampler() else { return original }
         let baked = try LWFloatCompositor.map(local, workspace: workspace) { pixel, x, y in
             var result = pixel; result.w *= try sampler.pixel(x: x, y: y).w; return result
         }
         return try ImportedImage(plane: baked, name: original.name)
     }
+    /// A live source layer: the coverage multiplied into the layer's own mask, in the layer's grid (one is made
+    /// when it has none, and a mask that was switched off is replaced, since it showed nothing). Its developed
+    /// pixels and its source node are untouched, so export and every later development keep the baked look.
+    fileprivate static func bakeLiveSource(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, original: ImportedImage) throws -> LayerMask? {
+        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+        let width = original.image.width, height = original.image.height
+        guard let lent = try lentCoverage(snapshot, record: record, width: width, height: height, workspace: workspace) else { return nil }
+        let existing = snapshot.mask(for: record)
+        let own = try existing.flatMap { $0.isEnabled ? try LWSourceMaskReconcile.coveragePlane($0, over: record.transform, width: width, height: height, workspace: workspace).sampler() : nil }
+        let made = try LWFloatCompositor.map(lent, workspace: workspace) { pixel, x, y in
+            SIMD4(repeating: min(1, max(0, pixel.w * (try own?.pixel(x: x, y: y).w ?? 1))))
+        }
+        return LayerMask(asset: try ImportedImage(maskPlane: made, name: existing?.asset.name ?? "Layer Mask"), isLinked: existing?.isLinked ?? true)
+    }
 }
 
 extension EditorSession {
-    func deleteWithLiveMaskChoice(_ id: UUID) -> Bool { deleteWithLiveMaskChoice([id]) }
-    /// When layers being deleted supply live masks to layers that stay, asks whether to bake or unlink,
-    /// then deletes them all; returns false, having done nothing, when none do.
-    func deleteWithLiveMaskChoice(_ ids: [UUID]) -> Bool {
-        let removed = ids.reduce(into: Set<UUID>()) { $0.formUnion(descendantIDs(of: $1).union([$1])) }
-        let targets = (document?.layers ?? []).filter { !removed.contains($0.id) && $0.maskSourceID.map(removed.contains) == true }.map(\.id)
-        guard !targets.isEmpty else { return false }
+    /// What to do with the layers that take their alpha from layers being deleted.
+    enum LiveMaskDeletion { case bake, removeLinks, cancel }
+    /// The alert that asks; `count` is how many layers are being deleted.
+    static func askLiveMaskDeletion(count: Int) -> LiveMaskDeletion {
         let alert = NSAlert()
-        alert.messageText = ids.count == 1 ? "This layer supplies a live mask" : "These layers supply live masks"
-        alert.informativeText = "Bake keeps the current masked appearance in the dependent layers’ pixels. Remove Links reveals their pixels. You can undo either choice."
+        alert.messageText = count == 1 ? "This layer supplies a live mask" : "These layers supply live masks"
+        alert.informativeText = "Bake keeps the current masked appearance in the dependent layers. Remove Links reveals their pixels. You can undo either choice."
         alert.addButton(withTitle: "Bake and Delete")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Remove Links and Delete")
-        let response = alert.runModal()
-        if response == .alertThirdButtonReturn { finishDeletingLayers(ids, baked: [:]); return true }
-        guard response == .alertFirstButtonReturn, let snapshot = projectSnapshot() else { return true }
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .bake
+        case .alertThirdButtonReturn: return .removeLinks
+        default: return .cancel
+        }
+    }
+    func deleteWithLiveMaskChoice(_ id: UUID) -> Bool { deleteWithLiveMaskChoice([id]) }
+    /// When layers being deleted supply live masks to layers that stay, asks whether to bake or unlink,
+    /// then deletes them all; returns false, having done nothing, when none do. `choose` is the question put to
+    /// the person (the alert, unless a caller answers it itself). A bake runs off the main thread: the session is
+    /// busy until the layers are gone.
+    func deleteWithLiveMaskChoice(_ ids: [UUID], choose: (Int) -> LiveMaskDeletion = EditorSession.askLiveMaskDeletion) -> Bool {
+        let removed = ids.reduce(into: Set<UUID>()) { $0.formUnion(descendantIDs(of: $1).union([$1])) }
+        let targets = (document?.layers ?? []).filter { !removed.contains($0.id) && $0.maskSourceID.map(removed.contains) == true }.map(\.id)
+        guard !targets.isEmpty else { return false }
+        let choice = choose(ids.count)
+        if choice == .removeLinks { finishDeletingLayers(ids, baked: [:]); return true }
+        guard choice == .bake, let snapshot = projectSnapshot() else { return true }
         isProjectBusy = true
         Task {
             defer { isProjectBusy = false }
             do {
                 let baked = try await Task.detached(priority: .userInitiated) {
-                    var result: [UUID: ImportedImage] = [:]
+                    var result: [UUID: LiveMaskBaker.Baked] = [:]
                     for target in targets { result[target] = try LiveMaskBaker.bake(snapshot, target: target) }
                     return result
                 }.value
@@ -158,7 +211,7 @@ extension EditorSession {
         }
         return true
     }
-    func finishDeletingLayer(_ id: UUID, baked: [UUID: ImportedImage]) {
+    func finishDeletingLayer(_ id: UUID, baked: [UUID: LiveMaskBaker.Baked]) {
         guard let index = document?.layers.firstIndex(where: { $0.id == id }) else { return }
         let removed = descendantIDs(of: id).union([id])
         guard beginEdit("Delete Layer") else { return }
@@ -166,7 +219,7 @@ extension EditorSession {
         for i in document?.layers.indices ?? 0..<0 {
             if let source = document?.layers[i].maskSourceID, removed.contains(source) {
                 document?.layers[i].maskSourceID = nil
-                if let asset = baked[document!.layers[i].id] { document?.layers[i].asset = asset }
+                baked[document!.layers[i].id]?.apply(to: &document!.layers[i])
             }
         }
         if activeLayerID.map({ removed.contains($0) }) == true {
@@ -176,7 +229,7 @@ extension EditorSession {
         endEdit()
     }
     /// Deletes several layers (a folder with its contents) as one undo step.
-    func finishDeletingLayers(_ ids: [UUID], baked: [UUID: ImportedImage]) {
+    func finishDeletingLayers(_ ids: [UUID], baked: [UUID: LiveMaskBaker.Baked]) {
         guard ids.count > 1 else { if let id = ids.first { finishDeletingLayer(id, baked: baked) }; return }
         guard beginEdit("Delete Layers") else { return }
         for id in ids { finishDeletingLayer(id, baked: baked) }

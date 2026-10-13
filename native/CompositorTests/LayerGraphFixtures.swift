@@ -70,6 +70,14 @@ enum LayerGraphFixture {
         return ProjectLayerRecord(id: id, name: name, isVisible: visible, transform: transform, imageFile: nil, parentID: parent, isGroup: true, opacity: opacity)
     }
 
+    /// An adjustment layer over the whole `width` × `height` document.
+    static func adjustment(id: UUID = UUID(), _ name: String, _ adjustment: LayerAdjustment, width: Int, height: Int, parent: UUID? = nil,
+                           mode: LayerBlendMode = .normal, opacity: Double = 1, clip: UUID? = nil) -> ProjectLayerRecord {
+        var record = folder(id: id, name, width: width, height: height, parent: parent, opacity: opacity)
+        record.isGroup = nil; record.adjustment = adjustment; record.blendMode = mode; record.maskSourceID = clip
+        return record
+    }
+
     // MARK: Rendering
 
     /// Straight extended-linear float samples of the whole document.
@@ -85,14 +93,35 @@ enum LayerGraphFixture {
         }
         return pixels
     }
-    /// The same document through the tile cache, one evaluation block at a time.
+    /// The same document through the tile cache, one tile at a time: each tile is asked for on its own, so it is
+    /// evaluated as a region of its own, with every layer and mask placed relative to that region. (Asked for whole,
+    /// a document this size is one region, the frame itself.)
     static func tiled(_ snapshot: ProjectSnapshot, workingSet: LWFloatWorkingSet) throws -> [SIMD4<Float>] {
-        let tiles = try LWDocumentTileRenderer(budgetBytes: 64 * 1024 * 1024, workingSet: workingSet)
-        return try tiles.surface(LWFloatRange(x: 0, y: 0, width: snapshot.manifest.width, height: snapshot.manifest.height), plan: tiles.plan(snapshot)).pixels
+        let tiles = try LWDocumentTileRenderer(budgetBytes: 64 * 1024 * 1024, workingSet: workingSet), plan = try tiles.plan(snapshot)
+        let w = snapshot.manifest.width, h = snapshot.manifest.height, side = LWDocumentTileRenderer.tileSide
+        var pixels = [SIMD4<Float>](repeating: .zero, count: w * h)
+        for y in stride(from: 0, to: h, by: side) { for x in stride(from: 0, to: w, by: side) {
+            let range = LWFloatRange(x: x, y: y, width: min(side, w - x), height: min(side, h - y))
+            let tile = try tiles.surface(range, plan: plan).pixels
+            for row in 0..<range.height {
+                pixels.replaceSubrange((y + row) * w + x ..< (y + row) * w + x + range.width, with: tile[row * range.width ..< (row + 1) * range.width])
+            }
+        } }
+        return pixels
     }
     static func encode(_ x: Float) -> Double {
         let v = Double(x), a = abs(v), y = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1 / 2.4) - 0.055
         return v < 0 ? -y : y
+    }
+    static func decode(_ y: Double) -> Double {
+        let a = abs(y), v = a <= 0.04045 ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4)
+        return y < 0 ? -v : v
+    }
+    /// Premultiplied sRGB levels as one straight extended-linear sample: the pixel an 8-bit layer holds.
+    static func straight(_ levels: SIMD4<Double>) -> SIMD4<Float> {
+        guard levels.w > 0 else { return .zero }
+        func channel(_ v: Double) -> Float { Float(decode(min(1, max(0, v / levels.w)))) }
+        return SIMD4(channel(levels.x), channel(levels.y), channel(levels.z), Float(levels.w / 255))
     }
     /// Straight float samples as premultiplied sRGB levels (0...255, unrounded).
     static func levels(_ pixels: [SIMD4<Float>]) -> [SIMD4<Double>] {

@@ -10,25 +10,6 @@ nonisolated enum LWFloatCompositor {
         let n = try LWLinearSurface.extent(width:width,height:height,maximumBytes:maximumBytes)
         return try LWLinearSurface(width:width,height:height,pixels:[SIMD4<Float>](repeating:.zero,count:n),maximumBytes:maximumBytes)
     }
-    static func place(_ image:CGImage, transform:LayerTransform, width:Int,height:Int) throws -> LWLinearSurface {
-        let context = try LWLinearSurface.context(width:width,height:height,maximumBytes:maximumBytes)
-        context.translateBy(x:0,y:CGFloat(height)); context.scaleBy(x:1,y:-1)
-        context.translateBy(x:transform.center.x,y:transform.center.y)
-        context.rotate(by:transform.radians)
-        context.scaleBy(x:transform.flipX ? -1 : 1,y:transform.flipY ? 1 : -1)
-        context.interpolationQuality = transform.sampling.quality
-        context.draw(image,in:CGRect(x:-transform.size.width/2,y:-transform.size.height/2,width:transform.size.width,height:transform.size.height))
-        guard let made = context.makeImage() else { throw ExportError.render }
-        return try LWLinearSurface.read(made,maximumBytes:maximumBytes)
-    }
-    static func intrinsicMask(_ image:CGImage, transform:LayerTransform,width:Int,height:Int) throws -> [Float] {
-        // Promotes the declared coverage to float. This is not a source alpha conversion.
-        let context = try LWLinearSurface.context(width:width,height:height,maximumBytes:maximumBytes)
-        context.translateBy(x:0,y:CGFloat(height)); context.scaleBy(x:1,y:-1)
-        LayerRenderer.drawCoverage(image,transform:transform,in:context)
-        guard let made = context.makeImage() else { throw ExportError.render }
-        return try LWLinearSurface.read(made,maximumBytes:maximumBytes).pixels.map(\.w)
-    }
     /// Straight extended-linear float in and out. Core Image's blend kernels clamp operands and
     /// results to [0, 1]; LWFloatBlend keeps the same in-range definition without that clamp.
     static func blend(_ top:LWLinearSurface, over bottom:LWLinearSurface,mode:LayerBlendMode) throws -> LWLinearSurface {
@@ -416,8 +397,6 @@ nonisolated extension LWFloatCompositor {
         try LWFloatPlane.validateExtent(width: snapshot.manifest.width, height: snapshot.manifest.height)
         var snapshot = snapshot, documentOrigin = CGPoint.zero
         let documentHeight = snapshot.manifest.height
-        // A folder or adjustment mask without its own placement covers the whole document.
-        var documentMaskFrame = LayerTransform(origin: .zero, size: CGSize(width: snapshot.manifest.width, height: snapshot.manifest.height))
         if let region {
             _ = try region.validate(frameWidth: snapshot.manifest.width, frameHeight: snapshot.manifest.height)
             var manifest = snapshot.manifest
@@ -430,14 +409,15 @@ nonisolated extension LWFloatCompositor {
             manifest.width = region.width; manifest.height = region.height
             snapshot = ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, workingVersion: snapshot.workingVersion)
             documentOrigin = CGPoint(x: dx, y: dy)
-            documentMaskFrame.origin = CGPoint(x: -dx, y: -dy)
         }
         let width = snapshot.manifest.width, height = snapshot.manifest.height
         let records = Dictionary(uniqueKeysWithValues: snapshot.manifest.layers.map { ($0.id, $0) })
         var visiting = Set<UUID>()
         func checkedMask(_ layer: ProjectLayerRecord, local: LWFloatPlane? = nil) throws -> LWFloatPlane? {
             guard var mask = snapshot.mask(for: layer), mask.isEnabled else { return nil }
-            if local == nil, mask.placement == nil { mask.placement = documentMaskFrame }
+            // A folder's or an adjustment's mask without a placement of its own sits where the layer's own frame puts it
+            // (the whole document, until the canvas is flipped or the folder transformed), as in the retained compositor.
+            if local == nil, mask.placement == nil { mask.placement = layer.transform }
             let w = local?.width ?? width, h = local?.height ?? height
             let target = local != nil ? layer.transform : LayerTransform(origin:.zero,size:CGSize(width:w,height:h))
             return try LWSourceMaskReconcile.coveragePlane(mask,over:target,width:w,height:h,workspace:workspace)
@@ -507,20 +487,31 @@ nonisolated extension LWFloatCompositor {
             }
             return result
         }
-        /// `inStack`: the adjustment is clipped inside a clipping stack, whose base already carries the folders' masks.
-        func adjusted(_ old: LWFloatPlane, layer: ProjectLayerRecord, clipping: LWFloatPlane?, keepAlpha: Bool, inStack: Bool = false) throws -> LWFloatPlane {
+        /// An adjustment changes colour only: what is below keeps its alpha. `inStack`: the adjustment is clipped inside
+        /// a clipping stack, whose base already carries the folders' masks.
+        func adjusted(_ old: LWFloatPlane, layer: ProjectLayerRecord, inStack: Bool = false) throws -> LWFloatPlane {
             guard let adjustment = layer.adjustment else { throw ProjectError.invalid }
             var made = try adjustment.apply(old, region: CGRect(x: documentOrigin.x, y: documentOrigin.y, width: CGFloat(width), height: CGFloat(height)), scale: 1,
                 makeBuilder: { try workspace.makeBuilder(width: $0, height: $1) }, makeScratchDirectory: { try workspace.makeScratchDirectory() }, fileOwner: workspace,
                 documentHeight: documentHeight)
             if (layer.blendMode ?? .normal) != .normal { made = try blend(made, over: old, mode: layer.blendMode ?? .normal, workspace: workspace) }
-            let newPixels = made.sampler(), clip = clipping?.sampler()
+            let newPixels = made.sampler()
             let mask = try checkedMask(layer)?.sampler(), folder = inStack ? nil : try folderCoverage(layer)?.sampler()
             let opacity = Float(layer.effectiveOpacity(in: records))
+            typealias K = FloatImageAdjustmentPixels
             return try map(old, workspace: workspace) { before, x, y in
-                let amount = try opacity * (clip?.pixel(x: x, y: y).w ?? 1) * (mask?.pixel(x: x, y: y).w ?? 1) * (folder?.pixel(x: x, y: y).w ?? 1)
-                var result = before + (try newPixels.pixel(x: x, y: y) - before) * amount
-                if keepAlpha { result.w = before.w }; return result
+                let amount = try opacity * (mask?.pixel(x: x, y: y).w ?? 1) * (folder?.pixel(x: x, y: y).w ?? 1)
+                guard amount > 0 else { return before }
+                var result = try newPixels.pixel(x: x, y: y)
+                if amount < 1 {
+                    // The adjusted colour lies over the original as a Normal layer at `amount`: mixed in encoded sRGB,
+                    // the rule every layer blends by (LWFloatBlend) and what the retained compositor does.
+                    for c in 0..<3 {
+                        let below = K.encode(Double(before[c])), above = K.encode(Double(result[c]))
+                        result[c] = Float(K.decode(below + (above - below) * Double(amount)))
+                    }
+                }
+                result.w = before.w; return result
             }
         }
         let visible = LayerHierarchy.visibleLayers(snapshot.manifest.layers)
@@ -529,7 +520,9 @@ nonisolated extension LWFloatCompositor {
             try Task.checkCancellation()
             let layer = visible[index]
             if layer.adjustment != nil {
-                output = try adjusted(output, layer: layer, clipping: layer.maskSourceID.map(alpha), keepAlpha: true)
+                // An adjustment clipped to a layer acts only inside that layer's clipping stack. Outside one (its base
+                // hidden, or linked to a layer that is not directly below it) it does nothing, as in the retained compositor.
+                if layer.maskSourceID == nil { output = try adjusted(output, layer: layer) }
                 index += 1; continue
             }
             var foreground = try own(layer)
@@ -546,7 +539,7 @@ nonisolated extension LWFloatCompositor {
                 foreground = try settingAlpha(foreground, to: nil)
                 while next < visible.count, visible[next].maskSourceID == layer.id, visible[next].parentID == layer.parentID {
                     let child = visible[next]
-                    if child.adjustment != nil { foreground = try adjusted(foreground, layer: child, clipping: nil, keepAlpha: true, inStack: true) }
+                    if child.adjustment != nil { foreground = try adjusted(foreground, layer: child, inStack: true) }
                     else {
                         let childPixels = try applyAlpha(own(child), coverage: nil, opacity: Float(child.effectiveOpacity(in: records)))
                         foreground = try blend(childPixels, over: foreground, mode: child.blendMode ?? .normal, workspace: workspace)

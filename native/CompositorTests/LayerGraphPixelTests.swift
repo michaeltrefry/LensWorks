@@ -27,10 +27,39 @@ import CoreGraphics
             if let image { images[record.id] = image }
             return record.id
         }
+        @MainActor func reference() throws -> Reference? { try LayerGraphPixelTests.reference(self) }
         func snapshot(document: UUID = UUID()) -> ProjectSnapshot {
             ProjectSnapshot(manifest: ProjectManifest(documentID: document, width: width, height: height, activeLayerID: layers.last?.id, layers: layers),
                 images: images.mapValues { F.asset($0) }, masks: masks)
         }
+    }
+
+    /// The graph's `Reference`, read from its 8-bit images and masks. Nil when the graph has something `Reference`
+    /// does not evaluate (an adjustment, a flipped or resampled layer, a mask placed apart from its layer).
+    private static func reference(_ graph: Graph) throws -> Reference? {
+        var pixels: [UUID: [SIMD4<Float>]] = [:], masks: [UUID: [Float]] = [:]
+        let w = graph.width, h = graph.height
+        func placed<T>(_ values: [T], _ iw: Int, _ ih: Int, at origin: CGPoint, outside: T) -> [T] {
+            let ox = Int(origin.x), oy = Int(origin.y)
+            return (0..<w * h).map { i in
+                let x = i % w - ox, y = i / w - oy
+                return x >= 0 && y >= 0 && x < iw && y < ih ? values[y * iw + x] : outside
+            }
+        }
+        for layer in graph.layers {
+            let t = layer.transform
+            guard layer.adjustment == nil, layer.maskPlacement == nil, t.rotation == 0, !t.flipX, !t.flipY,
+                  t.origin.x == t.origin.x.rounded(), t.origin.y == t.origin.y.rounded() else { return nil }
+            if let image = graph.images[layer.id] {
+                guard t.size == CGSize(width: image.width, height: image.height) else { return nil }
+                pixels[layer.id] = placed(try F.levels(image).map(F.straight), image.width, image.height, at: t.origin, outside: .zero)
+            }
+            if let mask = graph.masks[layer.id]?.image {
+                guard t.size == CGSize(width: mask.width, height: mask.height) else { return nil }
+                masks[layer.id] = placed(try GuidedMatte.levels(of: mask, width: mask.width, height: mask.height), mask.width, mask.height, at: t.origin, outside: 1)
+            }
+        }
+        return Reference(layers: graph.layers, pixels: pixels, masks: masks, count: w * h)
     }
 
     /// `scale` 1 is the small document compared with the retained compositor; larger scales spread the same
@@ -111,40 +140,176 @@ import CoreGraphics
             let base = put("Flipped base", seed: 4, 36, 28, at: at(10, 16), mode: .multiply)
             flip(base, x: true, y: true)
             _ = put("Clipped to flipped", seed: 5, 44, 34, at: at(8, 12), opacity: 0.8, clip: base, alpha: 255)
+        case "clipped-adjustment", "clipped-adjustment-blended", "clipped-adjustment-hidden-base":
+            // A clipping stack holding an adjustment: it changes the base's colour through its own mask, at its own
+            // opacity and in its own mode, inside the base's alpha, and the raster clipped above it paints over the
+            // result. With the base hidden there is no stack left for the adjustment to act in and it draws nothing,
+            // while the raster still takes the hidden base's alpha.
+            let folder = g.add(F.folder("Folder", width: w, height: h, opacity: 0.85), mask: try F.ramp(w, h, seed: 4))
+            let base = put("Soft base", seed: 2, 46, 36, at: at(6, 4), parent: folder, visible: !name.hasSuffix("hidden-base"))
+            g.add(F.adjustment("Clipped adjustment", LayerAdjustment(kind: .invert), width: w, height: h, parent: folder,
+                               mode: name.hasSuffix("blended") ? .multiply : .normal, opacity: 0.7, clip: base), mask: try F.ramp(w, h, seed: 5))
+            _ = put("Clipped raster", seed: 3, 30, 24, at: at(20, 14), parent: folder, mode: .screen, opacity: 0.8, clip: base)
+            _ = put("Above", seed: 6, 20, 16, at: at(40, 28), opacity: 0.9)
+        case "one-stage":
+            // One opaque layer in `mode` over the opaque backdrop: a single blend of exact 8-bit operands, with no
+            // intermediate for the retained compositor to round. Every channel meets 0 and 255, their neighbours,
+            // the complementary pairs that sum to exactly 255 (Hard Mix's threshold) and both sides of one half;
+            // the right-hand quarter is grey on grey, where the hue and saturation transfers have nothing to take.
+            let steps = [0, 255, 1, 254, 127, 128, 64, 191, 2, 253, 126, 129, 32, 223, 96, 159]
+            func level(_ index: Int, _ channel: Int, grey: Bool) -> Int { steps[(index + (grey ? 0 : channel * 5)) % steps.count] }
+            g = Graph(width: w, height: h)
+            let below = F.image(w, h) { x, _ in let grey = x >= w * 3 / 4; return (level(x / s, 0, grey: grey), level(x / s, 1, grey: grey), level(x / s, 2, grey: grey), 255) }
+            let above = F.image(w, h) { x, y in let grey = x >= w * 3 / 4; return (level(y / s, 0, grey: grey), level(y / s + x / s / 16, 1, grey: grey), level(y / s, 2, grey: grey), 255) }
+            g.add(F.raster("Backdrop", below), below)
+            g.add(F.raster("Blended", above, mode: mode), above)
         default: throw ProjectError.invalid
         }
         return g
     }
 
+    /// Modes with a threshold or a steep slope (and the hue and saturation transfers near grey), where one unit of
+    /// rounding in an operand can move the result a long way.
     static let steepModes: Set<LayerBlendMode> = [.colorBurn, .colorDodge, .vividLight, .linearLight, .hardLight, .hardMix, .divide, .hue, .saturation, .color, .luminosity]
+    /// Modes whose result is a continuous function of both operands with slope at most 2: 8-bit rounding of an
+    /// operand cannot move their result by more than `levelTolerance`.
+    static let gentleModes = Set(LayerBlendMode.allCases).subtracting([.colorBurn, .colorDodge, .vividLight, .hardMix, .divide, .hue, .saturation, .color, .luminosity])
 
-    private func compareWithRetained(_ graph: Graph, _ label: String, mode: LayerBlendMode = .normal) async throws {
+    /// Where the float graph and the retained compositor differ by more than `levelTolerance`, the difference has to
+    /// be one that 8-bit rounding explains. The retained compositor rounds what is below to 8 bits after every
+    /// layer and reads each layer as premultiplied 8 bits; a steep or thresholded mode turns that one level into a
+    /// large difference at an isolated pixel. So a pixel beyond tolerance is admitted only if the graph, evaluated
+    /// again at that pixel by `Reference` with every blend's operands moved by up to one 8-bit level, spans the
+    /// retained value. A difference in how the graph is composited, or in what a mode does at the ends of its
+    /// range, is not spanned and fails. `excused` names pixels a caller has checked against the declared rule itself.
+    private func compareWithRetained(_ graph: Graph, _ label: String, admitting: Bool = true, excused: Set<Int> = []) async throws {
+        let found = try await Self.unexplained(graph, admitting: admitting, excused: excused)
+        #expect(found.refused == 0, "\(label): \(found.refused) of \(found.outliers) pixels beyond \(Self.levelTolerance) levels are not explained by 8-bit rounding; \(found.first)")
+    }
+    /// The pixels of an all-8-bit document where the float graph and the retained compositor differ by more than
+    /// `levelTolerance` (`outliers`), and how many of those the one-level span does not explain (`refused`).
+    static func unexplained(_ graph: Graph, admitting: Bool = true, excused: Set<Int> = []) async throws -> (refused: Int, outliers: Int, first: String) {
         let snapshot = graph.snapshot()
         let retained = try F.levels(try await ImageExporter.shared.render(snapshot).image)
         let set = try LWFloatWorkingSet(limit: 256 * 1024 * 1024)
         let float = F.levels(try F.float(snapshot, workingSet: set))
-        let (error, index) = F.worst(float, retained)
-        // Modes with a threshold or a steep slope (and the hue and saturation transfers near grey) turn the
-        // retained compositor's 8-bit rounding of the layers below into large differences at isolated pixels. A
-        // difference in how the graph is composited moves whole regions instead.
-        let outliers = float.indices.filter { i in let d = float[i] - retained[i]; return max(abs(d.x), abs(d.y), abs(d.z), abs(d.w)) > Self.levelTolerance }.count
-        let allowed = Self.steepModes.contains(mode) ? float.count * 4 / 100 : 0
-        #expect(outliers <= allowed,
-            "\(label): \(outliers) of \(float.count) pixels beyond \(Self.levelTolerance) levels; worst float \(float[index]) vs retained \(retained[index]) at (\(index % graph.width), \(index / graph.width)): \(error)")
+        let outliers = float.indices.filter { i in
+            let d = float[i] - retained[i]
+            return !excused.contains(i) && max(abs(d.x), abs(d.y), abs(d.z), abs(d.w)) > Self.levelTolerance
+        }
+        guard !outliers.isEmpty else { return (0, 0, "") }
+        let reference = admitting ? try graph.reference() : nil
+        let refused = outliers.filter { i in
+            guard let reference else { return true }
+            let span = reference.span(i), tolerance = SIMD4(repeating: Self.levelTolerance)
+            // Alpha never depends on the mode or on rounding below: it has to agree outright.
+            return abs(float[i].w - retained[i].w) > Self.levelTolerance
+                || any(retained[i] .< span.lo - tolerance) || any(retained[i] .> span.hi + tolerance)
+        }
+        let first = refused.prefix(6).map { "float \(float[$0]) vs retained \(retained[$0]) at (\($0 % graph.width), \($0 / graph.width))" }.joined(separator: "; ")
+        return (refused.count, outliers.count, first)
     }
 
-    @Test(arguments: ["nested-groups", "group-masks", "clipping", "flips"])
+    @Test(arguments: ["nested-groups", "group-masks", "clipping", "flips", "clipped-adjustment", "clipped-adjustment-blended", "clipped-adjustment-hidden-base"])
     func floatGraphMatchesTheRetainedCompositor(_ name: String) async throws {
-        try await compareWithRetained(try Self.graph(name), name)
+        try await compareWithRetained(try Self.graph(name), name, admitting: false)
     }
+
+    /// What a thresholded mode gives where an 8-bit operand sits exactly on an end of its range: the declared rule
+    /// (`LWFloatBlend.extendedRules`) and the retained compositor's Core Image kernel. They agree everywhere but on
+    /// Hard Mix's threshold itself, which the declared rule includes (b + s >= 1) and Core Image's kernel does not.
+    static func boundary(_ mode: LayerBlendMode, backdrop b: Int, source s: Int) -> (declared: Int, retained: Int)? {
+        switch mode {
+        case .colorBurn: return b == 255 ? (255, 255) : s == 0 ? (0, 0) : nil
+        case .colorDodge: return b == 0 ? (0, 0) : s == 255 ? (255, 255) : nil
+        case .divide: return b == 0 ? (0, 0) : s == 0 ? (255, 255) : nil
+        case .vividLight: return b == 255 ? (255, 255) : b == 0 ? (0, 0) : nil
+        case .hardMix: return (b == 255 && s == 0) || (b == 0 && s == 255) ? (255, 0) : nil
+        default: return nil
+        }
+    }
+    /// W3C Color, B(Cb, Cs) = SetLum(Cs, Lum(Cb)), on encoded operands in 0...1: written out here, apart from the kernel.
+    static func colorBlend(backdrop b: SIMD3<Double>, source s: SIMD3<Double>) -> SIMD3<Double> {
+        func lum(_ c: SIMD3<Double>) -> Double { 0.3 * c.x + 0.59 * c.y + 0.11 * c.z }
+        var c = s + SIMD3(repeating: lum(b) - lum(s))
+        let l = lum(c), n = c.min(), x = c.max()
+        if n < 0 { c = SIMD3(repeating: l) + (c - SIMD3(repeating: l)) * (l / (l - n)) }
+        if x > 1 { c = SIMD3(repeating: l) + (c - SIMD3(repeating: l)) * ((1 - l) / (x - l)) }
+        return c
+    }
+
+    /// One blend of exact 8-bit operands, including 0 and 255: the float kernel and the retained compositor agree
+    /// on what every mode does, at the ends of its range as well as inside it. The continuous modes, and the hue,
+    /// saturation and luminosity transfers, agree at every pixel. A thresholded mode may differ only where one
+    /// level in an operand crosses its threshold, and where an operand is exactly 0 or 255 both give what the
+    /// declared rule says (`boundary`). Color agrees except where the backdrop's luminosity is within two levels of
+    /// black or white: there Core Graphics does not keep the backdrop's luminosity (over white it gives a saturated
+    /// colour), and the float kernel is held to the W3C formula instead.
+    @Test(arguments: LayerBlendMode.allCases)
+    func everyBlendModeOnOneStageMatchesTheRetainedCompositor(_ mode: LayerBlendMode) async throws {
+        let graph = try Self.graph("one-stage", mode: mode), snapshot = graph.snapshot()
+        let below = try F.levels(try #require(graph.images[graph.layers[0].id])), above = try F.levels(try #require(graph.images[graph.layers[1].id]))
+        let float = F.levels(try F.float(snapshot, workingSet: try LWFloatWorkingSet(limit: 256 * 1024 * 1024)))
+        let retained = try F.levels(try await ImageExporter.shared.render(snapshot).image)
+        // The ends of the range, channel by channel.
+        var ends = 0
+        for i in float.indices { for c in 0..<3 {
+            guard let expected = Self.boundary(mode, backdrop: Int(below[i][c]), source: Int(above[i][c])) else { continue }
+            ends += 1
+            #expect(abs(float[i][c] - Double(expected.declared)) <= 0.5 && Int(retained[i][c]) == expected.retained,
+                "\(mode) of \(Int(above[i][c])) over \(Int(below[i][c])): float \(float[i][c]) (declared \(expected.declared)), retained \(retained[i][c]) (expected \(expected.retained))")
+        } }
+        #expect((ends > 0) == [.colorBurn, .colorDodge, .divide, .vividLight, .hardMix].contains(mode))
+        var excused = Set<Int>()
+        if mode == .color {
+            for i in float.indices {
+                let b = SIMD3(below[i].x, below[i].y, below[i].z) / 255, s = SIMD3(above[i].x, above[i].y, above[i].z) / 255
+                let luminosity = (0.3 * b.x + 0.59 * b.y + 0.11 * b.z) * 255
+                guard luminosity <= 2 || luminosity >= 253 else { continue }
+                let formula = Self.colorBlend(backdrop: b, source: s) * 255, made = SIMD3(float[i].x, float[i].y, float[i].z)
+                let difference = made - formula
+                #expect(max(abs(difference.x), abs(difference.y), abs(difference.z)) <= 1, "Color of \(above[i]) over \(below[i]): float \(made), W3C \(formula)")
+                excused.insert(i)
+            }
+            #expect(!excused.isEmpty && excused.count < float.count / 8, "the luminosity bounds are a small part of the fixture")
+        }
+        let exact = Self.gentleModes.contains(mode) || [.hue, .saturation, .luminosity].contains(mode)
+        try await compareWithRetained(graph, "one stage \(mode)", admitting: !exact, excused: excused)
+    }
+
+    /// Hue and Saturation with a translucent source are where the retained compositor is not the float graph's
+    /// oracle. Core Graphics applies the source's alpha twice in the two modes that set saturation: measured on the
+    /// "blend-through-group" fixture at (16, 6), a Saturation layer of alpha 0.302 under a folder mask of 0.396 moves
+    /// the backdrop's blue from 121 to 119, where B(Cb, Cs) composited by the source-over equation gives 113.8 and
+    /// 121 + 0.396 * 0.302 * 0.302 * (B - 121) gives 118.8. On opaque operands the two agree (the one-stage test).
+    /// The float kernel follows the declared rule, so for these two modes the graph is held to that rule evaluated
+    /// per pixel on the same 8-bit inputs.
+    static let retainedAppliesSourceAlphaTwice: Set<LayerBlendMode> = [.hue, .saturation]
 
     @Test(arguments: LayerBlendMode.allCases)
     func everyBlendModeThroughAGroupBoundaryMatchesTheRetainedCompositor(_ mode: LayerBlendMode) async throws {
-        try await compareWithRetained(try Self.graph("blend-through-group", mode: mode), "\(mode)", mode: mode)
+        let graph = try Self.graph("blend-through-group", mode: mode)
+        guard Self.retainedAppliesSourceAlphaTwice.contains(mode) else { return try await compareWithRetained(graph, "\(mode)") }
+        let reference = try #require(try graph.reference())
+        let float = F.levels(try F.float(graph.snapshot(), workingSet: try LWFloatWorkingSet(limit: 256 * 1024 * 1024))), expected = F.levels(reference.render())
+        // Within tolerance of the rule on the stored 8-bit levels; or, where the float graph's own reading of an 8-bit
+        // layer (a fraction of a level off) is magnified by the transfer, within the rule's span for one level.
+        let tolerance = SIMD4(repeating: Self.levelTolerance)
+        let refused = float.indices.filter { i in
+            let d = float[i] - expected[i]
+            guard max(abs(d.x), abs(d.y), abs(d.z), abs(d.w)) > Self.levelTolerance else { return false }
+            let span = reference.span(i)
+            return abs(d.w) > Self.levelTolerance || any(float[i] .< span.lo - tolerance) || any(float[i] .> span.hi + tolerance)
+        }
+        let first = refused.first.map { "float \(float[$0]) vs the declared rule \(expected[$0]) at (\($0 % graph.width), \($0 / graph.width))" } ?? ""
+        #expect(refused.isEmpty, "\(mode): \(refused.count) pixels are not the declared rule's; \(first)")
+        // And the retained compositor really is somewhere else here: were it not, it would be the oracle again.
+        let retained = try F.levels(try await ImageExporter.shared.render(graph.snapshot()).image)
+        #expect(F.worst(float, retained).error > 2 * Self.levelTolerance, "\(mode): the retained compositor now agrees; compare with it")
     }
 
     /// The same graphs spread over 3×2 tiles: tile evaluation equals the whole frame.
-    @Test(arguments: ["nested-groups", "group-masks", "clipping", "flips", "blend-through-group"])
+    @Test(arguments: ["nested-groups", "group-masks", "clipping", "flips", "blend-through-group", "clipped-adjustment", "clipped-adjustment-blended", "clipped-adjustment-hidden-base"])
     func tiledGraphMatchesTheWholeFrame(_ name: String) throws {
         for mode in name == "blend-through-group" ? [LayerBlendMode.softLight, .linearLight, .luminosity] : [.normal] {
             let snapshot = try Self.graph(name, mode: mode, scale: 9).snapshot()
@@ -178,6 +343,57 @@ import CoreGraphics
         }
         func coverage(_ layer: ProjectLayerRecord, _ i: Int) -> Float {
             own(layer, i).w * drawnOpacity(layer) * (layer.maskSourceID.flatMap { byID[$0] }.map { coverage($0, i) } ?? 1)
+        }
+        /// The range of results at pixel `i`, as premultiplied sRGB levels, when every operand of every blend is
+        /// moved by up to one 8-bit level: each layer's own pixel, as it is drawn, one premultiplied level down, as
+        /// it is and one up, over what is below it as evaluated and at the corners of the range those moves have
+        /// reached so far. Alpha is not varied. The evaluation is `render`'s, stage for stage.
+        func span(_ i: Int) -> (lo: SIMD4<Double>, hi: SIMD4<Double>) {
+            func nudged(_ p: SIMD4<Float>) -> [SIMD4<Float>] {
+                guard p.w > 0 else { return [p] }
+                let stored = F.levels([p])[0]
+                // All three channels together, and each alone: the hue and saturation transfers turn on their differences.
+                let moves = [-1.0, 1].flatMap { d in [SIMD4(d, d, d, 0), SIMD4(d, 0, 0, 0), SIMD4(0, d, 0, 0), SIMD4(0, 0, d, 0)] }
+                return [p] + moves.map { move in
+                    var moved = (stored + move).clamped(lowerBound: .zero, upperBound: SIMD4(repeating: stored.w)); moved.w = stored.w
+                    var straight = F.straight(moved); straight.w = p.w; return straight
+                }
+            }
+            let visible = layers.filter { $0.isGroup != true && $0.isVisible && ancestors($0).allSatisfy(\.isVisible) }
+            var exact = SIMD4<Float>.zero, lo = SIMD4<Double>.zero, hi = SIMD4<Double>.zero, index = 0
+            while index < visible.count {
+                let layer = visible[index]
+                var top = own(layer, i)
+                if let source = layer.maskSourceID.flatMap({ byID[$0] }) { top.w *= coverage(source, i) }
+                top.w *= ancestors(layer).reduce(1) { $0 * mask($1, i) } * drawnOpacity(layer)
+                var tops = nudged(top), next = index + 1
+                if layer.maskSourceID == nil {
+                    var colours = tops.map { SIMD4($0.x, $0.y, $0.z, 1) }, stacked = false
+                    while next < visible.count, visible[next].maskSourceID == layer.id, visible[next].parentID == layer.parentID {
+                        var child = own(visible[next], i); child.w *= drawnOpacity(visible[next])
+                        let mode = visible[next].blendMode ?? .normal
+                        colours = colours.flatMap { colour in nudged(child).map { LWFloatBlend.pixel(mode, top: $0, bottom: colour) } }
+                        next += 1; stacked = true
+                    }
+                    // The retained compositor holds the stack's colour in 8 bits too, before the stack blends below.
+                    if stacked { tops = [SIMD4(colours[0].x, colours[0].y, colours[0].z, top.w)] + colours.flatMap { nudged(SIMD4($0.x, $0.y, $0.z, top.w)) } }
+                }
+                // What is below: as evaluated, and the corners of the range reached so far.
+                var backdrops = [exact]
+                if exact.w > 0 {
+                    let alpha = Double(exact.w) * 255
+                    for corner in 0..<8 {
+                        var straight = F.straight(SIMD4(corner & 1 == 0 ? lo.x : hi.x, corner & 2 == 0 ? lo.y : hi.y, corner & 4 == 0 ? lo.z : hi.z, alpha))
+                        straight.w = exact.w; backdrops.append(straight)
+                    }
+                }
+                let mode = layer.blendMode ?? .normal
+                let results = F.levels(backdrops.flatMap { below in tops.map { LWFloatBlend.pixel(mode, top: $0, bottom: below) } })
+                exact = LWFloatBlend.pixel(mode, top: tops[0], bottom: exact)
+                lo = results.reduce(results[0]) { pointwiseMin($0, $1) }; hi = results.reduce(results[0]) { pointwiseMax($0, $1) }
+                index = next
+            }
+            return (lo, hi)
         }
         func render() -> [SIMD4<Float>] {
             let visible = layers.filter { $0.isGroup != true && $0.isVisible && ancestors($0).allSatisfy(\.isVisible) }
