@@ -54,7 +54,7 @@ jobs:
         # many argument cases it runs (verified against a local result bundle: 14 functions, 107 argument cases).
         # Raise S08_EXPECTED_TESTS when test functions are added; a filter typo, a skipped suite or an empty
         # bundle executes fewer and fails here.
-        env: {S08_EXPECTED_TESTS: "306"}
+        env: {S08_EXPECTED_TESTS: "312"}
         run: |
           test -d LiveRawAcceptance.xcresult
           xcrun xcresulttool get test-results summary --path LiveRawAcceptance.xcresult --format json > s08-summary.json

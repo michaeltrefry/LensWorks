@@ -178,6 +178,15 @@ fn raw_clipped_neutral_and_real_colors_preserve_linear_headroom() {
             white[..3].iter().all(|x| *x > 1.0),
             "HDR clipped white: {white:?}"
         );
+        // The decoder reports where a neutral subject first clips: its first channel
+        // saturates at balanced 1.0 whichever multiplier is largest. The unclipped
+        // neutral ramp lies below that level and the clipped white at or above it.
+        assert_eq!(out.neutral_clip_valid, 1);
+        for c in 0..3 {
+            let clip = out.neutral_clip[c];
+            assert!((clip - 1.0).abs() < 0.003, "neutral clip {neutral:?}: {:?}", out.neutral_clip);
+            assert!(at(2)[c] < 0.98 * clip && white[c] >= clip, "{:?} {white:?}", at(2));
+        }
         assert!(
             (white[0] - white[1]).abs() < 0.003 && (white[1] - white[2]).abs() < 0.003,
             "false highlight chroma {neutral:?}: {white:?}"
@@ -349,6 +358,16 @@ fn requested_dng_white_maps_independent_camera_neutrals_to_gray() {
             );
         }
         assert_eq!(actual[3], 1.0);
+        // Integer sensor data: the decoder reports where a neutral subject first clips.
+        // The patch is that neutral at a quarter of the exposure that saturates its
+        // largest camera channel, so the level is four times the patch for either white.
+        assert_eq!(out.neutral_clip_valid, 1);
+        for c in 0..3 {
+            assert!(
+                (out.neutral_clip[c] - 4.0 * actual[c]).abs() < 0.012 && (out.neutral_clip[c] - 1.0).abs() < 0.003,
+                "requested DNG white {selected}: neutral clip {:?}", out.neutral_clip
+            );
+        }
         let other = patch(1 - selected);
         let high = other[..3].iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let low = other[..3].iter().copied().fold(f32::INFINITY, f32::min);
@@ -357,5 +376,21 @@ fn requested_dng_white_maps_independent_camera_neutrals_to_gray() {
             "different illuminant must remain chromatic: {other:?}"
         );
         assert_eq!(blake3::hash(&bytes), unchanged);
+    }
+}
+
+#[test]
+fn integer_raw_provenance_carries_the_neutral_clip_level() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, neutral) in [("a.dng", [0.5, 1.0, 0.4]), ("b.dng", [1.0, 0.5, 0.8])] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, fixture(neutral)).unwrap();
+        let rendered = super::decode_full(&path).unwrap();
+        let clip = rendered.provenance.neutral_clip.expect("integer RAW neutral clip");
+        assert!(clip.iter().all(|c| (c - 1.0).abs() < 0.003), "{neutral:?}: {clip:?}");
+        // It survives the worker's serialized result.
+        let wire = serde_json::to_value(&rendered.provenance).unwrap();
+        let read: super::RenderProvenance = serde_json::from_value(wire).unwrap();
+        assert_eq!(read.neutral_clip, Some(clip));
     }
 }

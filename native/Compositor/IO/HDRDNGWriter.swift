@@ -260,4 +260,29 @@ nonisolated struct LWDNGInspection: Sendable {
         guard let xmp else { throw LWHDRDNGError.missingProvenance }
         return try LWHDRMergeProvenance.parse(xmp: xmp)
     }
+
+    /// The LensWorks merge record of the DNG at `url`, read from its first IFD's XMP tag alone:
+    /// the samples, hundreds of megabytes, are never read. Throws `missingProvenance` for a
+    /// TIFF/DNG without one and `invalid` for any other file.
+    static func provenance(at url: URL) throws -> LWHDRMergeProvenance {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        func bytes(_ offset: Int, _ count: Int) throws -> [UInt8] {
+            try handle.seek(toOffset: UInt64(offset))
+            guard let data = try handle.read(upToCount: count), data.count == count else { throw LWHDRDNGError.invalid }
+            return [UInt8](data)
+        }
+        func u16(_ b: [UInt8], _ o: Int) -> Int { Int(b[o]) | Int(b[o + 1]) << 8 }
+        func u32(_ b: [UInt8], _ o: Int) -> Int { Int(b[o]) | Int(b[o + 1]) << 8 | Int(b[o + 2]) << 16 | Int(b[o + 3]) << 24 }
+        let header = try bytes(0, 8)
+        guard header[0] == 0x49, header[1] == 0x49, header[2] == 42, header[3] == 0 else { throw LWHDRDNGError.invalid }
+        let ifd = u32(header, 4), count = u16(try bytes(ifd, 2), 0)
+        let entries = try bytes(ifd + 2, count * 12)
+        for index in 0..<count where u16(entries, index * 12) == 700 {
+            let e = index * 12, type = u16(entries, e + 2), length = u32(entries, e + 4)
+            guard type == 1 || type == 7, length > 4, length <= 1024 * 1024 else { throw LWHDRDNGError.missingProvenance }
+            return try LWHDRMergeProvenance.parse(xmp: Data(try bytes(u32(entries, e + 8), length)))
+        }
+        throw LWHDRDNGError.missingProvenance
+    }
 }

@@ -12,6 +12,10 @@ struct PcImage {
     size_t icc_size;
     uint32_t width, height, bits, orientation, primaries, transfer, flags;
     uint64_t calibration_applied_pixels, calibration_bypassed_pixels;
+    // Linear-sRGB value of a neutral subject at the exposure where its first sensor channel
+    // saturates: above it a neutral highlight is clipped. Valid only when neutral_clip_valid != 0.
+    float neutral_clip[3];
+    uint32_t neutral_clip_valid;
     char make[128], model[128], profile[128], error[256];
 };
 // Callback receives one full, unoriented float row. Zero continues; nonzero

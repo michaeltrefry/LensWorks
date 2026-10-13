@@ -116,6 +116,7 @@ fn finished_success_is_retained_without_restarting_until_publication_consumes_it
             calibration: None,
             spatial_calibration: None,
             notes: vec![],
+            neutral_clip: None,
         },
         objects: vec![ProducedPreview {
             key,

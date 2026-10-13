@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "algorithm": "sha256-canonical-file-ledger-v1",
-  "source_digest": "9b0777c774927cf60388cc3d43bc22d6755d88b111a0911b2dac25b717cda3c3",
+  "source_digest": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254",
   "scope": "Complete LensWorks-owned catalog snapshot, including all executable/build inputs and retained services/tests/licenses. Adapter source has separate LensWorks build/ABI authority.",
   "upstream_snapshot_sha256": "5dae68c6e4d186251a430787d3aa67d541d6ce805e2b2ff904ecc7bfaac0a211",
   "excluded_files": [
@@ -1333,20 +1333,20 @@
     {
       "path": "native/decode.cpp",
       "mode": "100644",
-      "bytes": 22676,
-      "sha256": "2b13d28f29a6d45c1ab18af30279b1eb2671f72ab5b7700380823b7ee5284153"
+      "bytes": 23253,
+      "sha256": "32b9af637c99a41113c5041ee89b1ee2d88967617874fb173edcbf98c39e8c88"
     },
     {
       "path": "native/decode.h",
       "mode": "100644",
-      "bytes": 1699,
-      "sha256": "03bcb46a0f36c63a4331aa5069591664e4dd448ca65133e0e8eef5c6b62c515d"
+      "bytes": 1952,
+      "sha256": "bac2c77e3d94298fdad7f1d42dce6de4f92121095a04f3da0c89d869c76420c3"
     },
     {
       "path": "native/dng.cpp",
       "mode": "100644",
-      "bytes": 14937,
-      "sha256": "fcca9cb7b6ce31a84b8499b3f69dffa07c0ca947f40ba5276d3e97c030b1ae89"
+      "bytes": 15661,
+      "sha256": "ab3cf50fce7a8c880f1bff46339b4e2b65d661fb1e3763da7cf45ddbf49bf2a2"
     },
     {
       "path": "native/dng_stage_plane.h",
@@ -3019,8 +3019,8 @@
     {
       "path": "src/edit/render.rs",
       "mode": "100644",
-      "bytes": 36596,
-      "sha256": "332d9aebbe4be60559f4d375d4393af8b1f408a4285a9d077f2596201cf58704"
+      "bytes": 36632,
+      "sha256": "7b4b42cdcfb1857c5c6eb6a8b31ee7c300ee407aea524d2f42433fd6928f225b"
     },
     {
       "path": "src/export_service.rs",
@@ -3805,8 +3805,8 @@
     {
       "path": "src/media/full.rs",
       "mode": "100644",
-      "bytes": 108633,
-      "sha256": "9c2b6ecc65885891dd5d1f4fe58039bd1a3057924cd845721d92a514c49281bb"
+      "bytes": 109225,
+      "sha256": "2a664bc5577567e6e2706752cc49979d7a4d33b9993cc9cfaedc2ec7a4bf5d8a"
     },
     {
       "path": "src/media/psd.rs",
@@ -3817,8 +3817,8 @@
     {
       "path": "src/media/raw_highlight_tests.rs",
       "mode": "100644",
-      "bytes": 13292,
-      "sha256": "c390d2b51be9ae282449826296b89a55837897ff4ecdeb45992ec1b02f68bf9d"
+      "bytes": 15249,
+      "sha256": "0ca63be9de7a1e89355a8cf6c855cf3336799ad0bf17a624135f516919ebf9f6"
     },
     {
       "path": "src/metadata_export.rs",
@@ -3985,8 +3985,8 @@
     {
       "path": "src/preview/store.rs",
       "mode": "100644",
-      "bytes": 109370,
-      "sha256": "93c0b2e967593f1f339d732970901fe8f37d8ef182fd6486be2c4911d5503357"
+      "bytes": 109406,
+      "sha256": "2c7e2c4943c1ffcc137e86133942c9fe80659fad6d9bfccea9e78053c29abe16"
     },
     {
       "path": "src/preview/store_custody.rs",
@@ -4075,8 +4075,8 @@
     {
       "path": "src/preview/worker/managed_transport/tests.rs",
       "mode": "100644",
-      "bytes": 5167,
-      "sha256": "e2321bf05b889e48923dcea1237152be5aa158bdabfb5520c5cf02646340c387"
+      "bytes": 5199,
+      "sha256": "cf89b16f0342df15f57e588a446fab3195f297f2999008584a1b96eabec9a1b7"
     },
     {
       "path": "src/preview/worker/read_transport.rs",
@@ -4321,8 +4321,8 @@
     {
       "path": "tests/media.rs",
       "mode": "100644",
-      "bytes": 26006,
-      "sha256": "12cf686b36302d6f54875eeaf97d2793f5c8697fa73ae0dd7c2ccea0782742f9"
+      "bytes": 26374,
+      "sha256": "d0ffdd5f144b65bcfe8540638f9c5772f659be3133a1a4235ad515541c68f003"
     },
     {
       "path": "tests/metadata_export.rs",
@@ -4369,8 +4369,8 @@
     {
       "path": "tests/preview_codec.rs",
       "mode": "100644",
-      "bytes": 5611,
-      "sha256": "1b45f4fc49c3a0f69a953249db0e730654e9bb2c478fec6c3f4ace067c695de0"
+      "bytes": 5643,
+      "sha256": "bbaf4d7e7766a758dddff40c80ea851d44ecccfa64c4b794727e8675a0ba6a48"
     },
     {
       "path": "tests/preview_edits.rs",

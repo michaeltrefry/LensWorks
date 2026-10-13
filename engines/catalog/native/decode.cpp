@@ -230,6 +230,17 @@ static int raw_decode(const unsigned char *bytes, size_t len, const PcDecodeLimi
         }
         const float headroom=1.f/minimum_wb;
         if (!std::isfinite(headroom)) return fail(out,"unsupported RAW white balance range");
+        // The channel with the smallest multiplier is the first to saturate for a neutral subject,
+        // at a balanced camera level of minimum_wb*headroom in every channel; highlight blending
+        // synthesizes neutral values above it.
+        {
+            bool finite=true;
+            for(int c=0;c<3;++c) {
+                float value=0;for(int k=0;k<3;++k) value+=camera_to_rgb[c][k]*minimum_wb*headroom;
+                finite=finite&&std::isfinite(value)&&value>0;out->neutral_clip[c]=value;
+            }
+            out->neutral_clip_valid=finite;
+        }
         if(sink)return raw_rows_from_writer(raw,limits,out,sink,context,camera_to_rgb,headroom,control);
         auto *processed = raw.dcraw_make_mem_image(&status);
         if (!processed) return raw_failure(out, status);

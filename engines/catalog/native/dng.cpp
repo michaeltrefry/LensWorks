@@ -131,6 +131,17 @@ static int dng_decode(const unsigned char *bytes, size_t len, const PcDecodeLimi
         else return fail(out,"unsupported DNG without as-shot white balance");
         const auto matrix=dng_space_sRGB_Linear::Get().MatrixFromPCS()*spec->CameraToPCS();
         const auto camera_to_prophoto=dng_space_ProPhoto::Get().MatrixFromPCS()*spec->CameraToPCS();
+        // Integer sensor data without a spatial gain map: the SDK scales the camera white so its
+        // largest channel is 1, the stage3 saturation level, so the matrix maps it to the level at
+        // which a neutral subject first clips. Float samples and gain-mapped output have no such level.
+        if (!spatial && !(out->flags&1) && spec->CameraWhite().Count()==3) {
+            bool finite=true;
+            for(uint32 c=0;c<3;++c) {
+                double value=0;for(uint32 k=0;k<3;++k) value+=matrix[c][k]*spec->CameraWhite()[k];
+                finite=finite&&std::isfinite(value)&&value>0;out->neutral_clip[c]=static_cast<float>(value);
+            }
+            out->neutral_clip_valid=finite;
+        }
         const auto prophoto_to_srgb=dng_space_sRGB_Linear::Get().MatrixFromPCS()*dng_space_ProPhoto::Get().MatrixToPCS();
         AutoPtr<dng_hue_sat_map> calibration;
         AutoPtr<dng_1d_table> encode_table,decode_table;

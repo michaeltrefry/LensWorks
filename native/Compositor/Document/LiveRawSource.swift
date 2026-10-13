@@ -1397,3 +1397,14 @@ nonisolated enum LWSourceSelectedDevelopmentBlend {
     }
 }
 
+nonisolated extension LWLiveSourceNode {
+    /// Where a neutral subject first clips in the developed source, as the decoder reported it
+    /// from the sensor's white level; nil for a source without one (raster, floating-point DNG).
+    func neutralClip() throws -> SIMD3<Float>? {
+        let decoded = try LWSourceMetadataStorage.withDecodeCharge(from: provenance, workingSet: metadataWorkingSet) {
+            try LWCatalogCodec.decode(LWMediaFullRenderProvenance.self, from: provenance)
+        }
+        guard let clip = decoded.neutral_clip else { return nil }
+        return SIMD3(clip.first.value, clip.second.value, clip.third.value)
+    }
+}

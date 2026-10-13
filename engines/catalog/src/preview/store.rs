@@ -2118,6 +2118,7 @@ mod tests {
                 calibration: None,
                 spatial_calibration: None,
                 notes: vec![],
+                neutral_clip: None,
             },
         }
     }

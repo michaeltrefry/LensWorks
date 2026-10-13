@@ -29,6 +29,7 @@ fn rendered(w: u32, h: u32, pixels: Vec<[f32; 4]>) -> RenderedImage {
             calibration: None,
             spatial_calibration: None,
             notes: vec![],
+            neutral_clip: None,
         },
     }
 }

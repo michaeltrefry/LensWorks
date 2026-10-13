@@ -50,9 +50,10 @@ extension LensWorksCatalog {
     /// in bounded row strips. `frames` is the size of the bracket it belongs to: the merge's
     /// memory budget is checked as soon as the dimensions are known, before the frame is loaded.
     nonisolated static func developHDRFrame(original: LWCatalogNativePath, url: URL, frames: Int = 1, budget: Int = LWHDRMerger.budgetBytes) async throws -> LWHDRFrame {
-        let (_, plane) = try await LWSourceDeveloper.shared.createPlane(original: original, rawHint: RawImporter.matches(url))
+        let (node, plane) = try await LWSourceDeveloper.shared.createPlane(original: original, rawHint: RawImporter.matches(url))
         try LWHDRMerger.admit(frames: frames, width: plane.width, height: plane.height, budget: budget)
-        return try await detached { try LWHDRFrame(plane: plane) }
+        let whiteLevel = try node.neutralClip()
+        return try await detached { try LWHDRFrame(plane: plane, whiteLevel: whiteLevel) }
     }
 
     /// Moves `source` to `<stem>.dng` in `folder`, or `<stem>-2.dng`, `-3`… when that name is
@@ -274,9 +275,11 @@ struct LensWorksHDRSourcesView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("HDR merge of \(sources.count) photos").font(.caption).bold()
             ForEach(sources, id: \.imageID) { source in
-                Text(source.filename).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(source.missing ? source.filename + " (no longer in this catalog)" : source.filename)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
-            LensWorksCommandButton(.selectHDRSources, reason: catalog.isBusy ? "Finish the current catalog action first." : nil) {
+            LensWorksCommandButton(.selectHDRSources, reason: catalog.isBusy ? "Finish the current catalog action first."
+                : sources.allSatisfy(\.missing) ? "These source photos are no longer in this catalog." : nil) {
                 Task {
                     let scope = catalog.captureScope()
                     do { try await catalog.selectHDRMergeSources(of: asset) }

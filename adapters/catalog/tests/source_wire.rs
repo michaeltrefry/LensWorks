@@ -2845,7 +2845,7 @@ fn all_source_standalone_wire_variants_decode_and_reencode() {
     check::<photocatalog::media::DecodeStatus>("media::full::DecodeStatus::Io", r####""io""####);
     check::<photocatalog::media::RenderProvenance>(
         "media::full::RenderProvenance::struct",
-        r####"{"pipeline_version":"fixture-pipeline_version","decoder":"fixture-decoder","source_bits_per_channel":1,"source_color":"fixture-source_color","working_color":"fixture-working_color","alpha":"fixture-alpha","calibration":{"table":"fixture-table","applied_pixels":1,"bypassed_pixels":1,"domain_policy":"fixture-domain_policy"},"spatial_calibration":{"table":"fixture-table","applied_pixels":1,"bypassed_pixels":1,"domain_policy":"fixture-domain_policy"},"notes":["fixture-notes"]}"####,
+        r####"{"pipeline_version":"fixture-pipeline_version","decoder":"fixture-decoder","source_bits_per_channel":1,"source_color":"fixture-source_color","working_color":"fixture-working_color","alpha":"fixture-alpha","calibration":{"table":"fixture-table","applied_pixels":1,"bypassed_pixels":1,"domain_policy":"fixture-domain_policy"},"spatial_calibration":{"table":"fixture-table","applied_pixels":1,"bypassed_pixels":1,"domain_policy":"fixture-domain_policy"},"notes":["fixture-notes"],"neutral_clip":[0.0,0.0,0.0]}"####,
     );
     check::<photocatalog::organization::Flag>(
         "organization::Flag::Unflagged",

@@ -109,6 +109,11 @@ pub struct RenderProvenance {
     pub calibration: Option<ColorCalibration>,
     pub spatial_calibration: Option<ColorCalibration>,
     pub notes: Vec<String>,
+    /// Linear-sRGB value of a neutral subject at the exposure where its first sensor
+    /// channel saturates; a neutral highlight above it is clipped. Known for integer
+    /// camera RAW; absent for raster sources, floating-point DNG and gain-mapped DNG.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neutral_clip: Option<[f32; 3]>,
 }
 /// Full-resolution, oriented, scene/display-linear sRGB-primary pixels. RGB may be
 /// negative or above one; alpha is straight and in [0,1]. No thumbnail dependency.
@@ -272,6 +277,8 @@ struct NativeImage {
     flags: u32,
     calibration_applied_pixels: u64,
     calibration_bypassed_pixels: u64,
+    neutral_clip: [f32; 3],
+    neutral_clip_valid: u32,
     make: [c_char; 128],
     model: [c_char; 128],
     profile: [c_char; 128],
@@ -789,6 +796,7 @@ fn decode_with_white_point_output(path: &Path, limits: DecodeLimits, white: Opti
     let mut native_extent=None;
     let mut calibration = None;
     let mut spatial_calibration = None;
+    let mut neutral_clip = None;
     let (mut image, format, bits, icc, orientation, source_color, decoder, make, model, mut notes) =
         if is_raw || is_avif {
             // Zeroed pointers and lengths form an empty native result; Drop frees all native allocations on every path.
@@ -870,6 +878,7 @@ fn decode_with_white_point_output(path: &Path, limits: DecodeLimits, white: Opti
             let model = unsafe { CStr::from_ptr(out.model.as_ptr()) }
                 .to_string_lossy()
                 .into_owned();
+            if is_raw && out.neutral_clip_valid != 0 { neutral_clip = Some(out.neutral_clip); }
             let mut dynamic=buffer.map(DynamicImage::ImageRgba32F);
             if is_avif && icc.is_none() {if let Some(dynamic)=dynamic.as_mut(){convert_cicp(dynamic,out.primaries,out.transfer)?;}}
             let mut notes = Vec::new();
@@ -1095,6 +1104,7 @@ fn decode_with_white_point_output(path: &Path, limits: DecodeLimits, white: Opti
             calibration,
             spatial_calibration,
             notes,
+            neutral_clip,
         },
     }})
 }
@@ -1238,7 +1248,7 @@ fn decode_tiff_file_rows(mut file:File,limits:DecodeLimits,white:Option<[f64;2]>
             preview_source:"full-quality original rendering".into()},width:out_width,height:out_height,
         provenance:RenderProvenance{pipeline_version:"photocatalog-render-4".into(),decoder:"tiff 0.10.3 seekable original; image-rs sample/planar validation".into(),
             source_bits_per_channel:bits,source_color:"embedded ICC or untagged sRGB".into(),working_color:"linear sRGB primaries, D65, f32, unclamped".into(),
-            alpha:"straight alpha [0,1]".into(),calibration:None,spatial_calibration:None,notes},
+            alpha:"straight alpha [0,1]".into(),calibration:None,spatial_calibration:None,notes,neutral_clip:None},
     }})
 }
 fn image_sample(image:&DynamicImage,x:u32,y:u32)->Result<[f32;4]> {

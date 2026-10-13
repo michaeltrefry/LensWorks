@@ -514,6 +514,7 @@ pub(crate) fn fixture(w: u32, h: u32, pixels: Vec<[f32; 4]>) -> PreparedLinearIn
                 calibration: None,
                 spatial_calibration: None,
                 notes: vec![],
+                neutral_clip: None,
             },
         },
         source_fingerprint: "test-fingerprint".into(),
