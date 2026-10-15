@@ -41,7 +41,10 @@ nonisolated enum S47Generator {
     }
     /// A catalog over `root/Photos` with its photos imported; closed when `body` returns or throws.
     static func withCatalog(root: URL, photos count: Int, _ body: (LensWorksCatalog, [LensWorksCatalogAsset], UserDefaults) async throws -> Void) async throws {
-        let (model, defaults) = try model(root: root)
+        let suite = "LWMerge-\(UUID())"
+        let (model, defaults) = try model(root: root, defaults: try #require(UserDefaults(suiteName: suite)))
+        // The throwaway defaults domain is removed with the catalog, so no LWMerge-* plist is left behind.
+        defer { defaults.removePersistentDomain(forName: suite) }
         await model.connect(root.appendingPathComponent("Catalog").path, create: true)
         do {
             if let error = model.error { throw LensWorksCatalogError.message(error) }
