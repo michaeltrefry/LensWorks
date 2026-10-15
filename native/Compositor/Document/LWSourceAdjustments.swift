@@ -4,7 +4,8 @@ import AppKit
 /// FilterKind stays the existing public seventeen-kind menu contract.
 nonisolated struct LWSourceRetainedAdjustment: Codable, Equatable, Sendable {
     let id:UUID
-    let sourceID:UUID
+    private(set) var sourceID:UUID
+    func rebound(to source:UUID) -> Self { var copy=self;copy.sourceID=source;return copy }
     let upstreamRevision:UUID
     let settings:LayerAdjustment
     let captureFrame:LWSourceRetouchFrame

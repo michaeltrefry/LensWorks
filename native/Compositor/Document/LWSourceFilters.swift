@@ -11,7 +11,8 @@ nonisolated enum LWSourceOperation: Codable, Equatable, Sendable {
 }
 nonisolated struct LWSourceRetainedFilter: Codable, Equatable, Sendable {
     let id: UUID
-    let sourceID: UUID
+    private(set) var sourceID: UUID
+    func rebound(to source: UUID) -> Self { var copy = self; copy.sourceID = source; return copy }
     let upstreamRevision: UUID
     let kind: FilterKind
     let settings: FilterSettings
@@ -300,7 +301,8 @@ nonisolated extension LWSourcePixelStage {
 /// relation. It is distinct from Camera Raw geometry and destructive filters.
 nonisolated struct LWSourceResample: Codable, Equatable, Sendable {
     let id: UUID
-    let sourceID: UUID
+    private(set) var sourceID: UUID
+    func rebound(to source: UUID) -> Self { var copy = self; copy.sourceID = source; return copy }
     let upstreamRevision: UUID
     let stage: LWSourcePixelStage
     let sampling: LayerSampling

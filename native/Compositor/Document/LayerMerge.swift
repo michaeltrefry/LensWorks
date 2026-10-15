@@ -43,17 +43,9 @@ extension EditorSession {
             if let source = copy.maskSourceID, !kept.contains(source) { copy.maskSourceID = nil }
             return copy
         }
-        let flat = CanvasDocument(id: document.id, width: document.width, height: document.height,
-                                  layers: subset, resolution: document.resolution)
-        guard let context = try? BrushRaster.context(width: document.width, height: document.height, mask: false) else { return }
-        drawLiveComposite(flat, in: context)
-        let canvas = LayerTransform(origin: .zero, size: CGSize(width: document.width, height: document.height))
-        guard let full = context.makeImage(),
-              let trimmed = try? PixelFilter.trimmed(full, placed: canvas),
-              let thumbnail = try? PixelAdjust.thumbnail(of: trimmed.image) else { NSSound.beep(); return }
-        var merged = ImageLayer(asset: ImportedImage(image: trimmed.image, thumbnail: thumbnail, name: plan.name),
-                                origin: trimmed.transform.origin)
-        merged.transform = trimmed.transform
+        guard let made = mergedPixels(of: subset, in: document, name: plan.name) else { NSSound.beep(); return }
+        var merged = ImageLayer(asset: made.asset, origin: made.transform.origin)
+        merged.transform = made.transform
         merged.name = plan.name
         merged.parentID = plan.parent
         var next = layers.filter { !plan.removed.contains($0.id) }
@@ -68,5 +60,40 @@ extension EditorSession {
         self.document?.layers = next
         activeLayerID = merged.id
         endEdit()
+    }
+
+    /// The composite of `subset` on the document's canvas, trimmed to what is there. Layers holding float samples (a
+    /// developed source, a float raster or a float mask) are composited by the float document graph and stay float,
+    /// so nothing above display white or outside the gamut is clamped into the merged layer; a document of 8-bit
+    /// layers keeps the Core Graphics composite it has always merged with.
+    private func mergedPixels(of subset: [ImageLayer], in document: CanvasDocument, name: String) -> (asset: ImportedImage, transform: LayerTransform)? {
+        let canvas = LayerTransform(origin: .zero, size: CGSize(width: document.width, height: document.height))
+        if subset.contains(where: { $0.liveSource != nil || $0.asset?.linear != nil || $0.asset?.linearPlane != nil || $0.mask?.asset.linearPlane != nil }) {
+            do {
+                guard let snapshot = projectSnapshot() else { return nil }
+                let ids = Dictionary(uniqueKeysWithValues: subset.map { ($0.id, $0) })
+                var manifest = snapshot.manifest
+                manifest.layers = manifest.layers.compactMap { record in
+                    guard let layer = ids[record.id] else { return nil }
+                    var record = record; record.parentID = layer.parentID; record.maskSourceID = layer.maskSourceID; return record
+                }
+                let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+                let full = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks), workspace: workspace)
+                var placed = canvas, plane = full
+                if let bounds = try LWFloatFilter.alphaBounds(full, workspace: workspace) {
+                    plane = try LWFloatFilter.cropped(full, range: bounds, workspace: workspace)
+                    placed = LayerTransform(origin: CGPoint(x: bounds.x, y: bounds.y), size: CGSize(width: bounds.width, height: bounds.height))
+                }
+                return (try ImportedImage(plane: plane, name: name), placed)
+            } catch { brushError = error.localizedDescription; return nil }
+        }
+        let flat = CanvasDocument(id: document.id, width: document.width, height: document.height,
+                                  layers: subset, resolution: document.resolution)
+        guard let context = try? BrushRaster.context(width: document.width, height: document.height, mask: false) else { return nil }
+        drawLiveComposite(flat, in: context)
+        guard let full = context.makeImage(),
+              let trimmed = try? PixelFilter.trimmed(full, placed: canvas),
+              let thumbnail = try? PixelAdjust.thumbnail(of: trimmed.image) else { return nil }
+        return (ImportedImage(image: trimmed.image, thumbnail: thumbnail, name: name), trimmed.transform)
     }
 }

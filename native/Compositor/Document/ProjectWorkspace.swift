@@ -269,7 +269,7 @@ final class ProjectWorkspace {
             for i in copied.indices where copied[i].maskSourceID.map({ !included.contains($0) }) == true {
                 if copied[i].adjustment != nil { copied[i].maskSourceID = nil; continue }
                 let layerID = copied[i].id
-                copied[i].asset = try await Task.detached(priority: .userInitiated) { try LiveMaskBaker.bake(snapshot, target: layerID) }.value
+                try await Task.detached(priority: .userInitiated) { try LiveMaskBaker.bake(snapshot, target: layerID) }.value?.apply(to: &copied[i])
                 copied[i].maskSourceID = nil
             }
             let mapping = Dictionary(uniqueKeysWithValues: copied.map { ($0.id, UUID()) })
@@ -279,17 +279,20 @@ final class ProjectWorkspace {
                 ? copied.first(where: { $0.id == id })?.transform.center ?? CGPoint(x: sourceDocument.size.width/2, y: sourceDocument.size.height/2)
                 : { let r = pictured.dropFirst().reduce(pictured[0]) { $0.union($1) }; return CGPoint(x: r.midX, y: r.midY) }()
             let center = point ?? CGPoint(x: size.width/2, y: size.height/2)
-            let layers = copied.map { layer -> ImageLayer in
+            let layers = try copied.map { layer -> ImageLayer in
                 var transform = layer.transform
                 transform.origin.x += center.x-anchor.x; transform.origin.y += center.y-anchor.y
                 var mask = layer.mask
                 mask?.placement?.origin.x += center.x-anchor.x; mask?.placement?.origin.y += center.y-anchor.y
-                return ImageLayer(id: mapping[layer.id]!, asset: layer.asset, name: layer.name, isVisible: layer.isVisible,
+                var copy = ImageLayer(id: mapping[layer.id]!, asset: layer.asset, name: layer.name, isVisible: layer.isVisible,
                     transform: transform, parentID: layer.parentID.flatMap { mapping[$0] }, isGroup: layer.isGroup,
                     opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] }, adjustment: layer.adjustment, shape: layer.shape, effects: layer.effects, text: layer.text)
+                // A live source layer stays one in the other project: its copy is developed there from the same original.
+                copy.liveSource = try layer.liveSource?.forked()
+                return copy
             }
             target.session.isProjectBusy = false
-            guard target.session.beginEdit("Copy Layers from Project") else { return }
+            guard target.session.beginEdit("Copy Layers from Project", forceSourceMetadata: layers.contains { $0.liveSource != nil }) else { return }
             if target.session.document == nil { target.session.createDocument(width: Int(size.width), height: Int(size.height)) }
             target.session.document?.layers.append(contentsOf: layers)
             target.session.activeLayerID = mapping[id]

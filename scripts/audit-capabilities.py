@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit a frozen-source capability ledger; --write regenerates planned mappings.
+"""Audit a frozen-source capability ledger; --write regenerates it, keeping recorded results.
 
 Only the Python standard library is required. No build, GPU, download or tracker
 mutation occurs. Extraction deliberately includes implementation-support symbols
@@ -51,8 +51,48 @@ def is_test(path):
     s = str(path).lower()
     return '/tests/' in s or 'tests.swift' in s or '/compositortests/' in s or '/compositoruitests/' in s or bool(re.search(r'(?:_tests|\.test)\.', s))
 
+# Declarations that sit in a layer-panel or session file but belong to another story's behavior. Keyed by file
+# name and exact symbol; these take precedence over the path and symbol-token rules in story_for.
+SYMBOL_STORIES = {
+    # Transform, distort previews, snapping and the viewport (S12).
+    'sc-24667': {'LayerMask.swift': ('MaskDistortPreviewCache.corners', 'MaskDistortPreviewCache.draft', 'MaskDistortPreviewCache.mask',
+                                     'MaskDistortPreviewCache.layer', 'MaskDistortPreviewCache.result', 'EditorSession.maskDistortPreview'),
+                 'EditorSession.swift': ('EditorSession.distortPreviewCache', 'EditorSession.maskDistortPreviewCache', 'EditorSession.viewport', 'EditorSession.fit'),
+                 'CompositorApp.swift': ('Toggle:Layers',),
+                 'ContentView.swift': ('Button:Fit', 'Button:100%')},
+    # Painting on a mask (S14).
+    'sc-24669': {'LayerMask.swift': ('BrushStroke.placedMaskPreview',)},
+    # Selections (S13).
+    'sc-24668': {'EditorSession.swift': ('EditorSession.marqueeKind', 'EditorSession.pixelMove')},
+    # Adjustments and layer effects (S11).
+    'sc-24666': {'EditorSession.swift': ('EditorSession.hueTargeting', 'EditorSession.hueTargetDrag'),
+                 'NativeLayerList.swift': ('Coordinator.effectType',)},
+    # Type (S16).
+    'sc-24671': {'EditorSession.swift': ('EditorSession.fontPreviewOriginal',)},
+    # Photoshop import and opening documents (S20).
+    'sc-24675': {'EditorSession.swift': ('EditorSession.conversionRequest', 'EditorSession.confirmConversions', 'EditorSession.beginPSDReading',
+                                         'EditorSession.finishPSDReading', 'EditorSession.endPSDReading', 'EditorSession.confirmPSDConversions',
+                                         'EditorSession.finishConversion', 'EditorSession.insertPhotoshop'),
+                 'CompositorApplicationDelegate.swift': ('CompositorApplicationDelegate.workspace', 'CompositorApplicationDelegate.showEditor',
+                                                         'CompositorApplicationDelegate.application', 'CompositorApplicationDelegate.applicationWillFinishLaunching',
+                                                         'CompositorApplicationDelegate.applicationDidFinishLaunching', 'CompositorApplicationDelegate.applicationShouldTerminate')},
+    # RAW develop (S08).
+    'sc-24663': {'EditorSession.swift': ('EditorSession.rawDevelop', 'EditorSession.confirmRawDevelop', 'EditorSession.developRaw', 'EditorSession.finishRawDevelop')},
+    # Tools, keyboard, palette and window chrome (S34).
+    'sc-24689': {'NativeLayerList.swift': ('LayerTableView.keyDown',),
+                 'EditorSession.swift': ('EditorSession.tool', 'EditorSession.symbol', 'EditorSession.cycleToolMode', 'EditorSession.next',
+                                         'EditorSession.busyIndicatorDelay', 'EditorSession.waitForFileRequest'),
+                 'ToolDefaults.swift': ('ToolDefaults.bool', 'ToolDefaults.set', 'ToolDefaults.int', 'ToolDefaults.string'),
+                 'ColorPalette.swift': ('EditorSession.channel', 'PickerHSB.hue', 'PickerHSB.brightness', 'PickerHSB.setRGB'),
+                 'ContentView.swift': ('ContentView.session', 'ContentView.applicationDelegate', 'Button:OK', 'View.roundedControls',
+                                       'View.releasesFocusOnCommit', 'ArrowStepper.editing', 'ArrowStepper.listen', 'ArrowStepper.stopListening', 'View.arrowSteps')},
+}
+SYMBOL_STORY = {(name, symbol): story for story, files in SYMBOL_STORIES.items() for name, symbols in files.items() for symbol in symbols}
+
 def story_for(path, symbol=''):
     """Map individual source rows; primary owner plus integration terminal review."""
+    if path.startswith('vendor/Compositor/Compositor/') and (Path(path).name, symbol) in SYMBOL_STORY:
+        return SYMBOL_STORY[(Path(path).name, symbol)]
     p = path.lower()
     s = symbol.lower()
     if 'photocatalog' in p or 'engines/catalog/' in p:
@@ -563,16 +603,22 @@ def markdown(data):
     kinds = collections.Counter(r['kind'] for r in rows)
     covered = sum(bool(r['baseline_test_references']) for r in rows)
     exposed = [r for r in rows if r['surface'] != 'implementation_support']
+    passing = sum(r['acceptance_fixture']['status'] == 'passing' for r in exposed)
+    fixtures = 'planned fixtures' if not passing else f'fixtures ({passing} passing with recorded native test evidence, {len(exposed) - passing} planned)'
+    evidence = 'None are native acceptance evidence.' if not passing else 'Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.'
     out = ['# Frozen capability inventory', '',
-           f"{len(rows)} source-surface rows across {len(data['files'])} audited source files; {len(exposed)} declared controls/services have planned fixtures; {len(rows)-len(exposed)} support declarations are provenance-only; {len(data['baseline_test_cases'])} baseline test cases indexed. None are native acceptance evidence.", '',
+           f"{len(rows)} source-surface rows across {len(data['files'])} audited source files; {len(exposed)} declared controls/services have {fixtures}; {len(rows)-len(exposed)} support declarations are provenance-only; {len(data['baseline_test_cases'])} baseline test cases indexed. {evidence}", '',
            'This ledger is deliberately finer than a feature checklist: each enum case, configuration field, command/control, exposed service operation and format route gets its own source anchor, story and fixture. Implementation-support declarations remain separately labeled; the row count is not a user-visible feature count.', '',
-           'Run `python3 scripts/audit-capabilities.py` from any working directory. It re-extracts source anchors and verifies frozen refs, file digests, story membership, fixture identities, baseline tests, provenance and license digests. Regeneration with `--write` updates only this JSON and Markdown ledger and resets fixtures to planned; review mappings before accepting a new baseline.', '',
+           'Run `python3 scripts/audit-capabilities.py` from any working directory. It re-extracts source anchors and verifies frozen refs, file digests, story membership, fixture identities, baseline tests, provenance and license digests. Regeneration with `--write` updates only this JSON and Markdown ledger, keeps each recorded result on the row with the same capability ID and refuses to drop one; review mappings before accepting a new baseline.', '',
            '## Frozen provenance', '']
     for b in data['baselines']: out.append(f"- {b['name']}: `{b['revision']}` at `{b['source']}`.")
     out += ['', 'See `DEPENDENCIES.json` and `THIRD_PARTY_NOTICES.md`; individual retained license/notice hashes live in JSON.', '', '## Limits and unresolved qualification', '']
     out += ['- ' + s for s in data['limitations']]
     out += ['', f'{covered} rows reference baseline test bodies. These are discovery pointers only: tests have not been executed by this inventory task, and token mention does not establish assertion coverage.', '', '## Story coverage', '', '| Story | Source-surface rows | Fixture status |', '| --- | ---: | --- |']
-    out += [f'| {story} | {count} | exposed: planned; support: provenance-only |' for story, count in sorted(counts.items())]
+    for story, count in sorted(counts.items()):
+        states = collections.Counter(r['acceptance_fixture']['status'] for r in exposed if r['story_id'] == story)
+        status = 'planned' if set(states) <= {'planned'} else ', '.join(f'{states[k]} {k}' for k in ('passing', 'failing', 'blocked', 'planned') if states[k])
+        out.append(f'| {story} | {count} | exposed: {status}; support: provenance-only |')
     out += ['', 'The complete 37-story plan includes new AI/version/recovery and distribution requirements beyond frozen behavior. Absence of baseline rows for a story does not remove those requirements; the epic requirements and story AC remain authoritative. `sc-24691` reviews every inventory row at integrated acceptance.', '', '## Extracted surface kinds', '', '| Kind | Rows |', '| --- | ---: |']
     out += [f'| {kind} | {count} |' for kind, count in sorted(kinds.items())]
     out += ['', '## Concrete fixture profiles', '', 'Asset recipes and exact per-capability parameter bindings live in JSON. Profiles are planned specifications; fixture construction/execution is still required by the owning story. Every enum variant and source parameter remains separately bound rather than being waived by the shared recipe.', '']
@@ -652,12 +698,31 @@ def audit(data, actual):
     if MD_PATH.read_text() != markdown(data): errors.append('Markdown ledger differs from JSON')
     return errors
 
+def carry_evidence(previous, regenerated):
+    """Keep recorded results across a regeneration: copy status and execution evidence onto the regenerated row
+    with the same ID. A recorded result whose row no longer exists is never dropped silently."""
+    rows = {r['id']: r for r in regenerated['capabilities']}
+    lost = []
+    for old in previous['capabilities']:
+        fixture = old.get('acceptance_fixture', {})
+        if fixture.get('status') in ('planned', 'provenance_only'): continue
+        new = rows.get(old['id'])
+        if new is None or new['surface'] == 'implementation_support':
+            lost.append(f"{old['id']} ({old['file']}:{old['line']} {old['symbol']}, {fixture.get('status')})")
+            continue
+        new['acceptance_fixture']['status'] = fixture['status']
+        new['acceptance_fixture']['execution_evidence'] = fixture.get('execution_evidence')
+    if lost:
+        for row in lost[:100]: print('FAIL: recorded result would be lost for', row)
+        raise SystemExit(f'{len(lost)} recorded results have no regenerated row; nothing was written')
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--write', action='store_true', help='regenerate planned inventory for review')
+    parser.add_argument('--write', action='store_true', help='regenerate the inventory for review, keeping recorded results by capability ID')
     args = parser.parse_args()
     actual = build()
     if args.write:
+        carry_evidence(json.loads(JSON_PATH.read_text()) if JSON_PATH.exists() else {'capabilities': []}, actual)
         JSON_PATH.write_text(json.dumps(actual, indent=2) + '\n')
         MD_PATH.write_text(markdown(actual))
     data = json.loads(JSON_PATH.read_text())

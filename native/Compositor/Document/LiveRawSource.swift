@@ -19,7 +19,7 @@ nonisolated enum LWSourceWhiteBalance: Codable, Equatable, Sendable {
 /// The immutable physical original, separate from mutable document development.
 nonisolated struct LWLiveSourceNode: Codable, Equatable, Sendable {
     let schema: Int
-    let id: UUID
+    private(set) var id: UUID
     var revision: UUID
     var sourceLineage: [UUID]
     let original: LWCatalogNativePath
@@ -178,12 +178,30 @@ nonisolated struct LWLiveSourceNode: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated extension LWLiveSourceNode {
+    /// The node for a copy of its layer: a new identity over the same original, with the same development, revision
+    /// and lineage, and every retained operation bound to the new identity. The copy develops to the same pixels and
+    /// is developed and edited on its own from then on.
+    func forked() throws -> Self {
+        var copy = try metadataCopy()
+        let source = UUID()
+        copy.id = source
+        for i in copy.retouch.indices { copy.retouch[i].sourceID = source }
+        for i in copy.sampleComposites.indices { copy.sampleComposites[i].sourceID = source }
+        copy.adjustments = adjustments.map { $0.rebound(to: source) }
+        copy.filters = filters.map { $0.rebound(to: source) }
+        copy.resamples = resamples.map { $0.rebound(to: source) }
+        try copy.validate()
+        return copy
+    }
+}
+
 /// Stroke points/radius are in the captured document frame. Current pixels map back
 /// through the protected source to that frame; the original round tip is not approximated.
 nonisolated struct LWSourceRetouchStroke: Codable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable { case clone, heal, paint, erase, smear, blur, liquify }
     enum HealMode: Int, Codable, Sendable { case contentAware = 0, createTexture = 1, proximityMatch = 2 }
-    let sourceID: UUID
+    fileprivate(set) var sourceID: UUID
     let upstreamRevision: UUID
     let captureFrame: LWSourceRetouchFrame
     let kind: Kind
@@ -586,7 +604,7 @@ nonisolated extension LWLiveSourceNode {
 /// upstream source at its original position. No retouched output is a dependency.
 nonisolated struct LWSourceSampleComposite: Codable, Equatable, Sendable {
     let revision: UUID
-    let sourceID: UUID
+    fileprivate(set) var sourceID: UUID
     let upstreamRevision: UUID
     let payload: Data
     var metadataStorage:LWSourceMetadataStorage? = nil

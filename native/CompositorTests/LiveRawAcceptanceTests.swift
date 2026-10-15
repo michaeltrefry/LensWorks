@@ -146,6 +146,40 @@ struct LiveRawAcceptanceTests {
         #expect(session.filterEdit == nil && session.brushError == nil, "\(session.brushError ?? "")")
     }
 
+    /// The RAW develop request an import waits on: the sheet goes up with the file's as-shot settings and the
+    /// import resumes with what the person chose, or with nothing when they cancel; a caller that answers for
+    /// itself is asked instead of the sheet.
+    @Test func rawDevelopRequestWaitsForTheSheetAndResumesWithItsChoice() async throws {
+        let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("develop.dng")
+        try ProceduralDNG.write(to: original, width: 32, height: 24)
+        let session = EditorSession()
+        func request() async throws -> Task<RawDevelopSettings?, Never> {
+            let task = Task { await session.developRaw(original) }
+            for _ in 0..<2000 where session.rawDevelop == nil { try await Task.sleep(for: .milliseconds(2)) }
+            return task
+        }
+        // Import: the sheet shows the file and its as-shot settings; the request returns the edited settings.
+        var pending = try await request()
+        let shown = try #require(session.rawDevelop)
+        #expect(shown.url == original && shown.settings.isAsShot && session.showsRawDevelop)
+        var chosen = shown.settings; chosen.exposure = 0.5
+        session.finishRawDevelop(chosen)
+        #expect(await pending.value == chosen)
+        #expect(session.rawDevelop == nil && !session.showsRawDevelop)
+        // Cancel: nothing comes back and the sheet is gone.
+        pending = try await request()
+        session.finishRawDevelop(nil)
+        #expect(await pending.value == nil)
+        #expect(session.rawDevelop == nil && !session.showsRawDevelop)
+        // A caller that confirms for itself is asked with the same as-shot settings, and no sheet goes up.
+        var asked: [(URL, RawDevelopSettings)] = []
+        session.confirmRawDevelop = { url, settings in asked.append((url, settings)); var edited = settings; edited.boost = 0; return edited }
+        let confirmed = await session.developRaw(original)
+        #expect(asked.count == 1 && asked.first?.0 == original && asked.first?.1 == shown.settings)
+        #expect(confirmed?.boost == 0 && session.rawDevelop == nil && !session.showsRawDevelop)
+    }
+
     // AC1: RAW controls stay editable under layers across save/reopen; the original is never written.
     @Test func rawControlsStayEditableUnderLayersAfterSaveAndReopen() async throws {
         let root = try folder(); defer { try? FileManager.default.removeItem(at: root) }
