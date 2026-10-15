@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         # The Xcode project compiles only native/; vendor/Compositor is the frozen baseline reference.
-        with: {submodules: false}
+        with: {submodules: false, ref: '${{ github.event.pull_request.head.sha }}'}
       - name: Select Xcode 26.5
         run: |
           ls -d /Applications/Xcode*.app
