@@ -37,8 +37,9 @@ jobs:
         run: |
           brew install libraw libavif webp jpeg-xl jpeg-turbo little-cms2 libomp pkg-config
           for lib in libraw libavif libwebp libjxl libjpeg lcms2; do echo "$lib $(pkg-config --modversion $lib)"; done
-      - name: Cache the DNG SDK and the Rust build
-        uses: actions/cache@v4
+      - name: Restore the DNG SDK and the Rust build
+        id: rust-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -54,6 +55,17 @@ jobs:
           cargo build --manifest-path adapters/catalog/Cargo.toml --locked --release
           cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin photocatalog --bin organization_probe
           cargo build --manifest-path adapters/mcp/Cargo.toml --locked --release
+      - name: Save the DNG SDK and the Rust build
+        # Saved as soon as the Rust build succeeds, so a later failing step does not cost the next run that build.
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/deps
+            .build/rust-catalog
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Build for testing
         run: |
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' \
