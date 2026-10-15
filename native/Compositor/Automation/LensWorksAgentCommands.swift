@@ -449,7 +449,7 @@ struct LensWorksAgentDocumentCommands {
         guard !ids.isEmpty else { throw refuse("Select a layer first.") }
         let removed = ids.reduce(into: Set<UUID>()) { $0.formUnion(session.descendantIDs(of: $1).union([$1])) }
         let dependents = document.layers.filter { !removed.contains($0.id) && $0.maskSourceID.map(removed.contains) == true }.map(\.id)
-        var baked: [UUID: ImportedImage] = [:]
+        var baked: [UUID: LiveMaskBaker.Baked] = [:]
         if !dependents.isEmpty {
             guard let choice = try arguments.string("liveMasks") else {
                 throw refuse("A layer being deleted supplies a live mask to a layer that stays: pass liveMasks as removeLinks or bake.")
@@ -459,7 +459,7 @@ struct LensWorksAgentDocumentCommands {
                 session.isProjectBusy = true
                 defer { session.isProjectBusy = false }
                 baked = try await Task.detached(priority: .userInitiated) {
-                    var result: [UUID: ImportedImage] = [:]
+                    var result: [UUID: LiveMaskBaker.Baked] = [:]
                     for target in dependents { result[target] = try LiveMaskBaker.bake(snapshot, target: target) }
                     return result
                 }.value

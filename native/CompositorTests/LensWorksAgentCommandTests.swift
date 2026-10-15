@@ -582,10 +582,20 @@ struct LensWorksAgentCommandTests {
         session.toggleClippingMask(try fixture.layer("Blue").id)
         #expect(try fixture.layer("Blue").maskSourceID == red)
         session.history.reset()
+        let before = try fixture.layer("Blue")
         let refused = await fixture.invoke("layer.delete", ["layers": [red.uuidString]])
         #expect(refused["isError"] as? Bool == true && text(refused).contains("pass liveMasks as removeLinks or bake") && session.document?.layers.count == 2 && session.history.undoCount == 0)
         let removed = await fixture.invoke("layer.delete", ["layers": [red.uuidString], "liveMasks": "removeLinks"])
         #expect(ok(removed) && session.document?.layers.map(\.name) == ["Blue"] && (try? fixture.layer("Blue"))?.maskSourceID == nil && session.history.undoName == "Delete Layer (Agent)", "\(text(removed))")
+        #expect(try fixture.layer("Blue").asset?.image === before.asset?.image, "Remove Links reveals the layer's own pixels")
+        // Bake: the dependent keeps its masked look as pixels of its own, with the link gone; one undo step.
+        #expect(ok(await fixture.invoke("edit.undo")) && (try? fixture.layer("Blue"))?.maskSourceID == red)
+        let baked = await fixture.invoke("layer.delete", ["layers": [red.uuidString], "liveMasks": "bake"])
+        #expect(ok(baked) && session.document?.layers.map(\.name) == ["Blue"] && session.history.undoName == "Delete Layer (Agent)" && !session.isProjectBusy, "\(text(baked))")
+        let after = try fixture.layer("Blue")
+        #expect(after.maskSourceID == nil && after.asset != nil && after.asset?.image !== before.asset?.image, "the baked pixels replace the dependent's own")
+        #expect(ok(await fixture.invoke("edit.undo")) && session.document?.layers.count == 2 && (try? fixture.layer("Blue"))?.maskSourceID == red
+                && (try? fixture.layer("Blue"))?.asset?.image === before.asset?.image)
     }
 
     // MARK: Criterion 2 — granted folders (E22)
