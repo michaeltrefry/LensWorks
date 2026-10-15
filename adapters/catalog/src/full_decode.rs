@@ -844,12 +844,21 @@ mod resident_sample_tests {
     /// 50 ms resident-memory sample has already lost its task info (before and while it
     /// is an unreaped zombie), so the sample fails. The poll loop must keep polling for
     /// the exit instead of refusing the decode.
+    ///
+    /// The child's state is established, never raced: `cat` blocked on its open stdin is
+    /// alive, so it must sample; closing stdin ends it, and `waitid(WNOWAIT)` returns once
+    /// it is an exited, unreaped zombie without reaping it. (Sampling a child that exits on
+    /// its own is not deterministic: its task info is gone before it becomes reapable.)
     #[test]
     fn exited_unreaped_child_has_no_resident_sample() {
-        let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+        let mut child = Command::new("/bin/cat").stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
         let pid = child.id();
-        assert!(rss(pid).is_ok() || child.try_wait().unwrap().is_some());
-        std::thread::sleep(Duration::from_millis(300));
+        let running = rss(pid);
+        assert!(running.as_ref().is_ok_and(|bytes| *bytes > 0), "a running child has a resident sample: {running:?}");
+        drop(child.stdin.take());
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        assert_eq!(waited, 0, "waitid: {}", std::io::Error::last_os_error());
         let sampled = rss(pid);
         assert!(sampled.is_err(), "an exited, unreaped child has no task info: {sampled:?}");
         assert!(child.try_wait().unwrap().is_some_and(|status| status.success()));
