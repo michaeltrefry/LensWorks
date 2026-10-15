@@ -100,7 +100,7 @@ nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
 }
 nonisolated enum LensWorksCommandParameterType: String, Codable, Sendable {
-    case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating, catalogSelection
+    case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating
     /// One value from the closed set in `choices`.
     case choice
     /// An identity the invoking surface owns (a recent file, project tab, folder, keyword or photo).
@@ -490,7 +490,7 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .filterAnyKeyword, label: "Any Keyword", menu: "Catalog Filter"),
         .init(id: .clearFilters, label: "Clear Filters", menu: "Catalog Filter"),
         .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")]),
-        .init(id: .mergeHDR, label: "Merge to HDR…", menu: "Catalog Photo", parameters: [.init(name: "photos", type: .catalogSelection, description: "The current catalog selection: 2 through 9 bracketed photos whose originals are online; they are read, never modified."), .init(name: "deghost", type: .optionalBoolean, description: "True or nil keeps the reference frame where the subject moved; false merges every frame everywhere.")]),
+        .init(id: .mergeHDR, label: "Merge to HDR…", menu: "Catalog Photo", parameters: [Argument.flag("deghost", "Merges the current catalog selection: 2 through 9 bracketed photos whose originals are online; they are read, never modified, and the merged DNG is written beside the first. True (the default) keeps the reference frame where the subject moved; false merges every frame everywhere.")]),
         .init(id: .cancelMergeHDR, label: "Cancel Merge to HDR", menu: "Catalog Photo"),
         .init(id: .selectHDRSources, label: "Select HDR Source Photos", menu: "Catalog Photo", parameters: reference("photo", "A merged HDR photo with recorded source photos."))
     ]

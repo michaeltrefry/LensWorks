@@ -1,6 +1,6 @@
 # Frozen capability inventory
 
-28983 source-surface rows across 746 audited source files; 11832 declared controls/services have fixtures (239 passing with recorded native test evidence, 11593 planned); 17151 support declarations are provenance-only; 2499 baseline test cases indexed. Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.
+28987 source-surface rows across 746 audited source files; 11833 declared controls/services have fixtures (239 passing with recorded native test evidence, 11594 planned); 17154 support declarations are provenance-only; 2501 baseline test cases indexed. Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.
 
 This ledger is deliberately finer than a feature checklist: each enum case, configuration field, command/control, exposed service operation and format route gets its own source anchor, story and fixture. Implementation-support declarations remain separately labeled; the row count is not a user-visible feature count.
 
@@ -26,18 +26,18 @@ See `DEPENDENCIES.json` and `THIRD_PARTY_NOTICES.md`; individual retained licens
 - Conditional Rust test modules embedded in product files are conservatively retained as support rows; baseline_test_cases identifies test evidence separately.
 - PhotoCatalog itself has no root license file at this pin; application ownership/licensing needs owner disposition while third-party notices are retained.
 
-10712 rows reference baseline test bodies. These are discovery pointers only: tests have not been executed by this inventory task, and token mention does not establish assertion coverage.
+10715 rows reference baseline test bodies. These are discovery pointers only: tests have not been executed by this inventory task, and token mention does not establish assertion coverage.
 
 ## Story coverage
 
 | Story | Source-surface rows | Fixture status |
 | --- | ---: | --- |
 | sc-24658 | 5544 | exposed: planned; support: provenance-only |
-| sc-24659 | 2081 | exposed: planned; support: provenance-only |
+| sc-24659 | 2082 | exposed: planned; support: provenance-only |
 | sc-24660 | 2783 | exposed: planned; support: provenance-only |
 | sc-24661 | 842 | exposed: planned; support: provenance-only |
 | sc-24662 | 7690 | exposed: planned; support: provenance-only |
-| sc-24663 | 573 | exposed: 4 passing, 239 planned; support: provenance-only |
+| sc-24663 | 576 | exposed: 4 passing, 240 planned; support: provenance-only |
 | sc-24664 | 364 | exposed: planned; support: provenance-only |
 | sc-24665 | 536 | exposed: 235 passing; support: provenance-only |
 | sc-24666 | 1592 | exposed: planned; support: provenance-only |
@@ -72,9 +72,9 @@ The complete 37-story plan includes new AI/version/recovery and distribution req
 | native_operation | 269 |
 | rust_api | 2570 |
 | rust_constant | 159 |
-| setting_or_field | 9245 |
+| setting_or_field | 9248 |
 | source_export | 245 |
-| support_operation | 5237 |
+| support_operation | 5238 |
 | swift_operation | 1144 |
 | type | 3485 |
 | ui_control | 767 |
@@ -1311,7 +1311,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-9e037bc990750e35 | `engines/catalog/desktop/src/App.tsx:422` | `title:Create independent variant` | ui_control | sc-24689 | native-input | 0 |
 | cap-21577d193f92d5ff | `engines/catalog/desktop/src/App.tsx:423` | `title:Edit history` | ui_control | sc-24689 | native-input | 0 |
 | cap-ccc3629e54c5a199 | `engines/catalog/desktop/src/bridge.ts:13` | `Decimal` | desktop_api | sc-24658 | catalog-adapter | 0 |
-| cap-e2f68b1195bd9bcb | `engines/catalog/desktop/src/bridge.ts:14` | `NativePath` | desktop_api | sc-24658 | catalog-adapter | 266 |
+| cap-e2f68b1195bd9bcb | `engines/catalog/desktop/src/bridge.ts:14` | `NativePath` | desktop_api | sc-24658 | catalog-adapter | 267 |
 | cap-5add0b07ab2d9397 | `engines/catalog/desktop/src/bridge.ts:15` | `VariantKey` | desktop_api | sc-24658 | catalog-adapter | 73 |
 | cap-19453723c2ee8a1e | `engines/catalog/desktop/src/bridge.ts:16` | `Phase` | desktop_api | sc-24658 | catalog-adapter | 0 |
 | cap-239ebf1606e62160 | `engines/catalog/desktop/src/bridge.ts:17` | `CatalogStatus` | desktop_api | sc-24658 | catalog-adapter | 0 |
@@ -2357,7 +2357,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-95617c628bcc32ed | `engines/catalog/desktop/src/metadata.ts:70` | `metadata` | desktop_api | sc-24660 | metadata-organization | 171 |
 | cap-5994b4b8ec9412dd | `engines/catalog/desktop/src/metadata.ts:77` | `readableValue` | desktop_api | sc-24660 | metadata-organization | 1 |
 | cap-0e0b349e7cffdb82 | `engines/catalog/desktop/src/metadataWrite.ts:6` | `Decimal` | desktop_api | sc-24660 | metadata-organization | 0 |
-| cap-1b36595ab607248e | `engines/catalog/desktop/src/metadataWrite.ts:7` | `NativePath` | desktop_api | sc-24660 | metadata-organization | 266 |
+| cap-1b36595ab607248e | `engines/catalog/desktop/src/metadataWrite.ts:7` | `NativePath` | desktop_api | sc-24660 | metadata-organization | 267 |
 | cap-643b84a84502caeb | `engines/catalog/desktop/src/metadataWrite.ts:8` | `VariantKey` | desktop_api | sc-24660 | metadata-organization | 73 |
 | cap-eea3265b8663a9aa | `engines/catalog/desktop/src/metadataWrite.ts:9` | `ImageIdentity` | desktop_api | sc-24660 | metadata-organization | 3 |
 | cap-fe695a557225f371 | `engines/catalog/desktop/src/metadataWrite.ts:10` | `Edit` | desktop_api | sc-24660 | metadata-organization | 0 |
@@ -2511,7 +2511,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-4e5ff271685011db | `engines/catalog/desktop/src/photoExport.ts:4` | `I64` | desktop_api | sc-24676 | export | 0 |
 | cap-fc697ad6597cd334 | `engines/catalog/desktop/src/photoExport.ts:5` | `U64` | desktop_api | sc-24676 | export | 0 |
 | cap-89b415b5c3fb2cd6 | `engines/catalog/desktop/src/photoExport.ts:6` | `U128` | desktop_api | sc-24676 | export | 0 |
-| cap-c3e76ada63c9e041 | `engines/catalog/desktop/src/photoExport.ts:7` | `NativePath` | desktop_api | sc-24676 | export | 266 |
+| cap-c3e76ada63c9e041 | `engines/catalog/desktop/src/photoExport.ts:7` | `NativePath` | desktop_api | sc-24676 | export | 267 |
 | cap-10b9f1b9055d3d1f | `engines/catalog/desktop/src/photoExport.ts:8` | `VariantKey` | desktop_api | sc-24676 | export | 73 |
 | cap-1d324a79c6e87fba | `engines/catalog/desktop/src/photoExport.ts:9` | `Name` | desktop_api | sc-24676 | export | 0 |
 | cap-561d36df91e8f0df | `engines/catalog/desktop/src/photoExport.ts:10` | `TargetKey` | desktop_api | sc-24676 | export | 4 |
@@ -2902,7 +2902,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-179d125ffebe014f | `engines/catalog/src/application/desktop/export_native.rs:763` | `Owner.stop_key` | rust_api | sc-24676 | export | 2 |
 | cap-5b1eea480597e409 | `engines/catalog/src/application/desktop/export_native.rs:787` | `Owner.query` | rust_api | sc-24676 | export | 3 |
 | cap-3a21b1abd649812c | `engines/catalog/src/application/desktop/export_native.rs:809` | `Owner.executor_call` | rust_api | sc-24676 | export | 7 |
-| cap-0006d97e22b017e9 | `engines/catalog/src/application/desktop/export_native.rs:1142` | `Owner.call` | rust_api | sc-24676 | export | 50 |
+| cap-0006d97e22b017e9 | `engines/catalog/src/application/desktop/export_native.rs:1142` | `Owner.call` | rust_api | sc-24676 | export | 51 |
 | cap-ab997276dd1f7ce9 | `engines/catalog/src/application/desktop/export_native.rs:1332` | `Owner.stage_call` | rust_api | sc-24676 | export | 3 |
 | cap-ce257337ecef7357 | `engines/catalog/src/application/desktop/export_native.rs:1734` | `Owner.retire_root` | rust_api | sc-24676 | export | 7 |
 | cap-d51cdc8d54d3757d | `engines/catalog/src/application/desktop/export_native.rs:1805` | `Owner.forget_released_root` | rust_api | sc-24676 | export | 3 |
@@ -2959,7 +2959,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-ed56dcb699e3db3c | `engines/catalog/src/application/desktop/native.rs:439` | `Owner.retire_root` | rust_api | sc-24658 | catalog-adapter | 7 |
 | cap-a8d5c6cf0efcf3ad | `engines/catalog/src/application/desktop/native.rs:467` | `Owner.forget_released_root` | rust_api | sc-24658 | catalog-adapter | 3 |
 | cap-e7e576ddac34b8fc | `engines/catalog/src/application/desktop/native.rs:498` | `Owner.status` | rust_api | sc-24658 | catalog-adapter | 9 |
-| cap-339967b0969b1acb | `engines/catalog/src/application/desktop/native.rs:501` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 50 |
+| cap-339967b0969b1acb | `engines/catalog/src/application/desktop/native.rs:501` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 51 |
 | cap-f30d6302272c7ced | `engines/catalog/src/application/desktop/native.rs:813` | `Owner.finish_after_catalog` | rust_api | sc-24658 | catalog-adapter | 1 |
 | cap-6326e6503fb68cf5 | `engines/catalog/src/application/desktop/native.rs:844` | `Owner.stop_all` | rust_api | sc-24658 | catalog-adapter | 0 |
 | cap-83810074e7ba7d68 | `engines/catalog/src/application/desktop/preview_metadata_admission.rs:14` | `MetadataAllowanceExceeded.required` | setting_or_field | sc-24660 | metadata-organization | 2 |
@@ -3613,10 +3613,10 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-dc73e5f32a94271c | `engines/catalog/src/application/lightroom.rs:163` | `OriginalInspection.MetadataOnly` | enum_case | sc-24662 | migration | 2 |
 | cap-790f9508604adfa4 | `engines/catalog/src/application/lightroom.rs:164` | `OriginalInspection.Packets` | enum_case | sc-24662 | migration | 2 |
 | cap-df85535c04a27905 | `engines/catalog/src/application/lightroom.rs:169` | `Action.Discover` | enum_case | sc-24662 | migration | 3 |
-| cap-d85992e48af300d6 | `engines/catalog/src/application/lightroom.rs:170` | `Action.Discover.root` | variant_field | sc-24662 | migration | 106 |
+| cap-d85992e48af300d6 | `engines/catalog/src/application/lightroom.rs:170` | `Action.Discover.root` | variant_field | sc-24662 | migration | 107 |
 | cap-eca9277085e40fd7 | `engines/catalog/src/application/lightroom.rs:171` | `Action.Discover.limits` | variant_field | sc-24662 | migration | 38 |
 | cap-f5d1ec1c3bddc65c | `engines/catalog/src/application/lightroom.rs:173` | `Action.Capture` | enum_case | sc-24662 | migration | 7 |
-| cap-41fcd67965ce9961 | `engines/catalog/src/application/lightroom.rs:174` | `Action.Capture.request` | variant_field | sc-24662 | migration | 119 |
+| cap-41fcd67965ce9961 | `engines/catalog/src/application/lightroom.rs:174` | `Action.Capture.request` | variant_field | sc-24662 | migration | 120 |
 | cap-c109e0afa7e1d696 | `engines/catalog/src/application/lightroom.rs:176` | `Action.RegisterInventory` | enum_case | sc-24662 | migration | 6 |
 | cap-48c85b1cffc9279e | `engines/catalog/src/application/lightroom.rs:177` | `Action.RegisterInventory.inventory` | variant_field | sc-24662 | migration | 7 |
 | cap-0b928580b81f1068 | `engines/catalog/src/application/lightroom.rs:179` | `Action.AddCapture` | enum_case | sc-24662 | migration | 3 |
@@ -3638,7 +3638,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-978e0aabf6aa3af4 | `engines/catalog/src/application/lightroom.rs:200` | `Action.Choose.expected_evidence` | variant_field | sc-24662 | migration | 4 |
 | cap-4cad89d8d21e543c | `engines/catalog/src/application/lightroom.rs:201` | `Action.Choose.reason` | variant_field | sc-24662 | migration | 4 |
 | cap-af277837363e9266 | `engines/catalog/src/application/lightroom.rs:203` | `Action.PrepareSelection` | enum_case | sc-24662 | migration | 3 |
-| cap-520b6283608c2a4e | `engines/catalog/src/application/lightroom.rs:204` | `Action.PrepareSelection.request` | variant_field | sc-24662 | migration | 119 |
+| cap-520b6283608c2a4e | `engines/catalog/src/application/lightroom.rs:204` | `Action.PrepareSelection.request` | variant_field | sc-24662 | migration | 120 |
 | cap-30aff3c9ec62f2c7 | `engines/catalog/src/application/lightroom.rs:205` | `Action.PrepareSelection.limits` | variant_field | sc-24662 | migration | 38 |
 | cap-c00470e79d4305c4 | `engines/catalog/src/application/lightroom.rs:207` | `Action.Seal` | enum_case | sc-24662 | migration | 3 |
 | cap-3892aaea319e4ac3 | `engines/catalog/src/application/lightroom.rs:208` | `Action.Seal.review_token` | variant_field | sc-24662 | migration | 3 |
@@ -3778,10 +3778,10 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-253d6f770f860f88 | `engines/catalog/src/application/lightroom_bridge/wire.rs:60` | `InputPurpose.Approval` | enum_case | sc-24662 | migration | 2 |
 | cap-1321d458010e2e93 | `engines/catalog/src/application/lightroom_bridge/wire.rs:61` | `InputPurpose.ApprovalDraft` | enum_case | sc-24662 | migration | 1 |
 | cap-8eff45b3c299ee25 | `engines/catalog/src/application/lightroom_bridge/wire.rs:66` | `Action.Discover` | enum_case | sc-24662 | migration | 3 |
-| cap-71823056e2e79871 | `engines/catalog/src/application/lightroom_bridge/wire.rs:67` | `Action.Discover.root` | variant_field | sc-24662 | migration | 106 |
+| cap-71823056e2e79871 | `engines/catalog/src/application/lightroom_bridge/wire.rs:67` | `Action.Discover.root` | variant_field | sc-24662 | migration | 107 |
 | cap-12495d9a8ee02d8b | `engines/catalog/src/application/lightroom_bridge/wire.rs:68` | `Action.Discover.limits` | variant_field | sc-24662 | migration | 38 |
 | cap-96805c1aa8db8aeb | `engines/catalog/src/application/lightroom_bridge/wire.rs:70` | `Action.Capture` | enum_case | sc-24662 | migration | 7 |
-| cap-99f60862b17a1f1c | `engines/catalog/src/application/lightroom_bridge/wire.rs:71` | `Action.Capture.source` | variant_field | sc-24662 | migration | 24 |
+| cap-99f60862b17a1f1c | `engines/catalog/src/application/lightroom_bridge/wire.rs:71` | `Action.Capture.source` | variant_field | sc-24662 | migration | 25 |
 | cap-422035b0554cd0bd | `engines/catalog/src/application/lightroom_bridge/wire.rs:72` | `Action.Capture.output` | variant_field | sc-24662 | migration | 25 |
 | cap-1b9a143e9440b2b4 | `engines/catalog/src/application/lightroom_bridge/wire.rs:73` | `Action.Capture.include_auxiliary` | variant_field | sc-24662 | migration | 6 |
 | cap-87d0caacdde3a99f | `engines/catalog/src/application/lightroom_bridge/wire.rs:74` | `Action.Capture.closed_application_evidence` | variant_field | sc-24662 | migration | 6 |
@@ -5085,7 +5085,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-294ce799378f5894 | `engines/catalog/src/catalog_backup/managed_filesystem.rs:120` | `Request.validate` | rust_api | sc-24677 | backup | 15 |
 | cap-20ed221f1229820a | `engines/catalog/src/catalog_backup/managed_filesystem.rs:168` | `Request.cleanup` | rust_api | sc-24677 | backup | 10 |
 | cap-b2549f1da2f2bf30 | `engines/catalog/src/catalog_backup/managed_filesystem.rs:289` | `Owner.active` | setting_or_field | sc-24677 | backup | 8 |
-| cap-60271cecb2d9037c | `engines/catalog/src/catalog_backup/managed_filesystem.rs:311` | `Owner.call` | rust_api | sc-24677 | backup | 50 |
+| cap-60271cecb2d9037c | `engines/catalog/src/catalog_backup/managed_filesystem.rs:311` | `Owner.call` | rust_api | sc-24677 | backup | 51 |
 | cap-2d7af0d3b6dda493 | `engines/catalog/src/catalog_backup/managed_filesystem.rs:720` | `Owner.is_idle` | rust_api | sc-24677 | backup | 0 |
 | cap-c8af20baec1f9cf3 | `engines/catalog/src/catalog_edits.rs:60` | `VariantKey.asset_id` | setting_or_field | sc-24658 | catalog-adapter | 23 |
 | cap-d0098d9ee1163470 | `engines/catalog/src/catalog_edits.rs:61` | `VariantKey.variant_id` | setting_or_field | sc-24658 | catalog-adapter | 6 |
@@ -6377,7 +6377,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-c1f0e288e13d82d2 | `engines/catalog/src/catalog_session/export_executor.rs:158` | `Reply.value` | setting_or_field | sc-24676 | export | 33 |
 | cap-88055e7ebbebf909 | `engines/catalog/src/catalog_session/export_executor.rs:161` | `Reply.validate` | rust_api | sc-24676 | export | 11 |
 | cap-13ee7b75929020d2 | `engines/catalog/src/catalog_session/export_native.rs:19` | `Action.Register` | enum_case | sc-24676 | export | 7 |
-| cap-463bb77b95468953 | `engines/catalog/src/catalog_session/export_native.rs:20` | `Action.Register.begin` | variant_field | sc-24676 | export | 52 |
+| cap-463bb77b95468953 | `engines/catalog/src/catalog_session/export_native.rs:20` | `Action.Register.begin` | variant_field | sc-24676 | export | 53 |
 | cap-a627949c03c98fcf | `engines/catalog/src/catalog_session/export_native.rs:21` | `Action.Register.worker_bytes` | variant_field | sc-24676 | export | 4 |
 | cap-e3cea5059558a96e | `engines/catalog/src/catalog_session/export_native.rs:22` | `Action.Register.working_bytes` | variant_field | sc-24676 | export | 8 |
 | cap-ee93094e8124f870 | `engines/catalog/src/catalog_session/export_native.rs:24` | `Action.Spawn` | enum_case | sc-24676 | export | 17 |
@@ -6455,7 +6455,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-10c087799e27a6e5 | `engines/catalog/src/catalog_session/export_stage.rs:87` | `NativeTerminal.Succeeded` | enum_case | sc-24676 | export | 1 |
 | cap-a674da4b5432d114 | `engines/catalog/src/catalog_session/export_stage.rs:88` | `NativeTerminal.Failed` | enum_case | sc-24676 | export | 1 |
 | cap-acc6ea97de40c820 | `engines/catalog/src/catalog_session/export_stage.rs:88` | `NativeTerminal.Failed.code` | variant_field | sc-24676 | export | 1 |
-| cap-0ed67eb85deab466 | `engines/catalog/src/catalog_session/export_stage.rs:99` | `Action.Begin` | enum_case | sc-24676 | export | 21 |
+| cap-0ed67eb85deab466 | `engines/catalog/src/catalog_session/export_stage.rs:99` | `Action.Begin` | enum_case | sc-24676 | export | 22 |
 | cap-158eb84ee861aa67 | `engines/catalog/src/catalog_session/export_stage.rs:101` | `Action.Begin.work` | variant_field | sc-24676 | export | 28 |
 | cap-f14496d8e0f9b6e6 | `engines/catalog/src/catalog_session/export_stage.rs:102` | `Action.Begin.limits` | variant_field | sc-24676 | export | 38 |
 | cap-10e6e4e078d114c8 | `engines/catalog/src/catalog_session/export_stage.rs:104` | `Action.UploadIcc` | enum_case | sc-24676 | export | 7 |
@@ -6473,7 +6473,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-eec8803cb20fc893 | `engines/catalog/src/catalog_session/export_stage.rs:122` | `Action.NativeDrained.native` | variant_field | sc-24676 | export | 20 |
 | cap-9204b0f0fefaa433 | `engines/catalog/src/catalog_session/export_stage.rs:123` | `Action.NativeDrained.terminal` | variant_field | sc-24676 | export | 9 |
 | cap-161b22f32f76a16a | `engines/catalog/src/catalog_session/export_stage.rs:125` | `Action.ResultAndSeal` | enum_case | sc-24676 | export | 15 |
-| cap-6811624013451839 | `engines/catalog/src/catalog_session/export_stage.rs:126` | `Action.Abort` | enum_case | sc-24676 | export | 33 |
+| cap-6811624013451839 | `engines/catalog/src/catalog_session/export_stage.rs:126` | `Action.Abort` | enum_case | sc-24676 | export | 34 |
 | cap-010f6cc6ea491177 | `engines/catalog/src/catalog_session/export_stage.rs:127` | `Action.Release` | enum_case | sc-24676 | export | 68 |
 | cap-4670aa317598039b | `engines/catalog/src/catalog_session/export_stage.rs:133` | `Request.root` | setting_or_field | sc-24676 | export | 85 |
 | cap-0fac83c42ac6473e | `engines/catalog/src/catalog_session/export_stage.rs:134` | `Request.executor` | setting_or_field | sc-24676 | export | 6 |
@@ -6500,7 +6500,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-f2c9e65da7e34d81 | `engines/catalog/src/catalog_session/export_stage.rs:233` | `Rendered.renderer_identity` | setting_or_field | sc-24676 | export | 0 |
 | cap-6c758d49955eb90b | `engines/catalog/src/catalog_session/export_stage.rs:234` | `Rendered.metadata_notes` | setting_or_field | sc-24676 | export | 0 |
 | cap-ae89bff0c85fc227 | `engines/catalog/src/catalog_session/export_stage.rs:235` | `Rendered.timings` | setting_or_field | sc-24676 | export | 0 |
-| cap-0e1a1aea5de6a8e1 | `engines/catalog/src/catalog_session/export_stage.rs:283` | `Value.Begun` | enum_case | sc-24676 | export | 6 |
+| cap-0e1a1aea5de6a8e1 | `engines/catalog/src/catalog_session/export_stage.rs:283` | `Value.Begun` | enum_case | sc-24676 | export | 7 |
 | cap-42b5c375790ec629 | `engines/catalog/src/catalog_session/export_stage.rs:284` | `Value.Unit` | enum_case | sc-24676 | export | 8 |
 | cap-439c7c295c1fb3a8 | `engines/catalog/src/catalog_session/export_stage.rs:285` | `Value.Ready` | enum_case | sc-24676 | export | 3 |
 | cap-333fdab53c37258e | `engines/catalog/src/catalog_session/export_stage.rs:286` | `Value.Ready.path` | variant_field | sc-24676 | export | 98 |
@@ -6516,22 +6516,22 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-de1b961d66fe0924 | `engines/catalog/src/catalog_session/export_stage.rs:305` | `Reply.validate` | rust_api | sc-24676 | export | 11 |
 | cap-00205de1f7d5b9b6 | `engines/catalog/src/catalog_session/export_stage.rs:364` | `serialize` | rust_api | sc-24676 | export | 2 |
 | cap-957e73f004199689 | `engines/catalog/src/catalog_session/export_stage.rs:385` | `deserialize` | rust_api | sc-24676 | export | 0 |
-| cap-ffdb026f39f5492f | `engines/catalog/src/catalog_session/import.rs:61` | `Action.Begin` | enum_case | sc-24659 | catalog-service | 21 |
-| cap-bca4e9e173749a18 | `engines/catalog/src/catalog_session/import.rs:61` | `Action.Begin.source` | variant_field | sc-24659 | catalog-service | 24 |
-| cap-edfb0c714b6bb6b9 | `engines/catalog/src/catalog_session/import.rs:62` | `Action.Next` | enum_case | sc-24659 | catalog-service | 4 |
+| cap-ffdb026f39f5492f | `engines/catalog/src/catalog_session/import.rs:61` | `Action.Begin` | enum_case | sc-24659 | catalog-service | 22 |
+| cap-bca4e9e173749a18 | `engines/catalog/src/catalog_session/import.rs:61` | `Action.Begin.source` | variant_field | sc-24659 | catalog-service | 25 |
+| cap-edfb0c714b6bb6b9 | `engines/catalog/src/catalog_session/import.rs:62` | `Action.Next` | enum_case | sc-24659 | catalog-service | 5 |
 | cap-440577cc8f569972 | `engines/catalog/src/catalog_session/import.rs:63` | `Action.Inspect` | enum_case | sc-24659 | catalog-service | 4 |
-| cap-0c380bcfd883a533 | `engines/catalog/src/catalog_session/import.rs:63` | `Action.Inspect.source` | variant_field | sc-24659 | catalog-service | 24 |
+| cap-0c380bcfd883a533 | `engines/catalog/src/catalog_session/import.rs:63` | `Action.Inspect.source` | variant_field | sc-24659 | catalog-service | 25 |
 | cap-698632b09ba6878f | `engines/catalog/src/catalog_session/import.rs:64` | `Action.Read` | enum_case | sc-24659 | catalog-service | 19 |
 | cap-f0ddf47c80c6e4f8 | `engines/catalog/src/catalog_session/import.rs:64` | `Action.Read.offset` | variant_field | sc-24659 | catalog-service | 37 |
 | cap-b148e685febbe15b | `engines/catalog/src/catalog_session/import.rs:65` | `Action.FinishInspection` | enum_case | sc-24659 | catalog-service | 2 |
 | cap-f897f4ca944129a8 | `engines/catalog/src/catalog_session/import.rs:66` | `Action.ValidateInspection` | enum_case | sc-24659 | catalog-service | 3 |
 | cap-a2c60774655a2ff3 | `engines/catalog/src/catalog_session/import.rs:67` | `Action.ReleaseInspection` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-5448feb9c4643615 | `engines/catalog/src/catalog_session/import.rs:67` | `Action.ReleaseInspection.grant` | variant_field | sc-24659 | catalog-service | 7 |
-| cap-891805496d295ad5 | `engines/catalog/src/catalog_session/import.rs:68` | `Action.ValidateFile` | enum_case | sc-24659 | catalog-service | 3 |
-| cap-adc96c714fbee210 | `engines/catalog/src/catalog_session/import.rs:69` | `Action.ReleaseFile` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-9c423a6d66a86b98 | `engines/catalog/src/catalog_session/import.rs:69` | `Action.ReleaseFile.grant` | variant_field | sc-24659 | catalog-service | 7 |
-| cap-a33b59930ab92761 | `engines/catalog/src/catalog_session/import.rs:70` | `Action.Finish` | enum_case | sc-24659 | catalog-service | 8 |
-| cap-2bf81c3cc6392809 | `engines/catalog/src/catalog_session/import.rs:71` | `Action.Abort` | enum_case | sc-24659 | catalog-service | 33 |
+| cap-5448feb9c4643615 | `engines/catalog/src/catalog_session/import.rs:67` | `Action.ReleaseInspection.grant` | variant_field | sc-24659 | catalog-service | 8 |
+| cap-891805496d295ad5 | `engines/catalog/src/catalog_session/import.rs:68` | `Action.ValidateFile` | enum_case | sc-24659 | catalog-service | 4 |
+| cap-adc96c714fbee210 | `engines/catalog/src/catalog_session/import.rs:69` | `Action.ReleaseFile` | enum_case | sc-24659 | catalog-service | 3 |
+| cap-9c423a6d66a86b98 | `engines/catalog/src/catalog_session/import.rs:69` | `Action.ReleaseFile.grant` | variant_field | sc-24659 | catalog-service | 8 |
+| cap-a33b59930ab92761 | `engines/catalog/src/catalog_session/import.rs:70` | `Action.Finish` | enum_case | sc-24659 | catalog-service | 9 |
+| cap-2bf81c3cc6392809 | `engines/catalog/src/catalog_session/import.rs:71` | `Action.Abort` | enum_case | sc-24659 | catalog-service | 34 |
 | cap-ace226f5b32ab890 | `engines/catalog/src/catalog_session/import.rs:77` | `Request.root` | setting_or_field | sc-24659 | catalog-service | 85 |
 | cap-beb37881329dcb53 | `engines/catalog/src/catalog_session/import.rs:78` | `Request.transfer` | setting_or_field | sc-24659 | catalog-service | 5 |
 | cap-2eded7cc28cf8fde | `engines/catalog/src/catalog_session/import.rs:79` | `Request.step` | setting_or_field | sc-24659 | catalog-service | 11 |
@@ -6542,14 +6542,14 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-be2938106282fc15 | `engines/catalog/src/catalog_session/import.rs:126` | `DirectoryFact.path` | setting_or_field | sc-24659 | catalog-service | 2 |
 | cap-69db757a52cd1905 | `engines/catalog/src/catalog_session/import.rs:127` | `DirectoryFact.regular` | setting_or_field | sc-24659 | catalog-service | 2 |
 | cap-e88066960ca1ee6c | `engines/catalog/src/catalog_session/import.rs:142` | `Value.Failed` | enum_case | sc-24659 | catalog-service | 11 |
-| cap-1058ec1d4a8717e0 | `engines/catalog/src/catalog_session/import.rs:143` | `Value.Begun` | enum_case | sc-24659 | catalog-service | 6 |
-| cap-2a2cb7f6115f0411 | `engines/catalog/src/catalog_session/import.rs:144` | `Value.Begun.source` | variant_field | sc-24659 | catalog-service | 48 |
+| cap-1058ec1d4a8717e0 | `engines/catalog/src/catalog_session/import.rs:143` | `Value.Begun` | enum_case | sc-24659 | catalog-service | 7 |
+| cap-2a2cb7f6115f0411 | `engines/catalog/src/catalog_session/import.rs:144` | `Value.Begun.source` | variant_field | sc-24659 | catalog-service | 49 |
 | cap-483874192da334b7 | `engines/catalog/src/catalog_session/import.rs:146` | `Value.DirectoryStart` | enum_case | sc-24659 | catalog-service | 2 |
 | cap-d8d32a02169b8570 | `engines/catalog/src/catalog_session/import.rs:147` | `Value.DirectoryStart.directory` | variant_field | sc-24659 | catalog-service | 5 |
 | cap-d8dccae9f5f74497 | `engines/catalog/src/catalog_session/import.rs:149` | `Value.DirectoryFacts` | enum_case | sc-24659 | catalog-service | 2 |
 | cap-1a33c4f585ec0285 | `engines/catalog/src/catalog_session/import.rs:150` | `Value.DirectoryFacts.directory` | variant_field | sc-24659 | catalog-service | 5 |
 | cap-9a240d9158299d45 | `engines/catalog/src/catalog_session/import.rs:151` | `Value.DirectoryFacts.facts` | variant_field | sc-24659 | catalog-service | 4 |
-| cap-91a7d3c2c4d7d65c | `engines/catalog/src/catalog_session/import.rs:153` | `Value.DirectoryEnd` | enum_case | sc-24659 | catalog-service | 2 |
+| cap-91a7d3c2c4d7d65c | `engines/catalog/src/catalog_session/import.rs:153` | `Value.DirectoryEnd` | enum_case | sc-24659 | catalog-service | 3 |
 | cap-7a66b0a95b2bb27e | `engines/catalog/src/catalog_session/import.rs:154` | `Value.DirectoryEnd.directory` | variant_field | sc-24659 | catalog-service | 5 |
 | cap-dd192f5b285c86d9 | `engines/catalog/src/catalog_session/import.rs:156` | `Value.Skipped` | enum_case | sc-24659 | catalog-service | 2 |
 | cap-6f8dfe41baf11d58 | `engines/catalog/src/catalog_session/import.rs:157` | `Value.Header` | enum_case | sc-24659 | catalog-service | 2 |
@@ -6557,11 +6557,11 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-98d98d236d6d31db | `engines/catalog/src/catalog_session/import.rs:159` | `Value.Header.fingerprint` | variant_field | sc-24659 | catalog-service | 4 |
 | cap-7085c090071cb3ab | `engines/catalog/src/catalog_session/import.rs:160` | `Value.Header.observation` | variant_field | sc-24659 | catalog-service | 6 |
 | cap-ef528f642df20153 | `engines/catalog/src/catalog_session/import.rs:162` | `Value.Inspection` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-68976274a61136b6 | `engines/catalog/src/catalog_session/import.rs:163` | `Value.Inspection.source` | variant_field | sc-24659 | catalog-service | 48 |
+| cap-68976274a61136b6 | `engines/catalog/src/catalog_session/import.rs:163` | `Value.Inspection.source` | variant_field | sc-24659 | catalog-service | 49 |
 | cap-ad02a5e2e8b0cfa2 | `engines/catalog/src/catalog_session/import.rs:164` | `Value.Inspection.bytes` | variant_field | sc-24659 | catalog-service | 63 |
 | cap-fb7689850f5965e6 | `engines/catalog/src/catalog_session/import.rs:165` | `Value.Inspection.checksum` | variant_field | sc-24659 | catalog-service | 7 |
 | cap-9b4c6009af44d7a4 | `engines/catalog/src/catalog_session/import.rs:167` | `Value.InspectionFailed` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-67c8d8942b2dacca | `engines/catalog/src/catalog_session/import.rs:168` | `Value.InspectionFailed.source` | variant_field | sc-24659 | catalog-service | 48 |
+| cap-67c8d8942b2dacca | `engines/catalog/src/catalog_session/import.rs:168` | `Value.InspectionFailed.source` | variant_field | sc-24659 | catalog-service | 49 |
 | cap-465b7d841c544d70 | `engines/catalog/src/catalog_session/import.rs:169` | `Value.InspectionFailed.message` | variant_field | sc-24659 | catalog-service | 1 |
 | cap-af4ed8f9bb9058cc | `engines/catalog/src/catalog_session/import.rs:171` | `Value.Chunk` | enum_case | sc-24659 | catalog-service | 16 |
 | cap-85022714016df412 | `engines/catalog/src/catalog_session/import.rs:172` | `Value.Chunk.offset` | variant_field | sc-24659 | catalog-service | 23 |
@@ -6569,16 +6569,16 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-c1f107907ce7ec98 | `engines/catalog/src/catalog_session/import.rs:175` | `Value.Chunk.bytes` | variant_field | sc-24659 | catalog-service | 63 |
 | cap-5713907626a5f287 | `engines/catalog/src/catalog_session/import.rs:177` | `Value.InspectionFinished` | enum_case | sc-24659 | catalog-service | 1 |
 | cap-6c16bf32b78ddf76 | `engines/catalog/src/catalog_session/import.rs:178` | `Value.InspectionValidated` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-146019d14e807ef1 | `engines/catalog/src/catalog_session/import.rs:179` | `Value.InspectionValidated.grant` | variant_field | sc-24659 | catalog-service | 4 |
+| cap-146019d14e807ef1 | `engines/catalog/src/catalog_session/import.rs:179` | `Value.InspectionValidated.grant` | variant_field | sc-24659 | catalog-service | 5 |
 | cap-1ae936c1a72c6b2a | `engines/catalog/src/catalog_session/import.rs:181` | `Value.InspectionReleased` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-243e41bb6549234e | `engines/catalog/src/catalog_session/import.rs:182` | `Value.InspectionReleased.grant` | variant_field | sc-24659 | catalog-service | 4 |
-| cap-6581b82ff8538e36 | `engines/catalog/src/catalog_session/import.rs:184` | `Value.FileValidated` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-fe316846aff39cb1 | `engines/catalog/src/catalog_session/import.rs:185` | `Value.FileValidated.grant` | variant_field | sc-24659 | catalog-service | 4 |
-| cap-dc101f25c8f34ebc | `engines/catalog/src/catalog_session/import.rs:187` | `Value.FileReleased` | enum_case | sc-24659 | catalog-service | 2 |
-| cap-88630c90fb5b81aa | `engines/catalog/src/catalog_session/import.rs:188` | `Value.FileReleased.grant` | variant_field | sc-24659 | catalog-service | 4 |
-| cap-f13d4e9f39e41671 | `engines/catalog/src/catalog_session/import.rs:190` | `Value.WalkFinished` | enum_case | sc-24659 | catalog-service | 1 |
-| cap-e278531684d68923 | `engines/catalog/src/catalog_session/import.rs:191` | `Value.Finished` | enum_case | sc-24659 | catalog-service | 1 |
-| cap-9ddadca7609235d6 | `engines/catalog/src/catalog_session/import.rs:192` | `Value.Aborted` | enum_case | sc-24659 | catalog-service | 11 |
+| cap-243e41bb6549234e | `engines/catalog/src/catalog_session/import.rs:182` | `Value.InspectionReleased.grant` | variant_field | sc-24659 | catalog-service | 5 |
+| cap-6581b82ff8538e36 | `engines/catalog/src/catalog_session/import.rs:184` | `Value.FileValidated` | enum_case | sc-24659 | catalog-service | 3 |
+| cap-fe316846aff39cb1 | `engines/catalog/src/catalog_session/import.rs:185` | `Value.FileValidated.grant` | variant_field | sc-24659 | catalog-service | 5 |
+| cap-dc101f25c8f34ebc | `engines/catalog/src/catalog_session/import.rs:187` | `Value.FileReleased` | enum_case | sc-24659 | catalog-service | 3 |
+| cap-88630c90fb5b81aa | `engines/catalog/src/catalog_session/import.rs:188` | `Value.FileReleased.grant` | variant_field | sc-24659 | catalog-service | 5 |
+| cap-f13d4e9f39e41671 | `engines/catalog/src/catalog_session/import.rs:190` | `Value.WalkFinished` | enum_case | sc-24659 | catalog-service | 2 |
+| cap-e278531684d68923 | `engines/catalog/src/catalog_session/import.rs:191` | `Value.Finished` | enum_case | sc-24659 | catalog-service | 2 |
+| cap-9ddadca7609235d6 | `engines/catalog/src/catalog_session/import.rs:192` | `Value.Aborted` | enum_case | sc-24659 | catalog-service | 12 |
 | cap-2198b064c4623cde | `engines/catalog/src/catalog_session/import.rs:195` | `Value.binary` | rust_api | sc-24659 | catalog-service | 7 |
 | cap-fa782febf5e2d9cc | `engines/catalog/src/catalog_session/import.rs:201` | `Value.set_binary` | rust_api | sc-24659 | catalog-service | 1 |
 | cap-d39db6c0a93faa41 | `engines/catalog/src/catalog_session/import.rs:219` | `Reply.root` | setting_or_field | sc-24659 | catalog-service | 30 |
@@ -6606,14 +6606,14 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-4012f0753daf4655 | `engines/catalog/src/catalog_session/metadata_files.rs:39` | `Mode.Existing.plan` | variant_field | sc-24660 | metadata-organization | 2 |
 | cap-f9c06b05a7a69b48 | `engines/catalog/src/catalog_session/metadata_files.rs:40` | `Mode.Existing.offset` | variant_field | sc-24660 | metadata-organization | 2 |
 | cap-2b611d5a3f208d2b | `engines/catalog/src/catalog_session/metadata_files.rs:41` | `Mode.Existing.length` | variant_field | sc-24660 | metadata-organization | 1 |
-| cap-6465e511d8cafb41 | `engines/catalog/src/catalog_session/metadata_files.rs:107` | `Action.Begin` | enum_case | sc-24660 | metadata-organization | 21 |
+| cap-6465e511d8cafb41 | `engines/catalog/src/catalog_session/metadata_files.rs:107` | `Action.Begin` | enum_case | sc-24660 | metadata-organization | 22 |
 | cap-de36f3f44e567048 | `engines/catalog/src/catalog_session/metadata_files.rs:108` | `Action.Begin.mode` | variant_field | sc-24660 | metadata-organization | 10 |
 | cap-ff23e76072bf570e | `engines/catalog/src/catalog_session/metadata_files.rs:109` | `Action.Begin.bytes` | variant_field | sc-24660 | metadata-organization | 65 |
 | cap-88e2d7a06a6183e4 | `engines/catalog/src/catalog_session/metadata_files.rs:110` | `Action.Begin.blake3` | variant_field | sc-24660 | metadata-organization | 33 |
 | cap-b1a77a0306171d3d | `engines/catalog/src/catalog_session/metadata_files.rs:112` | `Action.Append` | enum_case | sc-24660 | metadata-organization | 2 |
 | cap-6647fedaf721f7e4 | `engines/catalog/src/catalog_session/metadata_files.rs:113` | `Action.Append.offset` | variant_field | sc-24660 | metadata-organization | 37 |
 | cap-115fab24de238d23 | `engines/catalog/src/catalog_session/metadata_files.rs:115` | `Action.Append.bytes` | variant_field | sc-24660 | metadata-organization | 65 |
-| cap-184189629542c432 | `engines/catalog/src/catalog_session/metadata_files.rs:117` | `Action.Finish` | enum_case | sc-24660 | metadata-organization | 8 |
+| cap-184189629542c432 | `engines/catalog/src/catalog_session/metadata_files.rs:117` | `Action.Finish` | enum_case | sc-24660 | metadata-organization | 9 |
 | cap-0a072916e9196d66 | `engines/catalog/src/catalog_session/metadata_files.rs:118` | `Action.Release` | enum_case | sc-24660 | metadata-organization | 68 |
 | cap-272b03b701e13110 | `engines/catalog/src/catalog_session/metadata_files.rs:119` | `Action.Discover` | enum_case | sc-24660 | metadata-organization | 3 |
 | cap-3e96fc86fb23e5eb | `engines/catalog/src/catalog_session/metadata_files.rs:120` | `Action.Discover.directory` | variant_field | sc-24660 | metadata-organization | 15 |
@@ -6637,7 +6637,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-0bbae8e5dfad4fb5 | `engines/catalog/src/catalog_session/metadata_files.rs:213` | `DiscoveryEntry.operation` | setting_or_field | sc-24660 | metadata-organization | 0 |
 | cap-7f17ba1fcdbbce62 | `engines/catalog/src/catalog_session/metadata_files.rs:214` | `DiscoveryEntry.plan_digest` | setting_or_field | sc-24660 | metadata-organization | 0 |
 | cap-8e38fb94c081ebdd | `engines/catalog/src/catalog_session/metadata_files.rs:215` | `DiscoveryEntry.detail` | setting_or_field | sc-24660 | metadata-organization | 0 |
-| cap-45074f977be79cf2 | `engines/catalog/src/catalog_session/metadata_files.rs:225` | `Value.Begun` | enum_case | sc-24660 | metadata-organization | 6 |
+| cap-45074f977be79cf2 | `engines/catalog/src/catalog_session/metadata_files.rs:225` | `Value.Begun` | enum_case | sc-24660 | metadata-organization | 7 |
 | cap-92f8dc67f6ebd19e | `engines/catalog/src/catalog_session/metadata_files.rs:226` | `Value.Appended` | enum_case | sc-24660 | metadata-organization | 0 |
 | cap-be05794e99ca045c | `engines/catalog/src/catalog_session/metadata_files.rs:227` | `Value.Appended.offset` | variant_field | sc-24660 | metadata-organization | 23 |
 | cap-c7c74205e8ae4f7f | `engines/catalog/src/catalog_session/metadata_files.rs:229` | `Value.Plan` | enum_case | sc-24660 | metadata-organization | 9 |
@@ -6758,8 +6758,8 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-79ee166a29645e60 | `engines/catalog/src/catalog_session/preview_io.rs:74` | `Action.Write.offset` | variant_field | sc-24658 | catalog-adapter | 37 |
 | cap-816d754295873804 | `engines/catalog/src/catalog_session/preview_io.rs:75` | `Action.Write.checksum` | variant_field | sc-24658 | catalog-adapter | 10 |
 | cap-97bb6a77cdafae50 | `engines/catalog/src/catalog_session/preview_io.rs:77` | `Action.Write.bytes` | variant_field | sc-24658 | catalog-adapter | 65 |
-| cap-7d0404ead37d376f | `engines/catalog/src/catalog_session/preview_io.rs:79` | `Action.Finish` | enum_case | sc-24658 | catalog-adapter | 8 |
-| cap-b29894354a699906 | `engines/catalog/src/catalog_session/preview_io.rs:80` | `Action.Abort` | enum_case | sc-24658 | catalog-adapter | 33 |
+| cap-7d0404ead37d376f | `engines/catalog/src/catalog_session/preview_io.rs:79` | `Action.Finish` | enum_case | sc-24658 | catalog-adapter | 9 |
+| cap-b29894354a699906 | `engines/catalog/src/catalog_session/preview_io.rs:80` | `Action.Abort` | enum_case | sc-24658 | catalog-adapter | 34 |
 | cap-39ae981fe585aef2 | `engines/catalog/src/catalog_session/preview_io.rs:81` | `Action.Remove` | enum_case | sc-24658 | catalog-adapter | 3 |
 | cap-88b2b51d60b115f3 | `engines/catalog/src/catalog_session/preview_io.rs:82` | `Action.Remove.object` | variant_field | sc-24658 | catalog-adapter | 16 |
 | cap-96c891f517c1ad08 | `engines/catalog/src/catalog_session/preview_io.rs:83` | `Action.Remove.temporary` | variant_field | sc-24658 | catalog-adapter | 11 |
@@ -6771,7 +6771,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-203282feafd03700 | `engines/catalog/src/catalog_session/preview_io.rs:92` | `Action.CheckRelocation.target` | variant_field | sc-24658 | catalog-adapter | 24 |
 | cap-68600dc6650ce896 | `engines/catalog/src/catalog_session/preview_io.rs:93` | `Action.CheckRelocation.id` | variant_field | sc-24658 | catalog-adapter | 0 |
 | cap-6bf3fd684d541d2e | `engines/catalog/src/catalog_session/preview_io.rs:95` | `Action.Relocate` | enum_case | sc-24658 | catalog-adapter | 2 |
-| cap-60fd5237b129724d | `engines/catalog/src/catalog_session/preview_io.rs:96` | `Action.Relocate.source` | variant_field | sc-24658 | catalog-adapter | 24 |
+| cap-60fd5237b129724d | `engines/catalog/src/catalog_session/preview_io.rs:96` | `Action.Relocate.source` | variant_field | sc-24658 | catalog-adapter | 25 |
 | cap-0890c1d154a20929 | `engines/catalog/src/catalog_session/preview_io.rs:97` | `Action.Relocate.target` | variant_field | sc-24658 | catalog-adapter | 24 |
 | cap-ad753acac56e3b21 | `engines/catalog/src/catalog_session/preview_io.rs:98` | `Action.Relocate.id` | variant_field | sc-24658 | catalog-adapter | 0 |
 | cap-9b65a94724d85b96 | `engines/catalog/src/catalog_session/preview_io.rs:99` | `Action.Relocate.key` | variant_field | sc-24658 | catalog-adapter | 0 |
@@ -6891,7 +6891,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-ba5f1f313e1f2ae8 | `engines/catalog/src/catalog_session/preview_stage.rs:192` | `Request.binary` | rust_api | sc-24658 | catalog-adapter | 3 |
 | cap-0dde7bbdc38f3f27 | `engines/catalog/src/catalog_session/preview_stage.rs:198` | `Request.set_binary` | rust_api | sc-24658 | catalog-adapter | 0 |
 | cap-61cadc6058f8c19a | `engines/catalog/src/catalog_session/preview_stage.rs:218` | `Value.LegacyRead` | enum_case | sc-24658 | catalog-adapter | 1 |
-| cap-0440d7357485f92a | `engines/catalog/src/catalog_session/preview_stage.rs:219` | `Value.LegacyRead.transfer` | variant_field | sc-24658 | catalog-adapter | 21 |
+| cap-0440d7357485f92a | `engines/catalog/src/catalog_session/preview_stage.rs:219` | `Value.LegacyRead.transfer` | variant_field | sc-24658 | catalog-adapter | 22 |
 | cap-f7863b2673f9cd1c | `engines/catalog/src/catalog_session/preview_stage.rs:220` | `Value.LegacyRead.bytes` | variant_field | sc-24658 | catalog-adapter | 63 |
 | cap-5efb4c0915d4c221 | `engines/catalog/src/catalog_session/preview_stage.rs:222` | `Value.Unit` | enum_case | sc-24658 | catalog-adapter | 8 |
 | cap-a74cf72c1a45a051 | `engines/catalog/src/catalog_session/preview_stage.rs:223` | `Value.Admitted` | enum_case | sc-24658 | catalog-adapter | 2 |
@@ -7367,13 +7367,13 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-ec3f5991d18b066b | `engines/catalog/src/export_worker.rs:1580` | `discard_retired_export_transport` | rust_api | sc-24676 | export | 3 |
 | cap-031b84500ed1d60d | `engines/catalog/src/export_worker.rs:1607` | `export_worker_main` | rust_api | sc-24676 | export | 0 |
 | cap-9e7fddb0674c1265 | `engines/catalog/src/filesystem_worker.rs:418` | `worker_main` | rust_api | sc-24658 | catalog-adapter | 3 |
-| cap-589bbb9db22e2a29 | `engines/catalog/src/filesystem_worker.rs:440` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 50 |
+| cap-589bbb9db22e2a29 | `engines/catalog/src/filesystem_worker.rs:440` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 51 |
 | cap-ff3846d5b08ff787 | `engines/catalog/src/filesystem_worker.rs:448` | `Owner.empty` | rust_api | sc-24658 | catalog-adapter | 18 |
 | cap-5a84f2c222d0a38a | `engines/catalog/src/filesystem_worker.rs:453` | `maximum_receipt` | rust_api | sc-24658 | catalog-adapter | 0 |
 | cap-ddcecfe6fab52166 | `engines/catalog/src/filesystem_worker.rs:456` | `captured_begin_failure` | rust_api | sc-24658 | catalog-adapter | 0 |
-| cap-6c906ad1753af10f | `engines/catalog/src/filesystem_worker.rs:469` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 50 |
+| cap-6c906ad1753af10f | `engines/catalog/src/filesystem_worker.rs:469` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 51 |
 | cap-02f5283047be82f9 | `engines/catalog/src/filesystem_worker.rs:480` | `Owner.empty` | rust_api | sc-24658 | catalog-adapter | 18 |
-| cap-eb172934e11059bf | `engines/catalog/src/filesystem_worker.rs:493` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 50 |
+| cap-eb172934e11059bf | `engines/catalog/src/filesystem_worker.rs:493` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 51 |
 | cap-70258f499ac3fa00 | `engines/catalog/src/filesystem_worker.rs:502` | `Owner.empty` | rust_api | sc-24658 | catalog-adapter | 18 |
 | cap-db9c4ae671edec8e | `engines/catalog/src/filesystem_worker.rs:519` | `Owner.new` | rust_api | sc-24658 | catalog-adapter | 0 |
 | cap-b21826e42e1315d3 | `engines/catalog/src/filesystem_worker.rs:555` | `Owner.stage` | rust_api | sc-24658 | catalog-adapter | 19 |
@@ -7435,12 +7435,12 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-9540e1859cca134b | `engines/catalog/src/filesystem_worker/client.rs:769` | `Client.terminate_after_dependents_drained` | rust_api | sc-24658 | catalog-adapter | 0 |
 | cap-8ae0793c1e798278 | `engines/catalog/src/filesystem_worker/export_executor.rs:64` | `Owner.empty` | rust_api | sc-24676 | export | 18 |
 | cap-859f835fd59a205b | `engines/catalog/src/filesystem_worker/export_executor.rs:67` | `Owner.admits_stage` | rust_api | sc-24676 | export | 0 |
-| cap-59721cbd46e8a0d1 | `engines/catalog/src/filesystem_worker/export_executor.rs:244` | `Owner.call` | rust_api | sc-24676 | export | 50 |
+| cap-59721cbd46e8a0d1 | `engines/catalog/src/filesystem_worker/export_executor.rs:244` | `Owner.call` | rust_api | sc-24676 | export | 51 |
 | cap-fd5e562c09f3ce83 | `engines/catalog/src/filesystem_worker/export_stage.rs:147` | `Owner.empty` | rust_api | sc-24676 | export | 18 |
-| cap-e0c08fc29effaadc | `engines/catalog/src/filesystem_worker/export_stage.rs:150` | `Owner.call` | rust_api | sc-24676 | export | 50 |
+| cap-e0c08fc29effaadc | `engines/catalog/src/filesystem_worker/export_stage.rs:150` | `Owner.call` | rust_api | sc-24676 | export | 51 |
 | cap-5ec943dae1f4c8dc | `engines/catalog/src/filesystem_worker/import.rs:185` | `Owner.empty` | rust_api | sc-24659 | catalog-service | 18 |
-| cap-1f283c95e3a19ce0 | `engines/catalog/src/filesystem_worker/import.rs:190` | `Owner.call` | rust_api | sc-24659 | catalog-service | 50 |
-| cap-81af04b96720b09a | `engines/catalog/src/filesystem_worker/import.rs:201` | `Owner.call_managed` | rust_api | sc-24659 | catalog-service | 1 |
+| cap-1f283c95e3a19ce0 | `engines/catalog/src/filesystem_worker/import.rs:190` | `Owner.call` | rust_api | sc-24659 | catalog-service | 51 |
+| cap-81af04b96720b09a | `engines/catalog/src/filesystem_worker/import.rs:201` | `Owner.call_managed` | rust_api | sc-24659 | catalog-service | 2 |
 | cap-5d963ee2784c3cd7 | `engines/catalog/src/filesystem_worker/lightroom_workbench.rs:99` | `RetainedMetadataLayouts.owner` | setting_or_field | sc-24662 | migration | 0 |
 | cap-49e137299b155fb9 | `engines/catalog/src/filesystem_worker/lightroom_workbench.rs:100` | `RetainedMetadataLayouts.root` | setting_or_field | sc-24662 | migration | 0 |
 | cap-353b97bd7388ec1c | `engines/catalog/src/filesystem_worker/lightroom_workbench.rs:101` | `RetainedMetadataLayouts.capture` | setting_or_field | sc-24662 | migration | 0 |
@@ -7455,9 +7455,9 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-610deb6915281037 | `engines/catalog/src/filesystem_worker/lightroom_workbench.rs:113` | `EvidenceConstructionLayouts.roster_tree` | setting_or_field | sc-24662 | migration | 0 |
 | cap-f322c489044b8372 | `engines/catalog/src/filesystem_worker/lightroom_workbench.rs:114` | `EvidenceConstructionLayouts.roster_strings` | setting_or_field | sc-24662 | migration | 0 |
 | cap-2af3eee5331e2c91 | `engines/catalog/src/filesystem_worker/metadata_files.rs:40` | `Owner.empty` | rust_api | sc-24660 | metadata-organization | 18 |
-| cap-9c044e1f579cfe53 | `engines/catalog/src/filesystem_worker/metadata_files.rs:43` | `Owner.call` | rust_api | sc-24660 | metadata-organization | 50 |
+| cap-9c044e1f579cfe53 | `engines/catalog/src/filesystem_worker/metadata_files.rs:43` | `Owner.call` | rust_api | sc-24660 | metadata-organization | 51 |
 | cap-51a32e957db2d9be | `engines/catalog/src/filesystem_worker/preview_stage.rs:170` | `Owner.empty` | rust_api | sc-24658 | catalog-adapter | 18 |
-| cap-2e38df090648b392 | `engines/catalog/src/filesystem_worker/preview_stage.rs:207` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 50 |
+| cap-2e38df090648b392 | `engines/catalog/src/filesystem_worker/preview_stage.rs:207` | `Owner.call` | rust_api | sc-24658 | catalog-adapter | 51 |
 | cap-d7bc1660defa0038 | `engines/catalog/src/filesystem_worker/process.rs:17` | `Handler.execute` | rust_api | sc-24658 | catalog-adapter | 1 |
 | cap-d8639f8f88c37504 | `engines/catalog/src/filesystem_worker/process.rs:19` | `Handler.shutdown` | rust_api | sc-24658 | catalog-adapter | 1 |
 | cap-483f85e82f6fed12 | `engines/catalog/src/filesystem_worker/process.rs:173` | `OperationContext.cancel` | setting_or_field | sc-24658 | catalog-adapter | 0 |
@@ -8932,27 +8932,28 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-1a283ebe815ef290 | `engines/catalog/src/media/full.rs:109` | `RenderProvenance.calibration` | setting_or_field | sc-24663 | raw-develop | 1 |
 | cap-a77a6749e2e51aad | `engines/catalog/src/media/full.rs:110` | `RenderProvenance.spatial_calibration` | setting_or_field | sc-24663 | raw-develop | 1 |
 | cap-36cc5b8efc78db2d | `engines/catalog/src/media/full.rs:111` | `RenderProvenance.notes` | setting_or_field | sc-24663 | raw-develop | 1 |
-| cap-70adc4439f5a7ff4 | `engines/catalog/src/media/full.rs:116` | `RenderedImage.metadata` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-67b079bb0ab5932b | `engines/catalog/src/media/full.rs:117` | `RenderedImage.width` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-c66442af487f5bbd | `engines/catalog/src/media/full.rs:118` | `RenderedImage.height` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-fe323e8e569ce2f1 | `engines/catalog/src/media/full.rs:119` | `RenderedImage.pixels` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-6bd9b1ad0afd2674 | `engines/catalog/src/media/full.rs:120` | `RenderedImage.provenance` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-a67db1e12e6715ac | `engines/catalog/src/media/full.rs:125` | `RenderedPlane.metadata` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-a3238d5023413705 | `engines/catalog/src/media/full.rs:126` | `RenderedPlane.width` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-f09cd7922a016c72 | `engines/catalog/src/media/full.rs:127` | `RenderedPlane.height` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-c21f563507e8d234 | `engines/catalog/src/media/full.rs:128` | `RenderedPlane.provenance` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-4cb65790b5a82e91 | `engines/catalog/src/media/full.rs:131` | `LinearRowSink.write_row` | rust_api | sc-24663 | raw-develop | 3 |
-| cap-89a9324a80f176e6 | `engines/catalog/src/media/full.rs:211` | `RenderedImage.srgb_preview` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-531aa86318c5d3d3 | `engines/catalog/src/media/full.rs:220` | `RenderedImage.srgb_preview_pixels` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-d596f9d77fc801be | `engines/catalog/src/media/full.rs:246` | `linear_to_srgb` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-22bdee3729154f45 | `engines/catalog/src/media/full.rs:253` | `srgb_to_linear` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-1291a82ce4bc4caf | `engines/catalog/src/media/full.rs:321` | `decoder_versions` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-80e6335e7ab061c3 | `engines/catalog/src/media/full.rs:333` | `decode_full` | rust_api | sc-24663 | raw-develop | 23 |
-| cap-0ffbf35db5f02622 | `engines/catalog/src/media/full.rs:337` | `decode_full_limited` | rust_api | sc-24663 | raw-develop | 6 |
-| cap-f22849e1a01ee172 | `engines/catalog/src/media/full.rs:343` | `decode_with_white_point` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-fdd322cca162a7fe | `engines/catalog/src/media/full.rs:349` | `decode_with_white_point_rows` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-d0447ac99250fbda | `engines/catalog/src/media/full.rs:353` | `decode_with_white_point_rows_cancellable` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-31ad7f89b889ba1e | `engines/catalog/src/media/full.rs:1311` | `linear_profile` | rust_api | sc-24663 | raw-develop | 1 |
+| cap-1747c333971672a9 | `engines/catalog/src/media/full.rs:116` | `RenderProvenance.neutral_clip` | setting_or_field | sc-24663 | raw-develop | 2 |
+| cap-80eaedec9459e2be | `engines/catalog/src/media/full.rs:121` | `RenderedImage.metadata` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-acfd0709dd06d542 | `engines/catalog/src/media/full.rs:122` | `RenderedImage.width` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-9a77be71db9a8e40 | `engines/catalog/src/media/full.rs:123` | `RenderedImage.height` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-9a7f4f5d93c8fe84 | `engines/catalog/src/media/full.rs:124` | `RenderedImage.pixels` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-e14ada300e89f48f | `engines/catalog/src/media/full.rs:125` | `RenderedImage.provenance` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-33bf355d4d4a6fdf | `engines/catalog/src/media/full.rs:130` | `RenderedPlane.metadata` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-c8b394d7f213317d | `engines/catalog/src/media/full.rs:131` | `RenderedPlane.width` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-e0c953f40b63ac4a | `engines/catalog/src/media/full.rs:132` | `RenderedPlane.height` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-ac47af7650e96852 | `engines/catalog/src/media/full.rs:133` | `RenderedPlane.provenance` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-049da0b043eef440 | `engines/catalog/src/media/full.rs:136` | `LinearRowSink.write_row` | rust_api | sc-24663 | raw-develop | 3 |
+| cap-e9b1fca61c99f047 | `engines/catalog/src/media/full.rs:216` | `RenderedImage.srgb_preview` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-f3cb0dc71b9b5f6c | `engines/catalog/src/media/full.rs:225` | `RenderedImage.srgb_preview_pixels` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-5193553460d5c01d | `engines/catalog/src/media/full.rs:251` | `linear_to_srgb` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-19247f7ceb0647e6 | `engines/catalog/src/media/full.rs:258` | `srgb_to_linear` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-3778ee43bd3fb36c | `engines/catalog/src/media/full.rs:328` | `decoder_versions` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-430ffac65b3f55e1 | `engines/catalog/src/media/full.rs:340` | `decode_full` | rust_api | sc-24663 | raw-develop | 24 |
+| cap-659e1de8b2ca91eb | `engines/catalog/src/media/full.rs:344` | `decode_full_limited` | rust_api | sc-24663 | raw-develop | 6 |
+| cap-fb15884ff771acb1 | `engines/catalog/src/media/full.rs:350` | `decode_with_white_point` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-0efc4d4c4e24c39d | `engines/catalog/src/media/full.rs:356` | `decode_with_white_point_rows` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-909bbe2975682927 | `engines/catalog/src/media/full.rs:360` | `decode_with_white_point_rows_cancellable` | rust_api | sc-24663 | raw-develop | 0 |
+| cap-a464490fb0ec267d | `engines/catalog/src/media/full.rs:1321` | `linear_profile` | rust_api | sc-24663 | raw-develop | 1 |
 | cap-3328af9008748de4 | `engines/catalog/src/media/psd.rs:7` | `Composite.image` | setting_or_field | sc-24663 | raw-develop | 4 |
 | cap-1fe698f494175751 | `engines/catalog/src/media/psd.rs:8` | `Composite.bits` | setting_or_field | sc-24663 | raw-develop | 0 |
 | cap-5e3018f715247907 | `engines/catalog/src/media/psd.rs:9` | `Composite.icc` | setting_or_field | sc-24663 | raw-develop | 0 |
@@ -9761,8 +9762,8 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-fb255b89371b740f | `engines/catalog/src/preview/worker/read_transport.rs:195` | `Read.shutdown` | rust_api | sc-24659 | catalog-service | 7 |
 | cap-f67c08ad7c2d371f | `engines/catalog/src/storage_volume.rs:11` | `NativePath.UnixBytes` | enum_case | sc-24661 | offline-relink | 41 |
 | cap-cc222f2d5160778f | `engines/catalog/src/storage_volume.rs:12` | `NativePath.WindowsWide` | enum_case | sc-24661 | offline-relink | 34 |
-| cap-db6f28d3b3abbb39 | `engines/catalog/src/storage_volume.rs:15` | `NativePath.from_path` | rust_api | sc-24661 | offline-relink | 224 |
-| cap-967fb140cdd0e9fc | `engines/catalog/src/storage_volume.rs:29` | `NativePath.to_path` | rust_api | sc-24661 | offline-relink | 27 |
+| cap-db6f28d3b3abbb39 | `engines/catalog/src/storage_volume.rs:15` | `NativePath.from_path` | rust_api | sc-24661 | offline-relink | 225 |
+| cap-967fb140cdd0e9fc | `engines/catalog/src/storage_volume.rs:29` | `NativePath.to_path` | rust_api | sc-24661 | offline-relink | 28 |
 | cap-96fac21913b96c76 | `engines/catalog/src/storage_volume.rs:50` | `IdentityScheme.MacVolumeUuid` | enum_case | sc-24661 | offline-relink | 1 |
 | cap-d89deda6f4c1b725 | `engines/catalog/src/storage_volume.rs:51` | `IdentityScheme.WindowsVolumeGuid` | enum_case | sc-24661 | offline-relink | 4 |
 | cap-6d51387f1eca3aab | `engines/catalog/src/storage_volume.rs:52` | `IdentityScheme.LinuxFilesystemUuid` | enum_case | sc-24661 | offline-relink | 2 |
@@ -13005,9 +13006,9 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/desktop/vite.config.ts` | baseline_product_source | sc-24689 | 4 | `082560000d8f2621b927ebbc7dc6cec11ed15fe805d30cafec7b3f1dd295b3da` |
 | `engines/catalog/examples/desktop_worker_smoke.rs` | baseline_product_source | sc-24658 | 3 | `fbd09cbfeb73ee079ae0b62eae9af636baee55a7622f8b2a87a0e2bc193665f8` |
 | `engines/catalog/examples/render_probe.rs` | baseline_product_source | sc-24694 | 1 | `ec3b14201738a50b9cdd61916f58c441823031738fdfebe51b567bf8312fff07` |
-| `engines/catalog/native/decode.cpp` | baseline_product_source | sc-24658 | 37 | `2b13d28f29a6d45c1ab18af30279b1eb2671f72ab5b7700380823b7ee5284153` |
-| `engines/catalog/native/decode.h` | baseline_product_source | sc-24658 | 12 | `03bcb46a0f36c63a4331aa5069591664e4dd448ca65133e0e8eef5c6b62c515d` |
-| `engines/catalog/native/dng.cpp` | baseline_product_source | sc-24658 | 32 | `fcca9cb7b6ce31a84b8499b3f69dffa07c0ca947f40ba5276d3e97c030b1ae89` |
+| `engines/catalog/native/decode.cpp` | baseline_product_source | sc-24658 | 37 | `32b9af637c99a41113c5041ee89b1ee2d88967617874fb173edcbf98c39e8c88` |
+| `engines/catalog/native/decode.h` | baseline_product_source | sc-24658 | 12 | `bac2c77e3d94298fdad7f1d42dce6de4f92121095a04f3da0c89d869c76420c3` |
+| `engines/catalog/native/dng.cpp` | baseline_product_source | sc-24658 | 32 | `ab3cf50fce7a8c880f1bff46339b4e2b65d661fb1e3763da7cf45ddbf49bf2a2` |
 | `engines/catalog/native/dng_stage_plane.h` | baseline_product_source | sc-24658 | 9 | `24fd28971a1dac8eb8040c8e646e8c399aef719dde1614ec6d2d86479a1ac5bb` |
 | `engines/catalog/native/dng_stage_plane_tests.cpp` | baseline_test_source | sc-24658 | 16 | `622a2567df11811251acac4755fdb83349374ef556996681873e3061d8920c5b` |
 | `engines/catalog/native/pc_dng_allocation.h` | baseline_product_source | sc-24658 | 15 | `1d1d33a307fa2ce442425250cf50d86b87d2c983c8c5c1c2c477092a7484ffa9` |
@@ -13077,7 +13078,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/application/relink/tests.rs` | baseline_product_source | sc-24661 | 22 | `be6bf9025f48105b03c33136c6701798fe985df8e3443d9fd9a6a7fd963c07c6` |
 | `engines/catalog/src/application/relink.rs` | baseline_product_source | sc-24661 | 265 | `35105e7be55f62a84da054e474b859d15ce7dcea9d0c562cfe9a8340dd4c6e7b` |
 | `engines/catalog/src/application/tests.rs` | baseline_product_source | sc-24658 | 30 | `3e83fa54fff34038c1e38adcbabd8024d77922f6fc8e4b99127f606c16e22382` |
-| `engines/catalog/src/application.rs` | baseline_product_source | sc-24658 | 229 | `aebc2c88485dafe6227a0601ca0b663df605cff5f7a804548a06d37dcd311a69` |
+| `engines/catalog/src/application.rs` | baseline_product_source | sc-24658 | 229 | `3b55ae78107a56a13fde9b8926dceb8f8fb0fdaf89aab2658d31e3dab4d06fec` |
 | `engines/catalog/src/bin/catalog_probe.rs` | baseline_product_source | sc-24694 | 11 | `fe3d0e4dacf550d7248e34e55ad79ad3a2ddd58ac9c51889d287adfae4250904` |
 | `engines/catalog/src/bin/edit_probe.rs` | baseline_product_source | sc-24694 | 78 | `0df2790a91699a5557ee72bffe27adb2a06378034f740891574e451c87ea9ca8` |
 | `engines/catalog/src/bin/lightroom_inspect.rs` | baseline_product_source | sc-24662 | 98 | `07a74db72f001437d8b7c1b3d342a153abde1e4195ef0dc8136afd0e2a4bd73c` |
@@ -13189,7 +13190,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/edit/mod.rs` | baseline_product_source | sc-24663 | 48 | `2590087bb6cdbbf07dbe896333e10bc104372457c65aefd064325ab7dd85a04c` |
 | `engines/catalog/src/edit/prepared.rs` | baseline_product_source | sc-24663 | 40 | `ad8d1461a176d734bbac2382525c596c7c46e31d7ffdb377260239aa30a17566` |
 | `engines/catalog/src/edit/recipe.rs` | baseline_product_source | sc-24663 | 60 | `9013875e64d23f2f8748c679bce8f6a80d7a549fc30eb6269010773337a28737` |
-| `engines/catalog/src/edit/render.rs` | baseline_product_source | sc-24663 | 88 | `332d9aebbe4be60559f4d375d4393af8b1f408a4285a9d077f2596201cf58704` |
+| `engines/catalog/src/edit/render.rs` | baseline_product_source | sc-24663 | 88 | `7b4b42cdcfb1857c5c6eb6a8b31ee7c300ee407aea524d2f42433fd6928f225b` |
 | `engines/catalog/src/export_service/managed/tests.rs` | baseline_product_source | sc-24676 | 29 | `be79f856a7b3d8045e806e2544520442d0ff57897c82105b16e10a96f8fd0c13` |
 | `engines/catalog/src/export_service/managed.rs` | baseline_product_source | sc-24676 | 77 | `8d085833e453b5d16352a2ed769707954e465bb2f8ba807ef3532ff5bb9b2f3a` |
 | `engines/catalog/src/export_service.rs` | baseline_product_source | sc-24676 | 112 | `9193f8a4a70bc22b2b70a79653ce8ffec3f0ef265ad2215da7f78176ef4bad8d` |
@@ -13202,7 +13203,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/filesystem_worker/client.rs` | baseline_product_source | sc-24658 | 186 | `b662ca46db92722cd10ad2e25eab1c5fe359d15a8f15c63fd88a0eea98d1b4a7` |
 | `engines/catalog/src/filesystem_worker/export_executor.rs` | baseline_product_source | sc-24676 | 37 | `719cbea8e6c01666f902f1b7d344bb79e3b604394f8f205db7b17f88eb64c37e` |
 | `engines/catalog/src/filesystem_worker/export_stage.rs` | baseline_product_source | sc-24676 | 140 | `d00025ed47707a7c020c80a4be86b8d49318c496e9b96aeb3cf130b8bf6d38b5` |
-| `engines/catalog/src/filesystem_worker/import.rs` | baseline_product_source | sc-24659 | 96 | `28d015e792586176b935fbb41276ec7841e17815ba6068cefa49cf3eb4492e82` |
+| `engines/catalog/src/filesystem_worker/import.rs` | baseline_product_source | sc-24659 | 97 | `24ca46300828eb322d3c5457fea6d7748e93dcef5b91fa0e50730012697eef75` |
 | `engines/catalog/src/filesystem_worker/lightroom_artifacts.rs` | baseline_product_source | sc-24662 | 26 | `b308c4aa8fe8313f2ad1df3305c7ab81bdaa22b0c4a4ca7eec3e1ecc1ce3f566` |
 | `engines/catalog/src/filesystem_worker/lightroom_sealed.rs` | baseline_product_source | sc-24662 | 15 | `b8b25c383a2bdfdb233db93dac0850929c01abf72722a0ec12d444e5f0d78203` |
 | `engines/catalog/src/filesystem_worker/lightroom_workbench.rs` | baseline_product_source | sc-24662 | 149 | `e67ba3bcec0deb8be2411a4ba1a14f713e40aac3a31a4be3d7011bcfd18667e8` |
@@ -13223,7 +13224,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/image_export/specification.rs` | baseline_product_source | sc-24676 | 52 | `b5be47e6fe5c1f7304397b392ff210280acaed340b4156976c458981db6cad7e` |
 | `engines/catalog/src/image_export/tests.rs` | baseline_product_source | sc-24676 | 19 | `08a4bac8b3cb954dd85f15b7609722d95fee9a49516056ad8dd278e7d3956008` |
 | `engines/catalog/src/import_gate_diagnostics.rs` | baseline_product_source | sc-24659 | 73 | `1fbf52a5f3c01b37a63d4d1613a54de475cb5c4eb4e81b6c0a428b5d47c62276` |
-| `engines/catalog/src/import_preparation.rs` | baseline_product_source | sc-24659 | 144 | `2b3ab02ec2e5fe7c92a060ea9c7cbd5fef4ae90b1068350d39c9e41890770d97` |
+| `engines/catalog/src/import_preparation.rs` | baseline_product_source | sc-24659 | 144 | `e5bbcd3748672d1589ecae42bc086353d6ff62d599d94d4998cdc0d04c1da2b4` |
 | `engines/catalog/src/import_readiness.rs` | baseline_product_source | sc-24659 | 99 | `23bea5422975b50151366e5477fc3552a70a7ed5576edd776828ee4c998967ce` |
 | `engines/catalog/src/import_storage.rs` | baseline_product_source | sc-24659 | 22 | `66d26c64cbc347757e7c0f8645fef129491732582673cae43d1cc5096664a41e` |
 | `engines/catalog/src/import_timing.rs` | baseline_product_source | sc-24659 | 92 | `280bf11c1cfe4256f84c4e581fb0cb53d4e30f8b8290a6ffab82a2e390dfff97` |
@@ -13319,9 +13320,9 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/lightroom_migration_worker/worker.rs` | baseline_product_source | sc-24662 | 83 | `6b8a04733786ecafb7b796eaf7f63c885318e0a199c2aca4de7959183f9d5fd8` |
 | `engines/catalog/src/lightroom_migration_worker.rs` | baseline_product_source | sc-24662 | 14 | `17f60f50f3f270edb82eb0652e1cfa4e14fbeca38a858f4986626c51d577ce1a` |
 | `engines/catalog/src/main.rs` | baseline_product_source | sc-24658 | 248 | `17e14cab2f32ea5eda9ce29b66704335896721af8d48b1c23c52ef776097ff66` |
-| `engines/catalog/src/media/full.rs` | baseline_product_source | sc-24663 | 193 | `9c2b6ecc65885891dd5d1f4fe58039bd1a3057924cd845721d92a514c49281bb` |
+| `engines/catalog/src/media/full.rs` | baseline_product_source | sc-24663 | 196 | `2a664bc5577567e6e2706752cc49979d7a4d33b9993cc9cfaedc2ec7a4bf5d8a` |
 | `engines/catalog/src/media/psd.rs` | baseline_product_source | sc-24663 | 13 | `c53560502572983fd9435170bbfba1b5de1a3a25d7ddfa4352422fa68b38ff59` |
-| `engines/catalog/src/media/raw_highlight_tests.rs` | baseline_test_source | sc-24663 | 7 | `c390d2b51be9ae282449826296b89a55837897ff4ecdeb45992ec1b02f68bf9d` |
+| `engines/catalog/src/media/raw_highlight_tests.rs` | baseline_test_source | sc-24663 | 8 | `0ca63be9de7a1e89355a8cf6c855cf3336799ad0bf17a624135f516919ebf9f6` |
 | `engines/catalog/src/media.rs` | baseline_product_source | sc-24658 | 25 | `f317bb186ff611a7c4c0063bdb0e381b38b4ab4c5bc6138f948c7ead2bb86313` |
 | `engines/catalog/src/metadata_export/photo_phases.rs` | baseline_product_source | sc-24660 | 67 | `0a6d3b9987a3b4d3ed1b3ecc517069e3f80c368fcb8f7cd974a79cc23e15392f` |
 | `engines/catalog/src/metadata_export/wire.rs` | baseline_product_source | sc-24660 | 55 | `e4e30f20a41ea27121f18656d060684119cb6349cd6c416a612b90ef5f1d7459` |
@@ -13350,7 +13351,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/preview/service.rs` | baseline_product_source | sc-24659 | 227 | `cdaa2c557ac51fc06a0a331c2bcf23e8e5e01a7b780ce5a6bafe55ed0070f85a` |
 | `engines/catalog/src/preview/stage_io/tests.rs` | baseline_product_source | sc-24659 | 39 | `5042c44d6735a0f7b72c76fe9e4bedde0139a51e5980b269bcf346761527eb97` |
 | `engines/catalog/src/preview/stage_io.rs` | baseline_product_source | sc-24659 | 52 | `8e9e4f029bdd7b69780b1e0fa9c034db22d20cdcf3b91a733c9f484680bae6e3` |
-| `engines/catalog/src/preview/store.rs` | baseline_product_source | sc-24659 | 194 | `93c0b2e967593f1f339d732970901fe8f37d8ef182fd6486be2c4911d5503357` |
+| `engines/catalog/src/preview/store.rs` | baseline_product_source | sc-24659 | 194 | `2c7e2c4943c1ffcc137e86133942c9fe80659fad6d9bfccea9e78053c29abe16` |
 | `engines/catalog/src/preview/store_custody.rs` | baseline_product_source | sc-24659 | 61 | `b0c907c83a4c3289eecd08e725fbfb95ee303dc7cff41bd3dd4fe6ce417d76d1` |
 | `engines/catalog/src/preview/store_io.rs` | baseline_product_source | sc-24659 | 34 | `9c8fc448c4b7a51569b33917d5ab6e2d896474feece168cf8b1fd20255f916a3` |
 | `engines/catalog/src/preview/store_lock_tests.rs` | baseline_test_source | sc-24659 | 7 | `dac9108e7786c3dd6f56703ead76cc7da97bfb8126161fdd32ac944eecae87a4` |
@@ -13363,7 +13364,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/preview/worker/managed.rs` | baseline_product_source | sc-24659 | 17 | `56d0dc9ec19a81268ab76fb3dd0795d2bd32b8b0262456086d6e9628617719af` |
 | `engines/catalog/src/preview/worker/managed_process/tests.rs` | baseline_product_source | sc-24659 | 30 | `686b790dddf58fc6e1ae1d37bf2e6c44240b97eb9558e3ab2ba8b09b5fc09832` |
 | `engines/catalog/src/preview/worker/managed_process.rs` | baseline_product_source | sc-24659 | 36 | `40ebeccd040b4a17d38c42c33366ede8b2206c0bbe5f0d26f49952b608d9a3c0` |
-| `engines/catalog/src/preview/worker/managed_transport/tests.rs` | baseline_product_source | sc-24659 | 9 | `e2321bf05b889e48923dcea1237152be5aa158bdabfb5520c5cf02646340c387` |
+| `engines/catalog/src/preview/worker/managed_transport/tests.rs` | baseline_product_source | sc-24659 | 9 | `cf89b16f0342df15f57e588a446fab3195f297f2999008584a1b96eabec9a1b7` |
 | `engines/catalog/src/preview/worker/managed_transport.rs` | baseline_product_source | sc-24659 | 33 | `3fb683dc569825f5243e7a49f6382eaf7b892fed725926a18a9f67d6f5fa8882` |
 | `engines/catalog/src/preview/worker/read_transport.rs` | baseline_product_source | sc-24659 | 24 | `bafd244d52c4a675dec9702e672f65f076f9da88d475b06c2b6a7f620c55fdc9` |
 | `engines/catalog/src/preview/worker.rs` | baseline_product_source | sc-24659 | 105 | `74a722b202f3b8b11ab62640f1068d82302cd2b9ee0b1aad1bcbcadeedde795b` |
@@ -13390,7 +13391,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/tests/lightroom.rs` | baseline_test_source | sc-24662 | 35 | `954d79ba6b83bbdabb93396a232e7e9e22906803244352e07e1bac5af4482d81` |
 | `engines/catalog/tests/lightroom_workbench.rs` | baseline_test_source | sc-24662 | 7 | `6152750a6831ccf2b71a8b0c8519361f13051b47492705b3e2d846e7fbba7f92` |
 | `engines/catalog/tests/managed_backup_process.rs` | baseline_test_source | sc-24677 | 11 | `0691d04ead791deb16538f4b44bb4907a2e5d43d6ba1155453ad05af20de43ef` |
-| `engines/catalog/tests/media.rs` | baseline_test_source | sc-24658 | 21 | `12cf686b36302d6f54875eeaf97d2793f5c8697fa73ae0dd7c2ccea0782742f9` |
+| `engines/catalog/tests/media.rs` | baseline_test_source | sc-24658 | 21 | `d0ffdd5f144b65bcfe8540638f9c5772f659be3133a1a4235ad515541c68f003` |
 | `engines/catalog/tests/metadata_export.rs` | baseline_test_source | sc-24660 | 14 | `50df0077d228e3e5f2034528aa0ccbc08adca574021080823a0efc9ad283e84a` |
 | `engines/catalog/tests/native_probe.rs` | baseline_test_source | sc-24694 | 1 | `3d8026243bd3c954595766edf84e13103e4cd5b3e33ffadf85ff1826c9dcbdfc` |
 | `engines/catalog/tests/organization.rs` | baseline_test_source | sc-24660 | 36 | `8bb31e49f207fc2661be03cd479707dc5414ce5e51f7185557dd8b2e401c38be` |
@@ -13398,7 +13399,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/tests/photo_export_service.rs` | baseline_test_source | sc-24676 | 12 | `06b02b102908507803591edffde26ac8acb8f5d219f79b21abf057d8faad2d41` |
 | `engines/catalog/tests/photo_publication.rs` | baseline_test_source | sc-24658 | 19 | `5ac4d92e1389277a216ac1a27c7f277c4c50a2f1b336484a3d30f69d07c86443` |
 | `engines/catalog/tests/photo_publication_phases.rs` | baseline_test_source | sc-24658 | 12 | `e74994cede18c8be67cc3086a1df35ed75ae54437cc01e22befd9810c34ccf86` |
-| `engines/catalog/tests/preview_codec.rs` | baseline_test_source | sc-24658 | 7 | `1b45f4fc49c3a0f69a953249db0e730654e9bb2c478fec6c3f4ace067c695de0` |
+| `engines/catalog/tests/preview_codec.rs` | baseline_test_source | sc-24658 | 7 | `bbaf4d7e7766a758dddff40c80ea851d44ecccfa64c4b794727e8675a0ba6a48` |
 | `engines/catalog/tests/preview_edits.rs` | baseline_test_source | sc-24658 | 8 | `f555b3b6b807eab4bae11856f39c9ed2ca6ec3775f79afd6dcd2f896d4013ffb` |
 | `engines/catalog/tests/preview_probe.rs` | baseline_test_source | sc-24694 | 2 | `bec2e693a31d86e876a0c1770cb2411c7c2d7b5f90956d181d36327b6d53f674` |
 | `engines/catalog/tests/preview_runtime.rs` | baseline_test_source | sc-24658 | 1 | `b7ebf30a5b808bb0d5c22bb0c3739c3f3b8e1bb03428d4bbbe43af474940d826` |

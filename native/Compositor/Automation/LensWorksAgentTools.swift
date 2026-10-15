@@ -150,6 +150,12 @@ final class LensWorksAgentTools {
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             guard let first = catalog.groups.first else { return catalog.isBusy ? "Finish the current catalog operation first." : "There are no virtual folders on the current page." }
             return catalog.folderDeleteAvailability(first.id)
+        case .cancelMergeHDR:
+            guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
+            return catalog.hdrMergeCancelReason
+        case .mergeHDR:
+            guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
+            return catalog.hdrMergeAvailability()
         case _ where Self.controlCommands.contains(id):
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             guard let current = catalog.currentCatalogVariant else { return "Select a catalog photo first." }

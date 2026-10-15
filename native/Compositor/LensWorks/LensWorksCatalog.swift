@@ -1268,25 +1268,28 @@ final class LensWorksCatalog {
     /// The source photos a merged HDR photo is linked to in this catalog; empty for any other photo.
     /// The catalog index holds the link. When it has none for a DNG (the index was deleted or
     /// rebuilt, or the file was merged elsewhere) the link is rebuilt from the file's own merge
-    /// record and stored again.
-    func hdrMergeSources(of asset: LensWorksCatalogAsset) async throws -> [LensWorksDerivedSource] {
+    /// record and stored again. `admit` sees each file before the rebuild reads it (an agent's granted folders) and
+    /// throws to refuse it.
+    func hdrMergeSources(of asset: LensWorksCatalogAsset, admit: ((URL) throws -> Void)? = nil) async throws -> [LensWorksDerivedSource] {
         guard let catalogPath else { return [] }
         let recorded = try await index.sources(catalog: catalogPath, image: asset.id)
         if !recorded.isEmpty { return recorded }
-        return try await rebuildHDRMergeSources(of: asset, catalog: catalogPath)
+        return try await rebuildHDRMergeSources(of: asset, catalog: catalogPath, admit: admit)
     }
     /// Reads the merged DNG's XMP record and matches each source to this catalog by asset ID and
     /// by the SHA-256 of its original. A source that is no longer in the catalog, or whose
     /// original no longer has those bytes, is kept as missing under its recorded file name.
-    private func rebuildHDRMergeSources(of asset: LensWorksCatalogAsset, catalog: String) async throws -> [LensWorksDerivedSource] {
+    private func rebuildHDRMergeSources(of asset: LensWorksCatalogAsset, catalog: String, admit: ((URL) throws -> Void)?) async throws -> [LensWorksDerivedSource] {
         guard asset.filename.lowercased().hasSuffix(".dng"), let key = asset.key, let token = catalogToken else { return [] }
         let scope = captureScope()
         let record: LWHDRMergeProvenance
         do {
             let url = try await service.originalLocation(key).localFileURL()
             try checkScope(scope)
+            do { try admit?(url) } catch { throw LensWorksHDRSourceRefusal(error: error) }
             record = try await Self.detached { try LWDNGInspection.provenance(at: url) }
         } catch is CancellationError { throw CancellationError() }
+        catch let refused as LensWorksHDRSourceRefusal { throw refused.error }
         catch { return [] }  // Not a LensWorks merge, or its original cannot be read now.
         try checkScope(scope)
         var sources: [LensWorksDerivedSource] = [], verified = true
@@ -1302,8 +1305,10 @@ final class LensWorksCatalog {
             do {
                 let file = try await service.originalLocation(row.key).localFileURL()
                 try checkScope(scope)
+                do { try admit?(file) } catch { throw LensWorksHDRSourceRefusal(error: error) }
                 hash = try await Self.detached { try Self.sha256(file) }
             } catch is CancellationError { throw CancellationError() }
+            catch let refused as LensWorksHDRSourceRefusal { throw refused.error }
             catch { sources.append(present); verified = false; continue }  // Offline: matched by ID, checked again later.
             try checkScope(scope)
             sources.append(hash == source.sha256 ? present : missing)
@@ -1313,10 +1318,11 @@ final class LensWorksCatalog {
         return sources
     }
     /// Follows a merged HDR photo's link: its source photos become the catalog selection.
-    func selectHDRMergeSources(of asset: LensWorksCatalogAsset) async throws {
+    /// `admit` is passed to `hdrMergeSources(of:admit:)`.
+    func selectHDRMergeSources(of asset: LensWorksCatalogAsset, admit: ((URL) throws -> Void)? = nil) async throws {
         try admitCatalogWork()
         let scope = captureScope(), owner = selectionOwner, query = queryOwner, generation = previewGeneration
-        let sources = try await hdrMergeSources(of: asset)
+        let sources = try await hdrMergeSources(of: asset, admit: admit)
         try checkScope(scope)
         guard !sources.isEmpty else { throw LensWorksCatalogError.message("“\(asset.filename)” has no recorded HDR merge sources in this catalog.") }
         let present = sources.filter { !$0.missing }
