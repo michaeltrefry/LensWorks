@@ -706,10 +706,10 @@ extension CompositorUITests {
         XCTAssertTrue(photo.waitForExistence(timeout: 30))
         photo.click()
         // In a 1280-point window the catalog toolbar's Merge to HDR… and Merge to Panorama…
-        // buttons and the Flag menu beside them all fit inside the window and can be clicked.
+        // buttons, and the Rate, Flag and Filter menus either side of them, all fit inside the window and can be clicked.
         let window = app.windows.firstMatch
         XCTAssertEqual(window.frame.width, 1280, "the S05 window is pinned 1280 points wide")
-        for identifier in ["catalog.hdr.merge", "catalog.panorama.merge", "LensWorks.flagMenu"] {
+        for identifier in ["LensWorks.rateMenu", "LensWorks.flagMenu", "catalog.hdr.merge", "catalog.panorama.merge", "LensWorks.filterMenu"] {
             let control = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
             XCTAssertTrue(control.waitForExistence(timeout: 10), identifier)
             XCTAssertTrue(control.isHittable, "\(identifier) cannot be clicked")
