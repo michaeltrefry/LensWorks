@@ -1,0 +1,6 @@
+# Owners of the paths Dark Factory's merge gate treats as sealed (factory/gate.yaml): changes to the gate
+# policy, CI, the scripts CI runs and this file are never merged by the factory and need the owner.
+/factory/ @michaeltrefry
+/.github/ @michaeltrefry
+/scripts/ci/ @michaeltrefry
+/CODEOWNERS @michaeltrefry
