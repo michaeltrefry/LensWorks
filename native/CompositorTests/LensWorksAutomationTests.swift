@@ -744,7 +744,8 @@ struct LensWorksAutomationTests {
     @Test func confirmationIsDrivenByTheRegistryAndItsNamesAreClipped() throws {
         let harness = try Harness(); defer { harness.cleanUp() }
         let rows = harness.automation.tools.listCommands()
-        let confirmed: Set<LensWorksCommandID> = [.deleteVirtualFolder, .deleteKeyword, .save, .saveAs, .exportPNG, .exportJPEG, .locateFolder, .openCatalog, .newCatalog]
+        let confirmed: Set<LensWorksCommandID> = [.deleteVirtualFolder, .deleteKeyword, .save, .saveAs, .exportPNG, .exportJPEG, .locateFolder, .openCatalog, .newCatalog,
+                                                  .deleteVersion, .deleteCatalogVersion, .deleteCheckpoint]
         #expect(Set(LensWorksCommandRegistry.descriptors.filter(\.requiresAgentConfirmation).map(\.id)) == confirmed
                 && Set(rows.filter { $0["requiresConfirmation"] as? Bool == true }.compactMap { $0["id"] as? String }) == Set(confirmed.map(\.rawValue)))
         // Document and catalog commands batch; history steps and project-file commands run one at a time.

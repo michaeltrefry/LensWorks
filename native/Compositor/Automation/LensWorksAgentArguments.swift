@@ -104,6 +104,12 @@ struct LensWorksAgentArguments {
             case .exposure, .number: numeric = try arguments.double(name)
             case .cursor, .rating, .integer: numeric = try arguments.integer(name).map(Double.init)
             case .layerName, .catalogCopyName, .variant, .reference, .text, .path: _ = try arguments.string(name)
+            case .historyName:
+                let value = try arguments.string(name) ?? ""
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed.utf8.count <= Self.historyNameBytes, !value.utf8.contains(0) else {
+                    throw LensWorksCommandRefusal(reason: "\(name) must be a name that is not empty and is at most 1,024 UTF-8 bytes.")
+                }
             case .color: _ = try arguments.color(name)
             case .referenceArray, .pathArray: _ = try arguments.strings(name)
             case .choice:
@@ -129,6 +135,8 @@ struct LensWorksAgentArguments {
         }
         return arguments
     }
+    /// The longest version or checkpoint name, in UTF-8 bytes (as the menus' own name check allows).
+    static let historyNameBytes = 1_024
     /// The deepest lists and objects an argument may nest.
     static let nestingLimit = 8
     /// Whether every number anywhere in `value` is finite and nothing nests deeper than `nestingLimit`. A number
@@ -159,6 +167,7 @@ enum LensWorksAgentSchema {
         case .rating: schema = ["type": "integer", "minimum": 0, "maximum": 5]
         case .layerName: schema = ["type": "string", "minLength": 1]
         case .catalogCopyName: schema = ["type": "string", "minLength": 1, "maxLength": 1024]
+        case .historyName: schema = ["type": "string", "minLength": 1, "maxLength": LensWorksAgentArguments.historyNameBytes]
         case .variant, .reference, .text: schema = ["type": "string"]
         case .color: schema = ["type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"]
         case .path: schema = ["type": "string", "maxLength": LensWorksGrantedFolders.pathLimit]

@@ -745477,7 +745477,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-564956e334b38452",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Button:Undo",
@@ -745485,7 +745485,15 @@
           "source_anchor": "vendor/Compositor/Compositor/CompositorApp.swift:28"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()",
+            "CompositorTests/CommandAuditTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -745504,7 +745512,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-840d61ed183d03a2",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Button:Redo",
@@ -745512,7 +745520,15 @@
           "source_anchor": "vendor/Compositor/Compositor/CompositorApp.swift:34"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()",
+            "CompositorTests/CommandAuditTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -745666,7 +745682,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-f79fc17a7328d062",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Button:Save",
@@ -745674,7 +745690,15 @@
           "source_anchor": "vendor/Compositor/Compositor/CompositorApp.swift:74"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/saveAsCarriesHistoryAndLeavesTheOldPackageUntouched()",
+            "CompositorTests/PersistentHistoryStorageTests/anInterruptedHistoryWriteLeavesTheLastSavedDocumentAndHistory(_:)",
+            "CompositorTests/CommandAuditTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -745693,7 +745717,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-9bdc42dc9f49e73c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Button:Save As\u2026",
@@ -745701,7 +745725,15 @@
           "source_anchor": "vendor/Compositor/Compositor/CompositorApp.swift:76"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/saveAsCarriesHistoryAndLeavesTheOldPackageUntouched()",
+            "CompositorTests/PersistentHistoryStorageTests/anInterruptedHistoryWriteLeavesTheLastSavedDocumentAndHistory(_:)",
+            "CompositorTests/CommandAuditTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771088,7 +771120,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-02777754170141ac",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Snapshot.document",
@@ -771098,7 +771130,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771117,7 +771156,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-583fef5d5b60dd65",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Snapshot.activeLayerID",
@@ -771127,7 +771166,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771146,7 +771192,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-2b87854d690c8150",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "Snapshot.revision",
@@ -771156,7 +771202,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771419,7 +771472,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-1a827dd656430f2c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.entryLimit",
@@ -771431,7 +771484,14 @@
         "baseline_regression_case_ids": [
           "test-09d451e0e7f0301f"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryStorageTests/theStorageLimitIsASettingThatPersists()",
+            "CompositorTests/HistoryTests/historyBoundsEntriesAndUniqueRetainedPixels()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771452,7 +771512,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-1032ee96b7655a5a",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.retainedByteLimit",
@@ -771464,7 +771524,14 @@
         "baseline_regression_case_ids": [
           "test-09d451e0e7f0301f"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryStorageTests/savedStatesLeaveMemoryInsteadOfStepsBeingDropped()",
+            "CompositorTests/HistoryTests/historyBoundsEntriesAndUniqueRetainedPixels()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771639,7 +771706,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-ae9e85332651a639",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.markSaved",
@@ -771647,7 +771714,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/DocumentHistory.swift:40"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/HistoryTests/navigationNoOpsAndSaveRevisionPreserveHistory()",
+            "CompositorTests/PersistentHistoryTests/checkpointsAreNamedRestoredRenamedDeletedAndSurviveReopen()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771688,7 +771762,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-91605b5e70654aa3",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.markSaved",
@@ -771696,7 +771770,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/DocumentHistory.swift:44"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/HistoryTests/navigationNoOpsAndSaveRevisionPreserveHistory()",
+            "CompositorTests/PersistentHistoryTests/checkpointsAreNamedRestoredRenamedDeletedAndSurviveReopen()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771715,7 +771796,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6900c489dce98023",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.reset",
@@ -771723,7 +771804,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/DocumentHistory.swift:45"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/floatLayersKeepTheirExactSamplesAndShareUnchangedTiles()",
+            "CompositorTests/HistoryTests/replacementCanvasAndNestedTransactionsUndoAsOne()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771744,7 +771832,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-77f610f542ba2c63",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.begin",
@@ -771754,7 +771842,14 @@
         "baseline_regression_case_ids": [
           "test-09d451e0e7f0301f"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771773,7 +771868,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-b0112709438f11a2",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.end",
@@ -771781,7 +771876,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/DocumentHistory.swift:62"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771800,7 +771902,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-c5524607c0cb132b",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.undo",
@@ -771808,7 +771910,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/DocumentHistory.swift:76"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771827,7 +771936,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-5122f0f51fc7b3cb",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.redo",
@@ -771835,7 +771944,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/DocumentHistory.swift:84"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -771856,7 +771972,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-74664888bd08cac8",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "DocumentHistory.retainedBytes",
@@ -771866,7 +771982,14 @@
         "baseline_regression_case_ids": [
           "test-09d451e0e7f0301f"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryStorageTests/savedStatesLeaveMemoryInsteadOfStepsBeingDropped()",
+            "CompositorTests/HistoryTests/historyBoundsEntriesAndUniqueRetainedPixels()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -779843,7 +779966,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-ab0aa4c17df89d0c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "EditorSession.history",
@@ -779875,7 +779998,14 @@
           "test-3d4c21a29b562d95",
           "test-e2d35d255c563cd2"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -780033,7 +780163,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-807c38597e824c2a",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "EditorSession.undo",
@@ -780077,7 +780207,14 @@
           "test-e2d35d255c563cd2",
           "test-8adb7a425fd2fb81"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -780112,7 +780249,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-7351743f7e467f2c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "EditorSession.redo",
@@ -780136,7 +780273,14 @@
           "test-e768b50f96b5602e",
           "test-e2d35d255c563cd2"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/undoAndRedoWalkTheSameStatesAfterCloseAndReopen()",
+            "CompositorTests/HistoryTests/everyLayerEditRoundTripsWithSelection()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816357,7 +816501,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-84ca1a6d4d9c181e",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectTab.id",
@@ -816367,7 +816511,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816386,7 +816537,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-34abdd115915585c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectTab.session",
@@ -816396,7 +816547,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816415,7 +816573,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-88c22d24254c36d0",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectTab.controller",
@@ -816425,7 +816583,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816444,7 +816609,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6a685b44668857fa",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectTab.defaultName",
@@ -816454,7 +816619,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816603,7 +816775,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-a82050aa6d141ebc",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.isManaging",
@@ -816613,7 +816785,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816636,7 +816815,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-31a42e6148a82c67",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.window",
@@ -816650,7 +816829,14 @@
           "test-fdb5643edf2d54ac",
           "test-de269d7f19f267f3"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816777,7 +816963,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-c60cdc1a253fb96b",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.addTab",
@@ -816790,7 +816976,13 @@
           "test-5afac5a8146071d7",
           "test-7b1175a73fff6d46"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816811,7 +817003,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-89c78ab0e69db612",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.moveTab",
@@ -816821,7 +817013,13 @@
         "baseline_regression_case_ids": [
           "test-5afac5a8146071d7"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816843,7 +817041,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-e8123d7d45d60d38",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.select",
@@ -816854,7 +817052,13 @@
           "test-b2787cebf36f9d14",
           "test-7b1175a73fff6d46"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816876,7 +817080,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-990536750a472499",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.newCanvas",
@@ -816887,7 +817091,13 @@
           "test-3ddedb7a25638596",
           "test-fdb5643edf2d54ac"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816908,7 +817118,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6a453e2b50a8f2a1",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.open",
@@ -816918,7 +817128,14 @@
         "baseline_regression_case_ids": [
           "test-6a6036ac6033f921"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816959,7 +817176,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-5cf69c4041c9c9d1",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.close",
@@ -816967,7 +817184,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/ProjectWorkspace.swift:99"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -816988,7 +817212,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-73821bf475d130b2",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.removeTab",
@@ -816998,7 +817222,13 @@
         "baseline_regression_case_ids": [
           "test-b2787cebf36f9d14"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817066,7 +817296,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-0556053924343708",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.settlePendingEdits",
@@ -817077,7 +817307,13 @@
           "test-d5472a6f82a48874",
           "test-6a6036ac6033f921"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817096,7 +817332,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-f27d77e6237768e0",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.confirmQuit",
@@ -817104,7 +817340,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/ProjectWorkspace.swift:138"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817123,7 +817366,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-f9720d6dd0c003ce",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.closeWindow",
@@ -817131,7 +817374,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/ProjectWorkspace.swift:149"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/IndependentVersionTests/versionTabsCloseAndQuitWithoutLosingSavedHistory()",
+            "CompositorTests/IndependentVersionTests/versionsAreRenamedSwitchedAndDeletedOnlyAfterConfirmation()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817152,7 +817402,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-f250da36c493b279",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.receive",
@@ -817162,7 +817412,13 @@
         "baseline_regression_case_ids": [
           "test-d44341031fce8e98"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817183,7 +817439,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-fdc46e46a2deddb2",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.receiveProviders",
@@ -817193,7 +817449,13 @@
         "baseline_regression_case_ids": [
           "test-80871e785308ab1e"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817214,7 +817476,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6f242b42ae320616",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.layerType",
@@ -817226,7 +817488,13 @@
         "baseline_regression_case_ids": [
           "test-80871e785308ab1e"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817245,7 +817513,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6449be7adca74d80",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.pasteCopiedLayer",
@@ -817253,7 +817521,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/ProjectWorkspace.swift:193"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/LayerGraphOperationTests/copyAndPasteOfAFolderKeepsTheGraphAndIsOneUndoStep(_:)",
+            "CompositorTests/LayerGraphOperationTests/crossDocumentCopyKeepsTheGraphAndUndoesInTheTargetOnly(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817274,7 +817549,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-dbf4f1c6145261fe",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.copyLayer",
@@ -817284,7 +817559,13 @@
         "baseline_regression_case_ids": [
           "test-ded6621022ff5355"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectWorkspaceTests/(suite)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -817303,7 +817584,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-57e289270fe9280b",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectWorkspace.copyLayers",
@@ -817311,7 +817592,14 @@
           "source_anchor": "vendor/Compositor/Compositor/Document/ProjectWorkspace.swift:213"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/LayerGraphOperationTests/copyAndPasteOfAFolderKeepsTheGraphAndIsOneUndoStep(_:)",
+            "CompositorTests/LayerGraphOperationTests/crossDocumentCopyKeepsTheGraphAndUndoesInTheTargetOnly(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -838671,7 +838959,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-8c5768dad74710ee",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectController.save",
@@ -838679,7 +838967,14 @@
           "source_anchor": "vendor/Compositor/Compositor/IO/ProjectController.swift:27"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/PersistentHistoryTests/saveAsCarriesHistoryAndLeavesTheOldPackageUntouched()",
+            "CompositorTests/PersistentHistoryStorageTests/anInterruptedHistoryWriteLeavesTheLastSavedDocumentAndHistory(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839354,7 +839649,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-995c998cb064c3f2",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectDigest.value",
@@ -839364,7 +839659,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839385,7 +839687,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-023180ecb8618868",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectDigest.compute",
@@ -839395,7 +839697,14 @@
         "baseline_regression_case_ids": [
           "test-cfe07663a9fd39ca"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839436,7 +839745,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-f00f68d217de55de",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "UTType.compositorProject",
@@ -839446,7 +839755,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839465,7 +839781,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-9b4590371395e5ef",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "UTType.photoshopImage",
@@ -839475,7 +839791,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839494,7 +839817,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-e28347e18359846d",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "UTType.photoshopLargeImage",
@@ -839504,7 +839827,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839523,7 +839853,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-c96634068816bca9",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "UTType.importableImages",
@@ -839533,7 +839863,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839583,7 +839920,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-ccd2f15789752993",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.current",
@@ -839595,7 +839932,14 @@
         "baseline_regression_case_ids": [
           "test-7f63ed8050095e11"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839616,7 +839960,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-120d72d146fdea0e",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.supported",
@@ -839628,7 +839972,14 @@
         "baseline_regression_case_ids": [
           "test-7f63ed8050095e11"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839647,7 +839998,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-aaf8b3cded701d44",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.format",
@@ -839657,7 +840008,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839678,7 +840036,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-2cc5a5786044c685",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.version",
@@ -839690,7 +840048,14 @@
         "baseline_regression_case_ids": [
           "test-7226085ad1dcbd60"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839711,7 +840076,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-879856e9cdc7c328",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.colorSpace",
@@ -839723,7 +840088,14 @@
         "baseline_regression_case_ids": [
           "test-2153c9a38565b63d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839744,7 +840116,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6cefd42e36ec7b19",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.resolution",
@@ -839756,7 +840128,14 @@
         "baseline_regression_case_ids": [
           "test-7226085ad1dcbd60"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839781,7 +840160,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-a9ea3f11052703f4",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.documentID",
@@ -839797,7 +840176,14 @@
           "test-2153c9a38565b63d",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839822,7 +840208,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-e1033fba6028a3f3",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.width",
@@ -839838,7 +840224,14 @@
           "test-2153c9a38565b63d",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839863,7 +840256,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-59bb3f5f4749a7ba",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.height",
@@ -839879,7 +840272,14 @@
           "test-2153c9a38565b63d",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839904,7 +840304,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-65754ce1201dada1",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.activeLayerID",
@@ -839920,7 +840320,14 @@
           "test-2153c9a38565b63d",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839945,7 +840352,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-ff6d1197d4aa1bfe",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.layers",
@@ -839961,7 +840368,14 @@
           "test-2153c9a38565b63d",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -839980,7 +840394,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-e333538cceea9627",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectManifest.guides",
@@ -839990,7 +840404,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840039,7 +840460,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-c1445dc9945a820c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.id",
@@ -840049,7 +840470,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840075,7 +840503,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-c4b770629892fe67",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.name",
@@ -840092,7 +840520,14 @@
           "test-a37f5619ccb12c4d",
           "test-c653203c3ef7e21e"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840118,7 +840553,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-93b7ae89bfd43373",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.isVisible",
@@ -840135,7 +840570,14 @@
           "test-a37f5619ccb12c4d",
           "test-c653203c3ef7e21e"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840161,7 +840603,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-4dcd5fbc15cdfc29",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.transform",
@@ -840178,7 +840620,14 @@
           "test-a37f5619ccb12c4d",
           "test-c653203c3ef7e21e"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840204,7 +840653,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-b1a63c20b19eb995",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.imageFile",
@@ -840221,7 +840670,14 @@
           "test-a37f5619ccb12c4d",
           "test-c653203c3ef7e21e"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840242,7 +840698,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-78f16a8fb031895b",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.parentID",
@@ -840254,7 +840710,14 @@
         "baseline_regression_case_ids": [
           "test-4f400d48f2fb74e5"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840275,7 +840738,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-ca19fb096f5a2302",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.isGroup",
@@ -840287,7 +840750,14 @@
         "baseline_regression_case_ids": [
           "test-4f400d48f2fb74e5"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840309,7 +840779,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-9bf25e1d36e4c246",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.opacity",
@@ -840322,7 +840792,14 @@
           "test-1522037f605888eb",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840341,7 +840818,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-407a5fd497740a66",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.blendMode",
@@ -840351,7 +840828,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840370,7 +840854,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-f7215dd83076c27e",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.maskFile",
@@ -840380,7 +840864,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840399,7 +840890,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-e3725f7115472230",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.maskEnabled",
@@ -840409,7 +840900,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840428,7 +840926,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-cc1df8ea0a992c4f",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.maskSourceID",
@@ -840438,7 +840936,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840457,7 +840962,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-4d1b0edaba4cb76f",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.adjustment",
@@ -840467,7 +840972,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840486,7 +840998,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-5b830487dc30c040",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.maskPlacement",
@@ -840496,7 +841008,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840515,7 +841034,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-1452fbb0ffe45df2",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.maskLinked",
@@ -840525,7 +841044,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840544,7 +841070,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-c4e51dce9c22b85a",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.shape",
@@ -840554,7 +841080,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840576,7 +841109,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-6e4d4d2c45105d00",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.effects",
@@ -840589,7 +841122,14 @@
           "test-1522037f605888eb",
           "test-a37f5619ccb12c4d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840608,7 +841148,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-5118d99b9d07862d",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectLayerRecord.text",
@@ -840618,7 +841158,14 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840681,7 +841228,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-49710a89a350e9d3",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectSnapshot.manifest",
@@ -840702,7 +841249,14 @@
           "test-a37f5619ccb12c4d",
           "test-0a93ffb6619e94f3"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840732,7 +841286,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-1a25a45872276120",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectSnapshot.images",
@@ -840753,7 +841307,14 @@
           "test-a37f5619ccb12c4d",
           "test-0a93ffb6619e94f3"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840775,7 +841336,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-02b9589e58fc8b9e",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectSnapshot.masks",
@@ -840788,7 +841349,14 @@
           "test-d03fe4566e302b05",
           "test-1770d10b2107874d"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840842,7 +841410,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-4be28b43b4c91ecd",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectError.encode",
@@ -840855,7 +841423,14 @@
           "test-c653203c3ef7e21e",
           "test-8adb7a425fd2fb81"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840877,7 +841452,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-529f6af1467a99bb",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectError.invalid",
@@ -840889,7 +841464,14 @@
           "test-edb753b5fe59933b",
           "test-8adb7a425fd2fb81"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840908,7 +841490,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-dfbd777d18cba06c",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectError.missingImage",
@@ -840917,7 +841499,14 @@
           "selected_case_or_route": "ProjectError.missingImage"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840936,7 +841525,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-a5062e48d60940fa",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectError.tooLarge",
@@ -840945,7 +841534,14 @@
           "selected_case_or_route": "ProjectError.tooLarge"
         },
         "baseline_regression_case_ids": [],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -840970,7 +841566,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-948d973b2c9d0286",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectError.version",
@@ -840985,7 +841581,14 @@
           "test-c653203c3ef7e21e",
           "test-8adb7a425fd2fb81"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -841100,7 +841703,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-ffa6d06d44680e65",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectStore.shared",
@@ -841136,7 +841739,15 @@
           "test-8adb7a425fd2fb81",
           "test-e1250c51fb9d2fe2"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)",
+            "CompositorTests/PersistentHistoryTests/saveAsCarriesHistoryAndLeavesTheOldPackageUntouched()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -841246,7 +841857,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-a73a58b9b4dabaae",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectStore.save",
@@ -841279,7 +841890,15 @@
           "test-8adb7a425fd2fb81",
           "test-e1250c51fb9d2fe2"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)",
+            "CompositorTests/PersistentHistoryTests/saveAsCarriesHistoryAndLeavesTheOldPackageUntouched()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {
@@ -841323,7 +841942,7 @@
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24672/cap-56dbdb0affd14957",
-        "status": "planned",
+        "status": "passing",
         "profile_id": "history-persistence",
         "parameters": {
           "source_symbol": "ProjectStore.load",
@@ -841356,7 +841975,15 @@
           "test-8adb7a425fd2fb81",
           "test-e1250c51fb9d2fe2"
         ],
-        "execution_evidence": null
+        "execution_evidence": {
+          "story": "sc-24672",
+          "tests": [
+            "CompositorTests/ProjectFormatFixtureTests/aSavedPackageKeepsEveryManifestAndLayerField()",
+            "CompositorTests/ProjectFormatFixtureTests/everyFrozenFormatOpensUpgradesAndRoundTripsWithoutLoss(_:)",
+            "CompositorTests/PersistentHistoryTests/saveAsCarriesHistoryAndLeavesTheOldPackageUntouched()"
+          ],
+          "semantics": "Native tests that call this declaration (or, for a menu item, its command) and assert its effect on the saved document, its versions, its undo history or its checkpoints; all passing when recorded."
+        }
       }
     },
     {

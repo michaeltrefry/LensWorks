@@ -21,6 +21,7 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case shortcutEditor = "It is the Save or Cancel button of the Keyboard Shortcuts window the person has open."
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
+    case historyPreference = "It sets how much undo history the person keeps in every document they save; lowering it removes saved undo steps, so only the person changes it."
 }
 
 /// Whether an agent can run a command.
@@ -106,8 +107,11 @@ extension LensWorksCommandID {
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
         case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
-             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder:
+             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder,
+             .duplicateVersion, .renameVersion, .switchVersion, .deleteVersion, .createVersion, .openVersion, .deleteCatalogVersion,
+             .newCheckpoint, .restoreCheckpoint, .renameCheckpoint, .deleteCheckpoint:
             .runnable(.standalone)
+        case .historyStorage: .notRunnable(.historyPreference)
         case .automationEnabled, .automationShowSecret, .automationCopySecret, .automationRegenerateSecret, .automationRevokeSecret,
              .automationCopyConfiguration, .automationAllow, .automationDecline, .automationGrantFolder, .automationRevokeFolder:
             .notRunnable(.automation)
@@ -148,13 +152,16 @@ extension LensWorksCommandID {
     nonisolated static let agentReversals: [LensWorksCommandID: LensWorksCommandReversal] = {
         let groups: [(LensWorksCommandReversal, [LensWorksCommandID])] = [
             // The saved project file is replaced by the document as it stands; an emptied virtual folder is gone.
-            (.irreversible, [.save, .deleteVirtualFolder]),
+            // A deleted version's file goes to the Trash and a deleted checkpoint leaves the document at its next save:
+            // neither comes back through anything LensWorks can run.
+            (.irreversible, [.save, .deleteVirtualFolder, .deleteVersion, .deleteCatalogVersion, .deleteCheckpoint]),
             (.replacesFile, [.saveAs, .exportPNG, .exportJPEG]),
             (.replacesCatalog, [.openCatalog, .newCatalog]),
             // Running it again with the previous value restores what it changed. A located folder goes back with the
             // review's own Undo in Locate Originals; the person is still asked, because it re-points originals.
-            (.inverse, [.renameVirtualFolder, .moveVirtualFolder, .rating, .closeProject, .locateFolder]),
-            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor]),
+            (.inverse, [.renameVirtualFolder, .moveVirtualFolder, .rating, .closeProject, .locateFolder, .renameVersion, .renameCheckpoint]),
+            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor,
+                         .duplicateVersion, .switchVersion, .openVersion, .createVersion, .newCheckpoint]),
             (.transient, [.firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
                           .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
                           .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors]),
@@ -168,7 +175,8 @@ extension LensWorksCommandID {
                         .moveLayerUp, .moveLayerDown, .mergeLayers, .flipLayerHorizontal, .flipLayerVertical, .deleteLayer, .addMask, .toggleMask,
                         .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels,
                         .exposure, .undoRecipe, .redoRecipe, .addToVirtualFolder, .removeFromVirtualFolder, .addKeyword, .removeKeyword,
-                        .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .undo, .redo])
+                        .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .undo, .redo,
+                        .restoreCheckpoint])
         ]
         var table: [LensWorksCommandID: LensWorksCommandReversal] = [:]
         for (reversal, ids) in groups { for id in ids { table[id] = reversal } }

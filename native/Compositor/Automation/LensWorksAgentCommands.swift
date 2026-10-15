@@ -20,6 +20,8 @@ struct LensWorksAgentContext {
     let folders: LensWorksGrantedFolders
     /// The person confirmed discarding the open catalog's organize Undo history for this command.
     var discardsCatalogHistory = false
+    /// The person allowed this command to delete the version or checkpoint it names (see `LWLossConfirmation`).
+    var lossConfirmation: LWLossConfirmation?
 }
 
 extension EditorSession {
@@ -449,7 +451,7 @@ struct LensWorksAgentDocumentCommands {
         guard !ids.isEmpty else { throw refuse("Select a layer first.") }
         let removed = ids.reduce(into: Set<UUID>()) { $0.formUnion(session.descendantIDs(of: $1).union([$1])) }
         let dependents = document.layers.filter { !removed.contains($0.id) && $0.maskSourceID.map(removed.contains) == true }.map(\.id)
-        var baked: [UUID: ImportedImage] = [:]
+        var baked: [UUID: LiveMaskBaker.Baked] = [:]
         if !dependents.isEmpty {
             guard let choice = try arguments.string("liveMasks") else {
                 throw refuse("A layer being deleted supplies a live mask to a layer that stays: pass liveMasks as removeLinks or bake.")
@@ -459,7 +461,7 @@ struct LensWorksAgentDocumentCommands {
                 session.isProjectBusy = true
                 defer { session.isProjectBusy = false }
                 baked = try await Task.detached(priority: .userInitiated) {
-                    var result: [UUID: ImportedImage] = [:]
+                    var result: [UUID: LiveMaskBaker.Baked] = [:]
                     for target in dependents { result[target] = try LiveMaskBaker.bake(snapshot, target: target) }
                     return result
                 }.value
@@ -636,6 +638,74 @@ struct LensWorksAgentProjectCommands {
         case .saveAs, .exportPNG, .exportJPEG:
             guard session?.document != nil, context.projects != nil else { return "Open a document first." }
             return menu()
+        case .duplicateVersion, .renameVersion:
+            if knownVersions().isEmpty { return "There is no working version to name: open one, or select a catalog photo that has one." }
+            if let projects = context.projects, !projects.canStart { return "Finish the current project operation first." }
+            return context.catalog?.isBusy == true ? "Finish the current catalog operation first." : nil
+        case .switchVersion, .deleteVersion:
+            guard let projects = context.projects, let session else { return "Open a document first." }
+            if let reason = projects.versionReason(id) { return reason }
+            return session.siblingVersions.isEmpty ? "The open document’s photo has no other working version." : nil
+        case .createVersion, .openVersion, .deleteCatalogVersion:
+            guard let catalog = context.catalog, catalog.catalogPath != nil else { return "Open a catalog first." }
+            guard let workspace = context.workspace else { return "There is no project window to open the version in." }
+            if catalog.isBusy || catalog.closingRequested { return "Finish the current catalog operation first." }
+            if id != .createVersion, catalog.selectedVersions.isEmpty { return "The selected catalog photo has no working version." }
+            return id == .deleteCatalogVersion || workspace.canSwitch ? nil : "Finish the current project operation first."
+        case .newCheckpoint, .restoreCheckpoint, .renameCheckpoint, .deleteCheckpoint:
+            guard let session, session.document != nil else { return "Open a document first." }
+            if let reason = menu() { return reason }
+            return id != .newCheckpoint && session.history.checkpoints.isEmpty ? "This document has no checkpoints." : nil
+        default: return nil
+        }
+    }
+
+    // MARK: Versions and checkpoints
+
+    /// The working versions an agent can name: the open document's, the other versions of its photo, and the
+    /// selected catalog photo's (the ids get_state lists).
+    func knownVersions() -> [LensWorksWorkingVersion] {
+        var seen = Set<UUID>()
+        let all = [context.projects?.workingVersion].compactMap { $0 } + (context.session?.siblingVersions ?? []) + (context.catalog?.selectedVersions ?? [])
+        return all.filter { seen.insert($0.id).inserted }
+    }
+    /// The version `arguments` names among `candidates`.
+    func version(_ arguments: LensWorksAgentArguments, among candidates: [LensWorksWorkingVersion]) throws -> LensWorksWorkingVersion {
+        let named = try arguments.required("version", try arguments.string("version"))
+        guard let id = UUID(uuidString: named), let version = candidates.first(where: { $0.id == id }) else {
+            throw refuse("version must be the id of a working version get_state lists here.")
+        }
+        return version
+    }
+    /// A version's file: the package itself is a file the command reaches, so its folder must be granted.
+    func admitted(_ version: LensWorksWorkingVersion) throws -> URL {
+        do { return try context.folders.admit(version.projectPath) }
+        catch let refusal as LensWorksCommandRefusal { throw refuse("The working version’s file: " + refusal.reason) }
+    }
+    /// The checkpoint `arguments` names in the open document.
+    func checkpoint(_ arguments: LensWorksAgentArguments) throws -> DocumentHistory.Checkpoint {
+        let named = try arguments.required("checkpoint", try arguments.string("checkpoint"))
+        guard let id = UUID(uuidString: named), let checkpoint = context.session?.history.checkpoints.first(where: { $0.id == id }) else {
+            throw refuse("checkpoint must be a checkpoint id get_state lists for the open document.")
+        }
+        return checkpoint
+    }
+    /// What the command deletes, for the person's confirmation: its identity and the name the sheet shows.
+    func deletion(_ admission: LensWorksAgentAdmission) throws -> (id: UUID, name: String)? {
+        switch admission.id {
+        case .deleteVersion:
+            let version = try version(admission.arguments, among: context.session?.siblingVersions ?? [])
+            _ = try admitted(version)
+            if LensWorksVersionActions.tab(for: version, in: context.workspace) != nil { throw refuse("“\(version.name)” is open. Close its tab before deleting it.") }
+            return (version.id, version.name)
+        case .deleteCatalogVersion:
+            let version = try version(admission.arguments, among: context.catalog?.selectedVersions ?? [])
+            _ = try admitted(version)
+            if LensWorksVersionActions.tab(for: version, in: context.workspace) != nil { throw refuse("“\(version.name)” is open. Close its tab before deleting it.") }
+            return (version.id, version.name)
+        case .deleteCheckpoint:
+            let checkpoint = try checkpoint(admission.arguments)
+            return (checkpoint.id, checkpoint.name)
         default: return nil
         }
     }
@@ -878,6 +948,130 @@ struct LensWorksAgentProjectCommands {
                 throw refuse("The photo could not be opened in the editor.")
             }
             return "The photo is open in the editor."
+        case .duplicateVersion:
+            let version = try version(arguments, among: knownVersions()), name = try arguments.required("name", try arguments.string("name"))
+            let file = try admitted(version)
+            let copy: LensWorksWorkingVersion? = try await context.folders.withAccess(to: file) {
+                if let projects = context.projects, projects.workingVersion?.id == version.id { return await projects.duplicateVersion(named: name) }
+                if let projects = context.projects, projects.session.siblingVersions.contains(where: { $0.id == version.id }) {
+                    return await projects.duplicateSibling(version.id, named: name)
+                }
+                guard let catalog = context.catalog else { return nil }
+                let prior = catalog.error; catalog.error = nil
+                defer { if catalog.error == nil { catalog.error = prior } }
+                let made = await catalog.duplicateVersion(version, named: name, workspace: context.workspace)
+                if made == nil, let failure = catalog.error { catalog.error = prior; throw refuse(failure) }
+                return made
+            }
+            if copy == nil, let failure = context.session?.commandRefusal { context.session?.commandRefusal = nil; throw refuse(failure) }
+            try finished(copy != nil, "The version could not be duplicated.")
+            return "“\(copy!.name)” is a new working version (id \(copy!.id.uuidString)); \(version.name) is unchanged."
+        case .renameVersion:
+            let version = try version(arguments, among: knownVersions()), name = try arguments.required("name", try arguments.string("name"))
+            let file = try admitted(version)
+            let renamed: Bool = try await context.folders.withAccess(to: file) {
+                if let projects = context.projects, projects.workingVersion?.id == version.id { return await projects.renameVersion(to: name) }
+                if let projects = context.projects, projects.session.siblingVersions.contains(where: { $0.id == version.id }) {
+                    return await projects.renameSibling(version.id, to: name)
+                }
+                guard let catalog = context.catalog else { return false }
+                let prior = catalog.error; catalog.error = nil
+                let done = await catalog.renameVersion(version, to: name, workspace: context.workspace)
+                let failure = catalog.error; catalog.error = prior
+                if !done, let failure { throw refuse(failure) }
+                return done
+            }
+            if !renamed, let failure = context.session?.commandRefusal { context.session?.commandRefusal = nil; throw refuse(failure) }
+            try finished(renamed, "The version could not be renamed.")
+            return "The version is named “\(name.trimmingCharacters(in: .whitespacesAndNewlines))”; renaming it back restores the old name."
+        case .switchVersion:
+            guard let projects = context.projects else { throw refuse("Open a document first.") }
+            let version = try version(arguments, among: projects.session.siblingVersions)
+            let file = try admitted(version)
+            let switched = try await context.folders.withAccess(to: file) { await projects.switchVersion(version.id) }
+            try finished(switched, "The version could not be opened.")
+            return "“\(version.name)” is open in its own tab."
+        case .openVersion:
+            guard let catalog = context.catalog, let workspace = context.workspace else { throw refuse("Open a catalog first.") }
+            let version = try version(arguments, among: catalog.selectedVersions)
+            let file = try admitted(version)
+            let prior = catalog.error; catalog.error = nil
+            try await context.folders.withAccess(to: file) { await catalog.openVersion(version, workspace: workspace) }
+            let failure = catalog.error; catalog.error = prior
+            if let failure { throw refuse(failure) }
+            try finished(workspace.current.controller.workingVersion?.id == version.id, "The version could not be opened.")
+            return "“\(version.name)” is open in the editor."
+        case .createVersion:
+            guard let catalog = context.catalog, let workspace = context.workspace else { throw refuse("There is no project window to open the photo in.") }
+            let photo = try arguments.required("photo", try arguments.string("photo"))
+            guard let asset = catalog.assets.first(where: { $0.id == photo }) else { throw refuse("That photo is not on the current catalog page.") }
+            // As for opening a photo in the editor: the original it develops from and the folder the version is
+            // written into are reached without an argument naming them, so both are held to the granted folders.
+            let located: String, original: URL
+            do { located = try await catalog.service.resolve(asset).originalURL.path }
+            catch { throw refuse(error.localizedDescription) }
+            do { original = try context.folders.admit(located) }
+            catch let refusal as LensWorksCommandRefusal { throw refuse("The photo’s original: " + refusal.reason) }
+            guard let output = catalog.outputDirectory else {
+                throw refuse("No working-versions folder is chosen: the person chooses it in the catalog before an agent can create a working version.")
+            }
+            do { _ = try context.folders.admit(output) }
+            catch let refusal as LensWorksCommandRefusal { throw refuse("The working-versions folder: " + refusal.reason) }
+            let prior = catalog.error, before = Set(catalog.versions.map(\.id))
+            guard catalog.catalogPath != nil, !catalog.isBusy else { throw refuse("Finish the current catalog operation first.") }
+            catalog.error = nil
+            await catalog.select(asset)
+            if let failure = catalog.error { catalog.error = prior; throw refuse(failure) }
+            guard catalog.selectedAsset?.id == asset.id else { catalog.error = prior; throw refuse("The catalog changed while the photo was being selected.") }
+            try await context.folders.withAccess(to: original) { await catalog.createWorkingVersion(workspace: workspace, admitted: (located, output)) }
+            let failure = catalog.error; catalog.error = prior
+            if let failure { throw refuse(failure) }
+            try finished(true, "")
+            guard let made = catalog.versions.first(where: { !before.contains($0.id) && $0.photoID == asset.photoID }) else { throw refuse("The working version could not be created.") }
+            return "“\(made.name)” is a new working version (id \(made.id.uuidString)), open in the editor."
+        case .deleteVersion, .deleteCatalogVersion:
+            guard let target = try deletion(admission), let confirmation = context.lossConfirmation, confirmation.subject == target.id else {
+                throw refuse("The person has not confirmed deleting this version.")
+            }
+            let version = try version(arguments, among: id == .deleteVersion ? context.session?.siblingVersions ?? [] : context.catalog?.selectedVersions ?? [])
+            let file = try admitted(version)
+            let deleted: Bool = try await context.folders.withAccess(to: file) {
+                if id == .deleteVersion { return await context.projects?.deleteVersion(version.id, confirmation: confirmation) ?? false }
+                guard let catalog = context.catalog else { return false }
+                let prior = catalog.error; catalog.error = nil
+                let done = await catalog.deleteVersion(version, workspace: context.workspace, confirmation: confirmation)
+                let failure = catalog.error; catalog.error = prior
+                if !done, let failure { throw refuse(failure) }
+                return done
+            }
+            try finished(deleted, "The version could not be deleted.")
+            return "“\(version.name)” is deleted: its file is in the Trash."
+        case .newCheckpoint:
+            guard let projects = context.projects, let session = context.session else { throw refuse("Open a document first.") }
+            let name = try arguments.required("name", try arguments.string("name"))
+            let made = await projects.newCheckpoint(named: name, origin: .agent)
+            if !made, let failure = session.commandRefusal { session.commandRefusal = nil; throw refuse(failure) }
+            guard made, let checkpoint = session.history.checkpoints.last else { throw refuse("The checkpoint could not be made.") }
+            return "The checkpoint “\(checkpoint.name)” (id \(checkpoint.id.uuidString)) keeps the document as it is now; it is saved with the document."
+        case .restoreCheckpoint:
+            guard let session = context.session else { throw refuse("Open a document first.") }
+            let checkpoint = try checkpoint(arguments)
+            if let failure = await session.restoreCheckpointAndWait(checkpoint.id, origin: .agent) { session.commandRefusal = nil; throw refuse(failure) }
+            return "The document is back at “\(checkpoint.name)”; Undo in the app reverts it."
+        case .renameCheckpoint:
+            guard let projects = context.projects, let session = context.session else { throw refuse("Open a document first.") }
+            let checkpoint = try checkpoint(arguments), name = try arguments.required("name", try arguments.string("name"))
+            let renamed = await projects.renameCheckpoint(checkpoint.id, to: name)
+            if !renamed, let failure = session.commandRefusal { session.commandRefusal = nil; throw refuse(failure) }
+            try finished(renamed || session.history.checkpoints.first(where: { $0.id == checkpoint.id })?.name == name, "The checkpoint could not be renamed.")
+            return "The checkpoint is named “\(name.trimmingCharacters(in: .whitespacesAndNewlines))”; renaming it back restores the old name."
+        case .deleteCheckpoint:
+            guard let session = context.session else { throw refuse("Open a document first.") }
+            guard let target = try deletion(admission), let confirmation = context.lossConfirmation, confirmation.subject == target.id else {
+                throw refuse("The person has not confirmed deleting this checkpoint.")
+            }
+            guard session.deleteCheckpoint(target.id, confirmation: confirmation) else { throw refuse(session.checkpointUnavailableReason ?? "The checkpoint could not be deleted.") }
+            return "The checkpoint “\(target.name)” is deleted; it leaves the document's file when the document is next saved."
         default: throw refuse("\(id.rawValue) cannot be run by an agent this way.")
         }
     }

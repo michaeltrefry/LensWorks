@@ -138,7 +138,9 @@ struct LensWorksAgentCommandTests {
             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .sortBy, .sortDirection,
             .addToVirtualFolder, .removeFromVirtualFolder, .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder,
             .openProject, .openRecent, .importImages, .save, .saveAs, .exportPNG, .exportJPEG, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .undo, .redo,
-            .locateFolder, .openInEditor
+            .locateFolder, .openInEditor,
+            .duplicateVersion, .renameVersion, .switchVersion, .deleteVersion, .createVersion, .openVersion, .deleteCatalogVersion,
+            .newCheckpoint, .restoreCheckpoint, .renameCheckpoint, .deleteCheckpoint
         ]
         #expect(mustRun.filter { !$0.agentAccess.isRunnable }.isEmpty)
         // A command that enters document or catalog history is never left out.
@@ -586,6 +588,36 @@ struct LensWorksAgentCommandTests {
         #expect(refused["isError"] as? Bool == true && text(refused).contains("pass liveMasks as removeLinks or bake") && session.document?.layers.count == 2 && session.history.undoCount == 0)
         let removed = await fixture.invoke("layer.delete", ["layers": [red.uuidString], "liveMasks": "removeLinks"])
         #expect(ok(removed) && session.document?.layers.map(\.name) == ["Blue"] && (try? fixture.layer("Blue"))?.maskSourceID == nil && session.history.undoName == "Delete Layer (Agent)", "\(text(removed))")
+        // "bake": the coverage goes into the pixels of a pixel layer that stays, as one agent entry.
+        session.undo()
+        let blue = try fixture.layer("Blue")
+        let baked = await fixture.invoke("layer.delete", ["layers": [red.uuidString], "liveMasks": "bake"])
+        #expect(ok(baked) && session.document?.layers.map(\.name) == ["Blue"] && session.history.undoName == "Delete Layer (Agent)", "\(text(baked))")
+        #expect(try fixture.layer("Blue").maskSourceID == nil && fixture.layer("Blue").asset?.image !== blue.asset?.image && fixture.layer("Blue").bakedCoverage == nil)
+        session.undo()
+        // A live source layer whose own mask is switched off takes the coverage into its baked coverage slot: no
+        // layer is added and its mask stays as it was.
+        let folder = fixture.granted.appendingPathComponent("live", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let original = folder.appendingPathComponent("live.dng")
+        try ProceduralDNG.write(to: original, width: 64, height: 48)
+        await session.importImages([original])
+        let live = try #require(session.activeLayer)
+        #expect(live.liveSource != nil, "\(session.importError ?? "")")
+        let index = try #require(session.document?.layers.firstIndex { $0.id == live.id })
+        let grid = try #require(live.asset?.image)
+        let mask = LayerMask(asset: try LayerGraphFixture.mask(grid.width, grid.height) { x, _ in 90 + x * 2 }, isEnabled: false)
+        session.document?.layers[index].mask = mask
+        session.document?.layers[index].maskSourceID = red
+        session.history.reset()
+        let count = session.document?.layers.count ?? 0
+        let liveBaked = await fixture.invoke("layer.delete", ["layers": [red.uuidString], "liveMasks": "bake"])
+        let kept = try #require(session.document?.layers.first { $0.id == live.id })
+        #expect(ok(liveBaked) && session.document?.layers.count == count - 1 && session.history.undoCount == 1, "\(text(liveBaked))")
+        #expect(kept.bakedCoverage != nil && kept.mask == mask && kept.mask?.isEnabled == false && kept.maskSourceID == nil && kept.asset?.image === live.asset?.image)
+        session.undo()
+        #expect(session.document?.layers.first { $0.id == live.id }?.bakedCoverage == nil && session.document?.layers.count == count)
+        try await LWSourceDeveloper.shared.drainRetainedSessions()
     }
 
     // MARK: Criterion 2 — granted folders (E22)
@@ -805,6 +837,109 @@ struct LensWorksAgentCommandTests {
         #expect(ok(closed) && workspace.tabs.count == 1 && workspace.current.session.document?.width == 64, "\(text(closed))")
     }
 
+    /// S17: a photo's named versions and a document's checkpoints, run as the agent. Each goes through the dispatcher
+    /// as the agent, names its version or checkpoint by the id get_state lists, takes a bounded name, and is held to
+    /// the granted folders for the files it reaches; a checkpoint the agent makes or restores is the agent's. A
+    /// delete waits for the person in the app: declined, nothing goes; allowed, exactly what they saw goes.
+    @Test func versionAndCheckpointCommandsRunAsTheAgentAndDeletesWaitForThePerson() async throws {
+        typealias H = HistoryFixture
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        // The real path: the index refuses a folder reached through a link, and the temporary directory is one.
+        let real = fixture.granted.deletingLastPathComponent()
+        let index = LensWorksCatalogIndex(url: real.appendingPathComponent("Index.sqlite3"))
+        let trash = real.appendingPathComponent("Trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let workspace = ProjectWorkspace()
+        workspace.configureController = { controller in
+            H.configure(controller, index: index)
+            controller.removeVersionPackage = { try FileManager.default.moveItem(at: $0, to: trash.appendingPathComponent($0.lastPathComponent)) }
+        }
+        let tools = fixture.tools
+        tools.projects = { workspace.current.controller }; tools.workspace = { workspace }
+        let first = try await H.version(named: "Edit", in: fixture.granted, index: index, controller: workspace.current.controller)
+        fixture.harness.session = workspace.current.session
+        let session = workspace.current.session
+        let original = try #require(first.workingVersion)
+        func state() async throws -> [String: Any] { try #require(content(await tools.call("get_state", arguments: [:]))["document"] as? [String: Any]) }
+
+        // A checkpoint by name: the agent's, listed by id.
+        let made = await fixture.invoke("edit.checkpoint.new", ["name": "  Agent Mark "])
+        #expect(ok(made) && LensWorksCommandDispatcher.lastInvocation?.id == .newCheckpoint && LensWorksCommandDispatcher.lastOrigin == .agent, "\(text(made))")
+        let mark = try #require(session.history.checkpoints.last)
+        #expect(mark.name == "Agent Mark" && mark.origin == .agent && text(made).contains(mark.id.uuidString))
+        let listed = try #require(try await state()["checkpoints"] as? [[String: Any]])
+        #expect(listed.map { $0["id"] as? String } == [mark.id.uuidString] && listed.first?["origin"] as? String == "agent")
+        #expect((try await state()["workingVersion"] as? [String: Any])?["id"] as? String == original.id.uuidString)
+        // Names are bounded and checked before anything runs.
+        for bad: Any in ["   ", String(repeating: "n", count: 1_025), 7, "a\u{0}b"] {
+            let refused = await fixture.invoke("edit.checkpoint.new", ["name": bad])
+            #expect(refused["isError"] as? Bool == true && session.history.checkpoints.count == 1, "\(bad): \(text(refused))")
+        }
+        let missing = await fixture.invoke("edit.checkpoint.new")
+        #expect(text(missing).hasPrefix("edit.checkpoint.new needs name"), "\(text(missing))")
+        // Rename: the inverse, by id.
+        let renamed = await fixture.invoke("edit.checkpoint.rename", ["checkpoint": mark.id.uuidString, "name": "Agent Mark 2"])
+        #expect(ok(renamed) && session.history.checkpoints.first?.name == "Agent Mark 2" && session.history.undoCount == 2, "\(text(renamed))")
+        let unknown = await fixture.invoke("edit.checkpoint.rename", ["checkpoint": UUID().uuidString, "name": "x"])
+        #expect(text(unknown) == "checkpoint must be a checkpoint id get_state lists for the open document.")
+        // Restore: one history entry, the agent's, labelled; the agent can step back over it.
+        try H.paint(session, try #require(session.activeLayerID), H.image(32, 24, seed: 40), name: "Person Stroke")
+        let restored = await fixture.invoke("edit.checkpoint.restore", ["checkpoint": mark.id.uuidString])
+        #expect(ok(restored) && session.history.undoName == "Restore “Agent Mark 2” (Agent)" && session.history.undoOrigin == .agent, "\(text(restored))")
+        let undone = await fixture.invoke("edit.undo")
+        #expect(ok(undone) && session.history.undoName == "Person Stroke", "\(text(undone))")
+        let refusedUndo = await fixture.invoke("edit.undo")
+        #expect(refusedUndo["isError"] as? Bool == true && session.history.undoName == "Person Stroke", "the person's stroke is not the agent's to undo")
+
+        // Duplicate the open version: the live document, under a new identity, in the same granted folder.
+        let duplicated = await fixture.invoke("file.version.duplicate", ["version": original.id.uuidString, "name": "Agent Copy"])
+        #expect(ok(duplicated), "\(text(duplicated))")
+        let copy = try #require(session.siblingVersions.first { $0.name == "Agent Copy" })
+        #expect(copy.id != original.id && FileManager.default.fileExists(atPath: copy.projectPath) && first.workingVersion?.id == original.id)
+        #expect((try await state()["otherVersions"] as? [[String: Any]])?.compactMap { $0["id"] as? String } == [copy.id.uuidString])
+        // Rename the copy (not open): only its name changes.
+        let renamedCopy = await fixture.invoke("file.version.rename", ["version": copy.id.uuidString, "name": "Agent Copy 2"])
+        #expect(ok(renamedCopy), "\(text(renamedCopy))")
+        #expect(try LensWorksWorkingVersion.read(from: URL(fileURLWithPath: copy.projectPath))?.name == "Agent Copy 2")
+        #expect(session.siblingVersions.map(\.name) == ["Agent Copy 2"])
+        // Switch: the copy opens in its own tab.
+        let switched = await fixture.invoke("file.version.switch", ["version": copy.id.uuidString])
+        #expect(ok(switched) && workspace.tabs.count == 2 && workspace.current.controller.workingVersion?.id == copy.id, "\(text(switched))")
+        // Delete while it is open in a tab: refused before the person is asked.
+        workspace.select(workspace.tabs[0].id)
+        fixture.harness.session = workspace.current.session
+        let openRefused = await fixture.invoke("file.version.delete", ["version": copy.id.uuidString])
+        #expect(openRefused["isError"] as? Bool == true && text(openRefused).contains("is open") && fixture.harness.automation.pendingConfirmation == nil, "\(text(openRefused))")
+        await workspace.close(workspace.tabs[1].id)
+        // Declined: nothing goes. Allowed: exactly the version shown goes, to the Trash.
+        let declined = try await fixture.answering(false) { await fixture.invoke("file.version.delete", ["version": copy.id.uuidString]) }
+        #expect(declined.result["isError"] as? Bool == true && declined.asked?.items.map(\.name) == ["Agent Copy 2"] && FileManager.default.fileExists(atPath: copy.projectPath))
+        let allowed = try await fixture.answering(true) { await fixture.invoke("file.version.delete", ["version": copy.id.uuidString]) }
+        #expect(ok(allowed.result) && !FileManager.default.fileExists(atPath: copy.projectPath), "\(text(allowed.result))")
+        #expect(FileManager.default.fileExists(atPath: trash.appendingPathComponent(URL(fileURLWithPath: copy.projectPath).lastPathComponent).path) && session.siblingVersions.isEmpty)
+        // A checkpoint renamed while the person was being asked is not deleted: what they saw changed.
+        let changing = try await fixture.answering(true, whileAsked: { _ = session.renameCheckpoint(mark.id, to: "Renamed Meanwhile") }) {
+            await fixture.invoke("edit.checkpoint.delete", ["checkpoint": mark.id.uuidString])
+        }
+        #expect(changing.result["isError"] as? Bool == true && session.history.checkpoints.count == 1, "\(text(changing.result))")
+        let deleteMark = try await fixture.answering(true) { await fixture.invoke("edit.checkpoint.delete", ["checkpoint": mark.id.uuidString]) }
+        #expect(ok(deleteMark.result) && deleteMark.asked?.items.map(\.name) == ["Renamed Meanwhile"] && session.history.checkpoints.isEmpty, "\(text(deleteMark.result))")
+        // A version whose file is outside every granted folder is refused with the rule, and nothing is asked.
+        let outsideCopy = try #require(await first.duplicateVersion(named: "Second"))
+        let grant = try #require(fixture.harness.automation.folders.grants.first)
+        fixture.harness.automation.folders.revoke(grant.id)
+        try fixture.harness.automation.folders.grant(fixture.granted.appendingPathComponent("Catalog"))
+        for (command, arguments) in [("file.version.switch", ["version": outsideCopy.id.uuidString]), ("file.version.rename", ["version": outsideCopy.id.uuidString, "name": "x"]),
+                                     ("file.version.delete", ["version": outsideCopy.id.uuidString]), ("file.version.duplicate", ["version": outsideCopy.id.uuidString, "name": "y"])] {
+            let refused = await fixture.invoke(command, arguments)
+            #expect(refused["isError"] as? Bool == true && text(refused).contains("outside every folder granted to automation") && text(refused).hasSuffix(LensWorksGrantedFolders.rule), "\(command): \(text(refused))")
+        }
+        #expect(fixture.harness.automation.pendingConfirmation == nil && workspace.tabs.count == 1 && session.siblingVersions.map(\.name) == ["Second"])
+        // The person's history storage preference is not the agent's to change.
+        let storage = await fixture.invoke("edit.historyStorage")
+        #expect(text(storage) == "Agents cannot run edit.historyStorage. " + LensWorksAgentExclusion.historyPreference.rawValue)
+    }
+
     // MARK: Criterion 3 — nothing irreversible without the person
 
     /// Enumerates the admitted commands: each is classified by name (none by falling through), and whatever cannot
@@ -836,8 +971,16 @@ struct LensWorksAgentCommandTests {
         }
         // Independently of the classification: the permanent deletes, the destructive menu item, the relink, every
         // file writer, and the two that let the open catalog go.
-        #expect(always == [.deleteVirtualFolder, .deleteKeyword, .save, .locateFolder] && replacing == [.saveAs, .exportPNG, .exportJPEG] && discarding == [.openCatalog, .newCatalog])
-        #expect(admitted.filter { $0.reversal == .irreversible }.map(\.id) == [.save, .deleteVirtualFolder])
+        #expect(always == [.deleteVirtualFolder, .deleteKeyword, .save, .locateFolder, .deleteVersion, .deleteCatalogVersion, .deleteCheckpoint]
+                && replacing == [.saveAs, .exportPNG, .exportJPEG] && discarding == [.openCatalog, .newCatalog])
+        #expect(admitted.filter { $0.reversal == .irreversible }.map(\.id) == [.save, .deleteVirtualFolder, .deleteVersion, .deleteCatalogVersion, .deleteCheckpoint])
+        // The S17 commands, each classified as the epic decided.
+        let s17: [LensWorksCommandID: LensWorksCommandReversal] = [
+            .duplicateVersion: .additive, .switchVersion: .additive, .openVersion: .additive, .createVersion: .additive, .newCheckpoint: .additive,
+            .renameVersion: .inverse, .renameCheckpoint: .inverse, .restoreCheckpoint: .history,
+            .deleteVersion: .irreversible, .deleteCatalogVersion: .irreversible, .deleteCheckpoint: .irreversible]
+        for (id, reversal) in s17 { #expect(id.reversal == reversal && id.agentAccess == .runnable(.standalone), "\(id.rawValue)") }
+        #expect(LensWorksCommandID.historyStorage.agentAccess == .notRunnable(.historyPreference))
         #expect(admitted.filter { $0.reversal == .replacesCatalog }.map(\.id) == [.openCatalog, .newCatalog])
         // The rules cover what they are for and no less: none lets a permanent change through unasked.
         #expect(!LensWorksCommandReversal.irreversible.isCovered(by: .whenReplacingFile) && !LensWorksCommandReversal.irreversible.isCovered(by: .never)

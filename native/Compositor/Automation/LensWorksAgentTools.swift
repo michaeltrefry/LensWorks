@@ -250,6 +250,16 @@ final class LensWorksAgentTools {
                 "guides": document.guides.count,
                 "layers": layers.rows
             ]
+            // Checkpoints and working versions by id, for the version and checkpoint commands.
+            let checkpoints = Self.rows(session.history.checkpoints) { ["id": $0.id.uuidString, "name": Self.clip($0.name), "origin": $0.origin.rawValue] }
+            described["checkpoints"] = checkpoints.rows
+            if checkpoints.truncated { described["checkpointsTruncated"] = true }
+            if let version = projects()?.workingVersion {
+                described["workingVersion"] = ["id": version.id.uuidString, "name": Self.clip(version.name)]
+                let others = Self.rows(session.siblingVersions) { ["id": $0.id.uuidString, "name": Self.clip($0.name)] }
+                described["otherVersions"] = others.rows
+                if others.truncated { described["otherVersionsTruncated"] = true }
+            } else { described["workingVersion"] = NSNull() }
             if layers.truncated { described["layersTruncated"] = true }
             if let selection = session.selection {
                 let box = selection.isEmpty ? CGRect.zero : selection.path.boundingBoxOfPath
@@ -283,6 +293,7 @@ final class LensWorksAgentTools {
                 "copiesCursor": catalog.catalogVariantsNext?.value ?? NSNull(),
                 "photos": photos.rows, "hasMorePhotos": catalog.hasMore,
                 "folders": sources.rows, "virtualFolders": folders.rows, "keywords": keywords.rows,
+                "workingVersions": Self.rows(catalog.selectedVersions) { ["id": $0.id.uuidString, "name": Self.clip($0.name)] }.rows,
                 "keywordParent": catalog.keywordParent.map { Self.clip(LensWorksAgentCatalogCommands.keywordID($0)) } ?? NSNull(),
                 "filters": catalog.filterSummary.prefix(16).map(Self.clip),
                 "sort": catalog.browseOptions.sort.rawValue, "sortDirection": catalog.browseOptions.direction.rawValue
@@ -360,6 +371,9 @@ final class LensWorksAgentTools {
             guard let session = session() else { throw LensWorksCommandRefusal(reason: "Open a document first.") }
             let redo = call.id == .redo
             let name = try LensWorksCommandDispatcher.dispatchHistory(redo: redo, origin: .agent, in: session)
+            // A step whose state has left memory is read back from the package first: the reply waits for it.
+            await session.finishHistoryRead()
+            if let failure = session.history.readFailure { session.commandRefusal = nil; throw LensWorksCommandRefusal(reason: failure) }
             return ["command": call.id.rawValue, "changed": true, "history": name, "message": (redo ? "Redid " : "Undid ") + (name.isEmpty ? "the last edit." : "“\(name)”.")]
         case .standalone:
             let commands = LensWorksAgentProjectCommands(context: context)
@@ -370,6 +384,9 @@ final class LensWorksAgentTools {
             try admitReplacement(call, approved: approved.indexes.contains(0))
             var context = context
             context.discardsCatalogHistory = approved.indexes.contains(0)
+            if let target = try commands.deletion(call.admission) {
+                context.lossConfirmation = LWLossConfirmation.agentRequest(approved, index: 0, subject: target.id)
+            }
             let message = try await LensWorksCommandDispatcher.dispatchStandalone(call.admission, context: context)
             return ["command": call.id.rawValue, "changed": true, "message": message + (approved.indexes.isEmpty ? "" : " The person allowed it.")]
         case .catalog:
@@ -471,8 +488,10 @@ final class LensWorksAgentTools {
     /// What the person approved, by index, each with the check that what they saw is still what would run. The check
     /// runs once when they answer and again immediately before its command is dispatched.
     struct Approval {
-        var indexes: Set<Int> = []
-        var rechecks: [Int: () throws -> LensWorksCatalogDeleteAdmission?] = [:]
+        /// Only `confirm` fills these, from the person's Allow: an approval is what mints an `LWLossConfirmation`.
+        fileprivate(set) var indexes: Set<Int> = []
+        fileprivate(set) var rechecks: [Int: () throws -> LensWorksCatalogDeleteAdmission?] = [:]
+        fileprivate init() {}
     }
     /// One change waiting on the person: the row the sheet shows, and a check that what they saw is still what runs.
     private struct Pending {
@@ -531,6 +550,18 @@ final class LensWorksAgentTools {
                 return Pending(index: index, item: .init(action: label.replacingOccurrences(of: "…", with: ""), name: String(from.suffix(96)) + " → " + to)) { [weak self] in
                     guard let catalog = self?.catalog(), (try? LensWorksAgentProjectCommands.movedFolder(catalog, call.arguments).label) == from else {
                         throw LensWorksCommandRefusal(reason: "The catalog folder changed while waiting for confirmation: nothing was relinked.")
+                    }
+                    return nil
+                }
+            case .deleteVersion, .deleteCatalogVersion, .deleteCheckpoint:
+                let commands = LensWorksAgentProjectCommands(context: context)
+                guard let target = try commands.deletion(call.admission) else { throw LensWorksCommandRefusal(reason: "There is nothing to delete.") }
+                let action = call.id == .deleteCheckpoint ? "Delete the checkpoint" : "Delete the working version (its file goes to the Trash)"
+                return Pending(index: index, item: .init(action: action, name: target.name)) { [weak self] in
+                    // What the person saw must still be what goes: the same checkpoint or version, under the same name.
+                    guard let self, let current = try? LensWorksAgentProjectCommands(context: self.context).deletion(call.admission),
+                          current.id == target.id, current.name == target.name else {
+                        throw LensWorksCommandRefusal(reason: "What was to be deleted changed while waiting for confirmation: nothing was deleted.")
                     }
                     return nil
                 }
