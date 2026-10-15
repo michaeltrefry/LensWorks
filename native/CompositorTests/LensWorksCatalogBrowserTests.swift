@@ -2773,7 +2773,7 @@ extension LensWorksCatalogBrowserTests {
 // MARK: - Semantic search over the real catalog engine (stub embedder, no weights)
 
 extension LensWorksCatalogBrowserTests {
-    private static func colorPNG(_ rgb: [UInt8], edge: Int = 48) throws -> Data {
+    static func colorPNG(_ rgb: [UInt8], edge: Int = 48) throws -> Data {
         let pixels = Data((0..<(edge * edge)).flatMap { _ in rgb + [255] })
         let provider = try #require(CGDataProvider(data: pixels as CFData))
         let image = try #require(CGImage(width: edge, height: edge, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: edge * 4,
@@ -2874,7 +2874,7 @@ extension LensWorksCatalogBrowserTests {
         #expect(model.semanticQuery == nil && !LensWorksCatalog.hasFilters(model.browseOptions) && model.assets.count == pageRows)
     }
 
-    private static func settled(_ semantic: LensWorksSemanticSearch, indexed: Int) async throws {
+    static func settled(_ semantic: LensWorksSemanticSearch, indexed: Int) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(120))
         while true {
             if !semantic.isIndexing, case .ready(let count, let unindexed, _) = semantic.state, count == indexed, unindexed == 0 { return }

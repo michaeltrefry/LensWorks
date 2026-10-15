@@ -138,7 +138,8 @@ struct LensWorksAgentCommandTests {
             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .sortBy, .sortDirection,
             .addToVirtualFolder, .removeFromVirtualFolder, .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder,
             .openProject, .openRecent, .importImages, .save, .saveAs, .exportPNG, .exportJPEG, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .undo, .redo,
-            .locateFolder, .openInEditor
+            .locateFolder, .openInEditor,
+            .semanticSearch, .clearSemanticSearch, .pauseSemanticIndexing, .resumeSemanticIndexing, .rebuildSemanticIndex
         ]
         #expect(mustRun.filter { !$0.agentAccess.isRunnable }.isEmpty)
         // A command that enters document or catalog history is never left out.
@@ -836,8 +837,8 @@ struct LensWorksAgentCommandTests {
         }
         // Independently of the classification: the permanent deletes, the destructive menu item, the relink, every
         // file writer, and the two that let the open catalog go.
-        #expect(always == [.deleteVirtualFolder, .deleteKeyword, .save, .locateFolder] && replacing == [.saveAs, .exportPNG, .exportJPEG] && discarding == [.openCatalog, .newCatalog])
-        #expect(admitted.filter { $0.reversal == .irreversible }.map(\.id) == [.save, .deleteVirtualFolder])
+        #expect(always == [.deleteVirtualFolder, .deleteKeyword, .save, .locateFolder, .rebuildSemanticIndex] && replacing == [.saveAs, .exportPNG, .exportJPEG] && discarding == [.openCatalog, .newCatalog])
+        #expect(admitted.filter { $0.reversal == .irreversible }.map(\.id) == [.save, .deleteVirtualFolder, .rebuildSemanticIndex])
         #expect(admitted.filter { $0.reversal == .replacesCatalog }.map(\.id) == [.openCatalog, .newCatalog])
         // The rules cover what they are for and no less: none lets a permanent change through unasked.
         #expect(!LensWorksCommandReversal.irreversible.isCovered(by: .whenReplacingFile) && !LensWorksCommandReversal.irreversible.isCovered(by: .never)
@@ -1094,6 +1095,52 @@ struct LensWorksAgentCommandTests {
             #expect(ok(reopened) && second.workspace.current.controller.workingVersion?.id == version.id && second.workspace.current.session.document != nil, "\(text(reopened))")
             #expect(try FileManager.default.contentsOfDirectory(atPath: inside.path).count == 1)
 
+        }
+    }
+
+    /// Description search and the semantic index are agent commands. The description is a bounded string checked before
+    /// the command runs; searching, clearing, pausing and resuming change nothing kept; rebuilding discards every stored
+    /// vector, so it waits for the person, and declined it leaves the index as it was.
+    @Test func anAgentSearchesByDescriptionAndRebuildsTheIndexOnlyAfterThePersonAllows() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try LensWorksCatalogBrowserTests.Fixture(images: 0)
+        for (name, rgb) in [("red", [230, 20, 20]), ("green", [20, 230, 20]), ("blue", [20, 20, 230])] as [(String, [UInt8])] {
+            try LensWorksCatalogBrowserTests.colorPNG(rgb).write(to: catalog.photos.appendingPathComponent(name + ".png"))
+        }
+        let embedder = LensWorksStubEmbedder()
+        let semantic = LensWorksSemanticSearch(embedder: embedder, directory: catalog.root.appendingPathComponent("Semantic"))
+        try await catalog.run(semantic: semantic) { model in
+            fixture.harness.catalog = model
+            try await catalog.importPhotos(model)
+            try await LensWorksCatalogBrowserTests.settled(semantic, indexed: 3)
+            let bound = "description must be a nonempty description of at most 1,024 UTF-8 bytes."
+            for (arguments, reason) in [([String: Any](), "catalog.semantic.search needs description"), (["description": "  "], bound),
+                                        (["description": String(repeating: "é", count: 513)], bound), (["description": 7], "description must be a string")] {
+                let refused = await fixture.invoke("catalog.semantic.search", arguments)
+                #expect(refused["isError"] as? Bool == true && text(refused).hasPrefix(reason) && model.semanticQuery == nil, "\(arguments): \(text(refused))")
+            }
+            let nothing = await fixture.invoke("catalog.semantic.clear")
+            #expect(nothing["isError"] as? Bool == true && text(nothing) == "No description search is active.")
+            let searched = await fixture.invoke("catalog.semantic.search", ["description": "red"])
+            #expect(ok(searched) && model.semanticQuery == "red" && model.assets.first?.filename == "red.png", "\(text(searched))")
+            #expect(LensWorksCommandDispatcher.lastInvocation?.id == .semanticSearch && LensWorksCommandDispatcher.lastOrigin == .agent)
+            #expect(ok(await fixture.invoke("catalog.semantic.clear")) && model.semanticQuery == nil && model.assets.count == 3)
+
+            #expect(ok(await fixture.invoke("catalog.semantic.pauseIndexing")) && semantic.isPaused)
+            let paused = await fixture.invoke("catalog.semantic.pauseIndexing")
+            #expect(paused["isError"] as? Bool == true && text(paused) == "Indexing is already paused.")
+            #expect(ok(await fixture.invoke("catalog.semantic.resumeIndexing")) && !semantic.isPaused)
+            try await LensWorksCatalogBrowserTests.settled(semantic, indexed: 3)
+
+            let embedded = embedder.imagesEmbedded
+            let declined = try await fixture.answering(false) { await fixture.invoke("catalog.semantic.rebuildIndex") }
+            #expect(declined.result["isError"] as? Bool == true && declined.asked?.items.map(\.action) == ["Rebuild Semantic Index (discards 3 indexed photos)"]
+                    && declined.asked?.items.first?.name == model.catalogPath, "\(text(declined.result))")
+            #expect(semantic.indexedCount == 3 && embedder.imagesEmbedded == embedded)
+            let allowed = try await fixture.answering(true) { await fixture.invoke("catalog.semantic.rebuildIndex") }
+            #expect(ok(allowed.result) && allowed.asked != nil, "\(text(allowed.result))")
+            try await LensWorksCatalogBrowserTests.settled(semantic, indexed: 3)
+            #expect(embedder.imagesEmbedded == embedded + 3, "every photo is embedded again")
         }
     }
 
