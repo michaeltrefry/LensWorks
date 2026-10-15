@@ -625,7 +625,7 @@ extension CompositorUITests {
                 XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
             }
             try? FileManager.default.removeItem(at: scratch)
-            UserDefaults.standard.removePersistentDomain(forName: suite)
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
         }
         app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
         app.launchEnvironment["LW_INFERENCE_LIBRARY"] = library

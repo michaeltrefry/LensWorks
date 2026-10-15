@@ -27,6 +27,7 @@ final class DocumentHistory {
     private var pendingOrigin = LensWorksCommandOrigin.user
     private var depth = 0
     private var interactionToken: UUID?
+    @ObservationIgnored private var adoptsNestedName = false
     /// Visit immutable owners in-place; Close must include a pending history
     /// snapshot without allocating another archive or transferring edit authority.
     func forEachRetainedDocument(_ visit: (CanvasDocument?) throws -> Void) rethrows {
@@ -34,9 +35,11 @@ final class DocumentHistory {
         for entry in past { try visit(entry.before.document); try visit(entry.after.document) }
         for entry in future { try visit(entry.before.document); try visit(entry.after.document) }
     }
-    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil, origin: LensWorksCommandOrigin = .user) -> UUID? {
+    /// With `adoptingNestedName`, the entry takes the name of the first edit made inside the interaction (labeled for
+    /// its origin), so an agent's command is listed under the same name the menu's edit has.
+    func beginInteraction(_ name: String, document: CanvasDocument?, selection: UUID?,afterMetadataStorage:LWSourceMetadataStorage? = nil, origin: LensWorksCommandOrigin = .user, adoptingNestedName: Bool = false) -> UUID? {
         guard depth == 0 else { return nil }
-        let token = UUID(); interactionToken = token
+        let token = UUID(); interactionToken = token; adoptsNestedName = adoptingNestedName
         begin(name,document:document,selection:selection,afterMetadataStorage:afterMetadataStorage,origin:origin); return token
     }
     func endInteraction(_ token: UUID, document: CanvasDocument?, selection: UUID?) -> Bool {
@@ -86,6 +89,8 @@ final class DocumentHistory {
             pendingAfterMetadataStorage=afterMetadataStorage
             pending = Snapshot(document: document, activeLayerID: selection, revision: revision)
             pendingName = name
+        } else if depth == 1, adoptsNestedName, interactionToken != nil {
+            pendingName = pendingOrigin.historyName(name); adoptsNestedName = false
         }
         depth += 1
     }

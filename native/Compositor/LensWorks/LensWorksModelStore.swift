@@ -950,7 +950,7 @@ actor LWModelStore {
 
         static func application(added: [URL] = []) -> Configuration {
             let environment = ProcessInfo.processInfo.environment
-            var support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LensWorks")
+            var support = LensWorksUserState.applicationSupport
             #if DEBUG
             // UI tests point the managed store and ledger at a private folder.
             if let root = environment["LW_MODEL_STORE_ROOT"], !root.isEmpty {

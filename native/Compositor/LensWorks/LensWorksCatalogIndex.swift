@@ -36,6 +36,8 @@ nonisolated struct LensWorksDictionaryRecord: Sendable {
 /// Selection is disk-backed TEMP storage; neither browse nor save materializes the global registry.
 actor LensWorksCatalogIndex {
     static let shared = LensWorksCatalogIndex()
+    /// Where the shared index lives: in LensWorks's Application Support folder (a throwaway one under XCTest).
+    nonisolated static var sharedLocation: URL { LensWorksUserState.applicationSupport.appendingPathComponent("CatalogIndex.sqlite3") }
     private let suppliedURL: URL?
     private var database: OpaquePointer?
     private var enumerator: FileManager.DirectoryEnumerator?
@@ -89,8 +91,7 @@ actor LensWorksCatalogIndex {
         let url: URL
         if let suppliedURL { url = suppliedURL }
         else {
-            let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            url = support.appendingPathComponent("LensWorks", isDirectory: true).appendingPathComponent("CatalogIndex.sqlite3")
+            url = Self.sharedLocation
         }
         let parent = url.deletingLastPathComponent()
         try admitParent(parent)
@@ -117,7 +118,7 @@ actor LensWorksCatalogIndex {
         do {
             sqlite3_busy_timeout(pointer, 3000)
             sqlite3_progress_handler(pointer, 1000, { _ in Task.isCancelled ? 1 : 0 }, nil)
-            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE organization_history(step INTEGER NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,image)); CREATE TEMP TABLE organization_dictionary(step INTEGER NOT NULL,phase INTEGER NOT NULL,ordinal INTEGER NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,phase,ordinal)); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
+            try execute("PRAGMA application_id=\(applicationID); PRAGMA journal_mode=WAL; PRAGMA temp_store=FILE; CREATE TABLE IF NOT EXISTS versions(path TEXT PRIMARY KEY,catalog TEXT NOT NULL,photo TEXT NOT NULL,variant TEXT NOT NULL,uuid TEXT NOT NULL,payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS source_versions ON versions(catalog,photo,variant,path); CREATE TABLE IF NOT EXISTS recipe_origins(catalog TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,revision INTEGER NOT NULL,digest TEXT NOT NULL,undo TEXT NOT NULL,redo TEXT NOT NULL,PRIMARY KEY(catalog,asset,variant)); CREATE TEMP TABLE selection(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,PRIMARY KEY(owner,image)); CREATE TEMP TABLE visits(owner TEXT NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,ordinal INTEGER NOT NULL,PRIMARY KEY(owner,image)); CREATE INDEX visits_order ON visits(owner,ordinal); CREATE TEMP TABLE organization_history(step INTEGER NOT NULL,image TEXT NOT NULL,asset TEXT NOT NULL,variant TEXT NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,image)); CREATE TEMP TABLE organization_dictionary(step INTEGER NOT NULL,phase INTEGER NOT NULL,ordinal INTEGER NOT NULL,forward BLOB NOT NULL,inverse BLOB NOT NULL,PRIMARY KEY(step,phase,ordinal)); CREATE TEMP TABLE owner_counts(kind TEXT NOT NULL,owner TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(kind,owner)); CREATE TEMP TRIGGER selection_add AFTER INSERT ON selection BEGIN INSERT INTO owner_counts VALUES('selection',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER selection_remove AFTER DELETE ON selection BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='selection' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='selection' AND owner=OLD.owner AND count=0; END; CREATE TEMP TRIGGER visits_add AFTER INSERT ON visits BEGIN INSERT INTO owner_counts VALUES('visits',NEW.owner,1) ON CONFLICT(kind,owner) DO UPDATE SET count=count+1; END; CREATE TEMP TRIGGER visits_remove AFTER DELETE ON visits BEGIN UPDATE owner_counts SET count=count-1 WHERE kind='visits' AND owner=OLD.owner; DELETE FROM owner_counts WHERE kind='visits' AND owner=OLD.owner AND count=0; END;")
         } catch { sqlite3_close_v2(pointer); database = nil; throw error }
     }
     private func execute(_ sql: String) throws {
@@ -400,6 +401,26 @@ actor LensWorksCatalogIndex {
                 guard step == SQLITE_ROW else { throw failure() }
                 rows.append(LensWorksDictionaryRecord(ordinal: sqlite3_column_int64(prepared, 0), phase: sqlite3_column_int(prepared, 1), forward: blob(prepared, 2), inverse: blob(prepared, 3)))
             }
+        }
+    }
+    /// Who made the recipe changes Undo and Redo would step over for one catalog copy, as recorded when the copy
+    /// stood at exactly `revision` with recipe `digest`. Nil when nothing is recorded for that state: the copy was
+    /// changed by something that did not record it, so nothing is known about who made its history.
+    func recipeOrigins(catalog: String, key: LWCatalogEditsVariantKey, revision: Int64, digest: String) throws -> LensWorksRecipeOrigins? {
+        try statement("SELECT revision,digest,undo,redo FROM recipe_origins WHERE catalog=? AND asset=? AND variant=?", strings: [catalog, key.asset_id, key.variant_id]) { prepared in
+            let step = sqlite3_step(prepared)
+            if step == SQLITE_DONE { return nil }
+            guard step == SQLITE_ROW else { throw failure() }
+            guard sqlite3_column_int64(prepared, 0) == revision, text(prepared, 1) == digest else { return nil }
+            return LensWorksRecipeOrigins(undo: text(prepared, 2), redo: text(prepared, 3))
+        }
+    }
+    /// Records `origins` as the history of the copy at `revision` and `digest`, replacing what was recorded before.
+    func setRecipeOrigins(_ origins: LensWorksRecipeOrigins, catalog: String, key: LWCatalogEditsVariantKey, revision: Int64, digest: String) throws {
+        try statement("INSERT OR REPLACE INTO recipe_origins(catalog,asset,variant,digest,undo,redo,revision) VALUES(?,?,?,?,?,?,?)",
+                      strings: [catalog, key.asset_id, key.variant_id, digest, origins.encodedUndo, origins.encodedRedo]) { prepared in
+            sqlite3_bind_int64(prepared, 7, revision)
+            guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
         }
     }
     func discardOrganization(steps: [Int64]) throws {

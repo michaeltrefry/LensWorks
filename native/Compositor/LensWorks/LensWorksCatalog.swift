@@ -606,6 +606,36 @@ actor LensWorksCatalogService {
 
 nonisolated enum LensWorksCatalogRecipeAction: Sendable { case copy(String), exposure(Float), undo, redo }
 
+/// Who made the recipe changes a catalog copy's Undo and Redo would step over, newest last. The engine keeps the
+/// recipe history itself and records no author, so LensWorks keeps this beside it (in its index, across launches),
+/// tied to the exact revision and recipe it describes. A step it has no record of is the person's.
+nonisolated struct LensWorksRecipeOrigins: Sendable, Equatable {
+    static let limit = 256
+    var undo: [LensWorksCommandOrigin] = []
+    var redo: [LensWorksCommandOrigin] = []
+    init() {}
+    init(undo: String, redo: String) {
+        self.undo = undo.map { $0 == "a" ? .agent : .user }; self.redo = redo.map { $0 == "a" ? .agent : .user }
+    }
+    var encodedUndo: String { String(undo.suffix(Self.limit).map { $0 == .agent ? "a" : "u" }) }
+    var encodedRedo: String { String(redo.suffix(Self.limit).map { $0 == .agent ? "a" : "u" }) }
+    /// The history after `origin` made `action`, which left the copy able to undo and redo as given.
+    func recording(_ action: LensWorksCatalogRecipeAction, by origin: LensWorksCommandOrigin, canUndo: Bool, canRedo: Bool) -> Self {
+        var next = self
+        switch action {
+        case .copy: break
+        case .exposure: next.undo.append(origin)
+        case .undo: next.redo.append(next.undo.popLast() ?? .user)
+        case .redo: next.undo.append(next.redo.popLast() ?? .user)
+        }
+        // The engine's own answer bounds the record: it never names a step the engine does not have (a save leaves
+        // nothing to redo).
+        if !canUndo { next.undo = [] }
+        if !canRedo { next.redo = [] }
+        return next
+    }
+}
+
 nonisolated enum LensWorksCatalogControlAction: Sendable {
     case firstVariants
     case moreVariants(LWCatalogI64)
@@ -775,6 +805,8 @@ nonisolated struct LensWorksOrganizationStep: Sendable, Equatable {
     var keywords: [LensWorksKeywordTarget] = []
     var collection: String? = nil
     var dictionary: Int64 = 0
+    /// Who made the step: an agent's is titled “(Agent)”, and an agent undoes and redoes only its own.
+    var origin = LensWorksCommandOrigin.user
 }
 
 nonisolated struct LensWorksCatalogScope: Sendable {
@@ -837,6 +869,8 @@ final class LensWorksCatalog {
     private(set) var keywordNext: LWCatalogI64?
     @ObservationIgnored private var keywordTrail: [LWApplicationOrganizationKeyword] = []
     @ObservationIgnored private var keywordEpoch: UInt64 = 0
+    /// The recorded recipe-history origins of the copy shown, with the revision and recipe they describe.
+    private(set) var catalogRecipeOrigins: (key: LWCatalogEditsVariantKey, revision: LWCatalogI64, digest: String, origins: LensWorksRecipeOrigins)?
     private(set) var organizationUndo: [LensWorksOrganizationStep] = []
     private(set) var organizationRedo: [LensWorksOrganizationStep] = []
     @ObservationIgnored private var organizationStepID: Int64 = 0
@@ -921,7 +955,7 @@ final class LensWorksCatalog {
     }
     var selectedVersions: [LensWorksWorkingVersion] { versions.filter { $0.photoID == selectedAsset?.photoID && $0.sourceVariantID == (selectedAsset?.key?.variant_id ?? "master")  } }
     var isImporting: Bool { importProgress.map { [.Discovering, .Draining, .CancelRequested].contains($0.phase) } ?? false }
-    init(configuration: LWManagedSessionConfig? = nil, index: LensWorksCatalogIndex = .shared, defaults: UserDefaults = .standard, migrateLegacy: Bool = false, catalogService: LensWorksCatalogService? = nil) {
+    init(configuration: LWManagedSessionConfig? = nil, index: LensWorksCatalogIndex = .shared, defaults: UserDefaults = LensWorksUserState.defaults, migrateLegacy: Bool = false, catalogService: LensWorksCatalogService? = nil) {
         service = catalogService ?? LensWorksCatalogService(configuration: configuration)
         self.index = index; self.defaults = defaults; self.migrateLegacy = migrateLegacy
         rowLimit = min(100, configuration?.limits?.page_rows ?? 100)
@@ -1556,7 +1590,20 @@ final class LensWorksCatalog {
         try await loadGroups(after: after); try checkScope(scope)
     }
 
-    func captureCatalogControl(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant) throws -> LensWorksCatalogControlAdmission {
+    /// Who made the recipe change Undo (or Redo) would step over on the current copy; nil when there is none or it
+    /// was not recorded, which reads as the person's.
+    func recipeHistoryOrigin(redo: Bool) -> LensWorksCommandOrigin? {
+        guard let current = currentCatalogVariant, let recorded = catalogRecipeOrigins, recorded.revision == current.revision,
+              recorded.digest == current.recipe_digest, recorded.key.asset_id == current.key.asset_id, recorded.key.variant_id == current.key.variant_id,
+              redo ? current.can_redo : current.can_undo else { return nil }
+        return redo ? recorded.origins.redo.last : recorded.origins.undo.last
+    }
+    /// The rule document and organize history follow: an agent steps only over its own recipe changes.
+    static func recipeOwnershipRefusal(redo: Bool) -> LensWorksCatalogError {
+        .message(redo ? "The next catalog recipe change to redo is the person’s own: an agent redoes only its own."
+                      : "The last catalog recipe change is the person’s own: an agent undoes only its own.")
+    }
+    func captureCatalogControl(_ action: LensWorksCatalogControlAction, expected: LWApplicationDtoVariant, origin: LensWorksCommandOrigin = .user) throws -> LensWorksCatalogControlAdmission {
         try admitCatalogWork()
         guard !isBusy, let asset = selectedAsset, let key = asset.key, let current = currentCatalogVariant,
               current.key.asset_id == key.asset_id, current.key.variant_id == key.variant_id,
@@ -1570,9 +1617,11 @@ final class LensWorksCatalog {
             try requireFullResolutionOriginal(asset)
         case .recipe(.undo):
             guard current.can_undo else { throw LensWorksCatalogError.message("This catalog recipe has no Undo step.") }
+            guard origin != .agent || recipeHistoryOrigin(redo: false) == .agent else { throw Self.recipeOwnershipRefusal(redo: false) }
             try requireFullResolutionOriginal(asset)
         case .recipe(.redo):
             guard current.can_redo else { throw LensWorksCatalogError.message("This catalog recipe has no Redo step.") }
+            guard origin != .agent || recipeHistoryOrigin(redo: true) == .agent else { throw Self.recipeOwnershipRefusal(redo: true) }
             try requireFullResolutionOriginal(asset)
         case .rating(let value):
             guard value <= 5 else { throw LensWorksCatalogError.message("Rating must be 0–5.") }
@@ -1595,15 +1644,15 @@ final class LensWorksCatalog {
               current.recipe_digest == admission.recipe.recipe_digest else { return false }
         return true
     }
-    func performCatalogControl(_ admission: LensWorksCatalogControlAdmission) async throws {
+    func performCatalogControl(_ admission: LensWorksCatalogControlAdmission, origin: LensWorksCommandOrigin = .user) async throws {
         try Task.checkCancellation(); try admitCatalogWork()
         guard catalogControlIsCurrent(admission) else { throw CancellationError() }
         switch admission.action {
         case .firstVariants: try await loadCatalogVariants()
         case .moreVariants(let cursor): try await loadCatalogVariants(after: cursor)
         case .selectVariant(let variant): try await selectCatalogVariant(variant)
-        case .recipe(let action): _ = try await changeCatalogRecipe(action)
-        case .rating(let value): try await setCatalogRating(value)
+        case .recipe(let action): _ = try await changeCatalogRecipe(action, origin: origin)
+        case .rating(let value): try await setCatalogRating(value, origin: origin)
         }
     }
 
@@ -1631,6 +1680,10 @@ final class LensWorksCatalog {
         try checkCatalogSelection(scope, image: asset.id, query: query)
         guard current.key.asset_id == key.asset_id, current.key.variant_id == key.variant_id else { throw LensWorksManagedError.protocolViolation("Catalog recipe authority changed logical identity.") }
         guard master.key.asset_id == key.asset_id, master.key.variant_id == "master" else { throw LensWorksManagedError.protocolViolation("Catalog master authority changed logical identity.") }
+        // Who made this copy's recipe history, as recorded for exactly this revision and recipe.
+        let origins = try? await index.recipeOrigins(catalog: scope.path ?? "", key: current.key, revision: current.revision.value, digest: current.recipe_digest)
+        try checkCatalogSelection(scope, image: asset.id, query: query)
+        catalogRecipeOrigins = origins.map { (current.key, current.revision, current.recipe_digest, $0) }
         catalogVariantScope = scope; catalogVariant = current
         // The native page includes persisted recipes; the implicit master is a separate typed authority.
         catalogVariants = [master] + rows.map(\.second).filter { $0.key.variant_id != "master" }; catalogVariantsNext = next
@@ -1654,11 +1707,18 @@ final class LensWorksCatalog {
         catalogVariant = nil; catalogVariants = []; catalogVariantsNext = nil
         await refreshVersions()
     }
-    func changeCatalogRecipe(_ action: LensWorksCatalogRecipeAction) async throws -> LWApplicationDtoVariant {
+    func changeCatalogRecipe(_ action: LensWorksCatalogRecipeAction, origin: LensWorksCommandOrigin = .user) async throws -> LWApplicationDtoVariant {
         try admitCatalogWork()
-        guard !isBusy, let source = currentCatalogVariant, let asset = selectedAsset, let token = catalogToken else { throw LensWorksCatalogError.message("Choose a current catalog recipe before editing.") }
+        guard !isBusy, let source = currentCatalogVariant, let asset = selectedAsset, let token = catalogToken, let catalog = catalogPath else { throw LensWorksCatalogError.message("Choose a current catalog recipe before editing.") }
         let busy = beginBusy(); defer { finishBusy(busy) }
         let scope = captureScope(), query = queryOwner
+        // Read from the index, not the copy shown: what is recorded for exactly the revision this change is made on.
+        let recorded = try await index.recipeOrigins(catalog: catalog, key: source.key, revision: source.revision.value, digest: source.recipe_digest) ?? LensWorksRecipeOrigins()
+        try checkCatalogSelection(scope, image: asset.id, query: query)
+        if origin == .agent {
+            if case .undo = action, recorded.undo.last != .agent { throw Self.recipeOwnershipRefusal(redo: false) }
+            if case .redo = action, recorded.redo.last != .agent { throw Self.recipeOwnershipRefusal(redo: true) }
+        }
         if case .copy = action {} else {
             // Recipe edits, Undo and Redo render the full-resolution original: observe it now.
             try await requireFreshOriginal(asset)
@@ -1686,6 +1746,12 @@ final class LensWorksCatalog {
             request = .Redo(catalog: token, key: source.key, expected_revision: source.revision); creating = false
         }
         let next = try await service.catalogVariantChange(catalog: token, request: request, source: source, creating: creating)
+        // A new copy starts with nothing recorded. Every accepted change is a new revision and one history step in
+        // the engine, a save that leaves the recipe as it was included.
+        if !creating, next.revision != source.revision {
+            let origins = recorded.recording(action, by: origin, canUndo: next.can_undo, canRedo: next.can_redo)
+            try? await index.setRecipeOrigins(origins, catalog: catalog, key: next.key, revision: next.revision.value, digest: next.recipe_digest)
+        }
         #if DEBUG
         await continuationFixture?(.catalogRecipeReply)
         #endif
@@ -1705,7 +1771,7 @@ final class LensWorksCatalog {
         try checkScope(scope)
         guard selectedAsset?.key?.asset_id == next.key.asset_id, selectedAsset?.key?.variant_id == next.key.variant_id else { throw CancellationError() }
         try await loadCatalogVariants()
-        status = "Catalog recipe \(next.label) · revision \(next.revision.value)."
+        status = origin.historyName("Catalog recipe \(next.label) · revision \(next.revision.value).")
         return next
     }
     private func selectCreatedCatalogFocus(_ row: LWApplicationDtoGridImage, scope: LensWorksCatalogScope, query: String) async throws {
@@ -1720,16 +1786,16 @@ final class LensWorksCatalog {
         selection = []; selectionCount = 1; selectionAnchor = row.image_id
         await refreshVersions()
     }
-    func setCatalogRating(_ value: UInt8) async throws {
+    func setCatalogRating(_ value: UInt8, origin: LensWorksCommandOrigin = .user) async throws {
         try admitCatalogWork()
         guard !isBusy, let asset = selectedAsset, let key = asset.key else { throw CancellationError() }
         // The explicitly selected photo, independent of any wider grid selection.
-        try await organize(.rating(value), rows: [LensWorksSelectedRow(imageID: asset.id, key: key)])
+        try await organize(.rating(value), rows: [LensWorksSelectedRow(imageID: asset.id, key: key)], origin: origin)
     }
 
-    func setSelectedMembership(_ group: LWApplicationOrganizationCollection, remove: Bool = false) async throws {
+    func setSelectedMembership(_ group: LWApplicationOrganizationCollection, remove: Bool = false, origin: LensWorksCommandOrigin = .user) async throws {
         let scope = captureScope(), afterGroups = groupAfter, navigation = groupEpoch
-        try await organize(remove ? .removeCollection(group.id) : .addCollection(group.id))
+        try await organize(remove ? .removeCollection(group.id) : .addCollection(group.id), origin: origin)
         try checkScope(scope)
         guard groupEpoch == navigation else { throw CancellationError() }
         try await loadGroups(after: afterGroups); try checkScope(scope)
@@ -1740,7 +1806,7 @@ final class LensWorksCatalog {
     /// exact per-photo inverses are recorded before anything is written, and the write
     /// is one sealed batch job compare-and-set against the revisions that read reported.
     /// The whole change is one undoable step.
-    func organize(_ change: LensWorksOrganizationChange, rows explicit: [LensWorksSelectedRow]? = nil) async throws {
+    func organize(_ change: LensWorksOrganizationChange, rows explicit: [LensWorksSelectedRow]? = nil, origin: LensWorksCommandOrigin = .user) async throws {
         try admitCatalogWork()
         try change.validate()
         guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
@@ -1777,7 +1843,7 @@ final class LensWorksCatalog {
             }
         } catch { failure = error }
         // Even a partially applied change stays undoable as recorded.
-        await pushOrganizationStep(LensWorksOrganizationStep(id: step, title: change.title, photos: outcome.recorded, keywords: change.keywordTargets, collection: change.collection), history: history, scope: scope)
+        await pushOrganizationStep(LensWorksOrganizationStep(id: step, title: origin.historyName(change.title), photos: outcome.recorded, keywords: change.keywordTargets, collection: change.collection, origin: origin), history: history, scope: scope)
         if let failure { throw failure }
         try checkScope(scope)
         let refreshedQuery = queryEpoch &+ 1
@@ -1893,18 +1959,23 @@ final class LensWorksCatalog {
         return false
     }
 
-    func undoOrganization() async throws { try await replayOrganization(undo: true) }
-    func redoOrganization() async throws { try await replayOrganization(undo: false) }
+    func undoOrganization(origin: LensWorksCommandOrigin = .user) async throws { try await replayOrganization(undo: true, origin: origin) }
+    func redoOrganization(origin: LensWorksCommandOrigin = .user) async throws { try await replayOrganization(undo: false, origin: origin) }
 
     /// Replays a recorded step. Each photo is read first: one already in the target state
     /// is left alone, one that no longer holds the state the step left (changed by a
     /// later edit or a sidecar re-import) is skipped and reported, and the rest are
     /// written compare-and-set against that read's revision.
-    private func replayOrganization(undo: Bool) async throws {
+    private func replayOrganization(undo: Bool, origin: LensWorksCommandOrigin) async throws {
         try admitCatalogWork()
         guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
         guard let step = undo ? organizationUndo.last : organizationRedo.last else {
             throw LensWorksCatalogError.message(undo ? "There is no organization change to undo." : "There is no organization change to redo.")
+        }
+        // The rule document history follows: an agent steps only over its own steps, never the person's.
+        guard origin != .agent || step.origin == .agent else {
+            throw LensWorksCatalogError.message(undo ? "The last organization change is the person’s own: an agent undoes only its own."
+                                                    : "The next organization change to redo is the person’s own: an agent redoes only its own.")
         }
         let busy = beginBusy(); isOrganizing = true; organizationCancelRequested = false
         defer { if busyOwner == busy { isOrganizing = false }; finishBusy(busy) }
@@ -2053,23 +2124,23 @@ final class LensWorksCatalog {
     // MARK: Keyword dictionary edits (each one undoable step)
 
     /// Rename a keyword in place; nested keywords and every photo holding them follow.
-    func renameKeyword(_ keyword: LWApplicationOrganizationKeyword, to name: String) async throws {
+    func renameKeyword(_ keyword: LWApplicationOrganizationKeyword, to name: String, origin: LensWorksCommandOrigin = .user) async throws {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        try await relocateKeyword(keyword, to: Array(keyword.path.dropLast()) + [name], title: "Rename Keyword " + keyword.name + " to " + name)
+        try await relocateKeyword(keyword, to: Array(keyword.path.dropLast()) + [name], title: "Rename Keyword " + keyword.name + " to " + name, origin: origin)
     }
     /// Move a hierarchical keyword (and everything nested under it) under another parent, or to the top level.
-    func moveKeyword(_ keyword: LWApplicationOrganizationKeyword, under parent: [String]) async throws {
+    func moveKeyword(_ keyword: LWApplicationOrganizationKeyword, under parent: [String], origin: LensWorksCommandOrigin = .user) async throws {
         guard keyword.kind == .Hierarchical else { throw LensWorksCatalogError.message("Flat keywords have no parent.") }
-        try await relocateKeyword(keyword, to: parent + [keyword.name], title: "Move Keyword " + keyword.name + (parent.isEmpty ? " to Top Level" : " under " + parent.joined(separator: " > ")))
+        try await relocateKeyword(keyword, to: parent + [keyword.name], title: "Move Keyword " + keyword.name + (parent.isEmpty ? " to Top Level" : " under " + parent.joined(separator: " > ")), origin: origin)
     }
-    func relocateKeyword(_ keyword: LWApplicationOrganizationKeyword, to path: [String], title: String) async throws {
+    func relocateKeyword(_ keyword: LWApplicationOrganizationKeyword, to path: [String], title: String, origin: LensWorksCommandOrigin = .user) async throws {
         try admitCatalogWork()
         let from = LensWorksKeywordTarget(keyword), to = LensWorksKeywordTarget(path, kind: keyword.kind)
         try to.validate()
         guard from != to, !(from.kind == .Hierarchical && to.path.starts(with: from.path)) else {
             throw LensWorksCatalogError.message("A keyword cannot move onto itself or into a keyword nested under it.")
         }
-        try await keywordStep(title, keywords: [from, to]) { [unowned self] step, admitted in
+        try await keywordStep(title, keywords: [from, to], origin: origin) { [unowned self] step, admitted in
             let dictionary = try await recordKeywordTree(from, step: step, relocating: to, admitted: admitted)
             let photos = try await recordKeywordPhotos(keyword, targets: [from, to], step: step, admitted: admitted) { state in
                 let terms = state.keywords.map { LensWorksKeywordTarget($0.path, kind: $0.kind) }
@@ -2091,10 +2162,10 @@ final class LensWorksCatalog {
         }
     }
     /// Delete a keyword and everything nested under it, removing them from every photo.
-    func deleteKeyword(_ keyword: LWApplicationOrganizationKeyword) async throws {
+    func deleteKeyword(_ keyword: LWApplicationOrganizationKeyword, origin: LensWorksCommandOrigin = .user) async throws {
         try admitCatalogWork()
         let target = LensWorksKeywordTarget(keyword)
-        try await keywordStep("Delete Keyword " + keyword.path.joined(separator: " > "), keywords: [target]) { [unowned self] step, admitted in
+        try await keywordStep("Delete Keyword " + keyword.path.joined(separator: " > "), keywords: [target], origin: origin) { [unowned self] step, admitted in
             let dictionary = try await recordKeywordTree(target, step: step, relocating: nil, admitted: admitted)
             let photos = try await recordKeywordPhotos(keyword, targets: [target], step: step, admitted: admitted) { state in
                 let old = state.keywords.map { LensWorksKeywordTarget($0.path, kind: $0.kind) }.filter { target.covers($0) }
@@ -2104,11 +2175,11 @@ final class LensWorksCatalog {
             return (photos, dictionary)
         }
     }
-    func addKeywordSynonym(_ keyword: LWApplicationOrganizationKeyword, _ synonym: String) async throws {
+    func addKeywordSynonym(_ keyword: LWApplicationOrganizationKeyword, _ synonym: String, origin: LensWorksCommandOrigin = .user) async throws {
         try admitCatalogWork()
         let synonym = synonym.trimmingCharacters(in: .whitespacesAndNewlines), target = LensWorksKeywordTarget(keyword)
         guard !synonym.isEmpty, synonym.utf8.count <= 1024, !synonym.contains("\0") else { throw LensWorksCatalogError.message("A synonym needs 1–1,024 UTF-8 bytes.") }
-        try await keywordStep("Add Synonym " + synonym, keywords: []) { [unowned self] step, _ in
+        try await keywordStep("Add Synonym " + synonym, keywords: [], origin: origin) { [unowned self] step, _ in
             guard try await !keywordSynonyms(keyword).contains(synonym) else { throw LensWorksCatalogError.message("“" + synonym + "” is already a synonym of " + keyword.name + ".") }
             try await index.recordDictionary(step: step, records: [LensWorksDictionaryRecord(ordinal: 0, phase: 0, forward: try LWCatalogCodec.encode([LensWorksKeywordEdit.addSynonym(target, synonym)]), inverse: try LWCatalogCodec.encode([LensWorksKeywordEdit.removeSynonym(target, synonym)]))])
             return (0, 1)
@@ -2128,7 +2199,7 @@ final class LensWorksCatalog {
     }
 
     /// Records, then runs, one keyword dictionary step as a single undoable change.
-    private func keywordStep(_ title: String, keywords: [LensWorksKeywordTarget], build: (Int64, () throws -> Void) async throws -> (photos: Int64, dictionary: Int64)) async throws {
+    private func keywordStep(_ title: String, keywords: [LensWorksKeywordTarget], origin: LensWorksCommandOrigin = .user, build: (Int64, () throws -> Void) async throws -> (photos: Int64, dictionary: Int64)) async throws {
         guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
         let busy = beginBusy(); isOrganizing = true; organizationCancelRequested = false
         defer { if busyOwner == busy { isOrganizing = false }; finishBusy(busy) }
@@ -2140,7 +2211,7 @@ final class LensWorksCatalog {
         let id = nextOrganizationStep()
         let built: (photos: Int64, dictionary: Int64)
         do { built = try await build(id, current) } catch { try? await index.discardOrganization(steps: [id]); throw error }
-        let step = LensWorksOrganizationStep(id: id, title: title, photos: built.photos, keywords: keywords, dictionary: built.dictionary)
+        let step = LensWorksOrganizationStep(id: id, title: origin.historyName(title), photos: built.photos, keywords: keywords, dictionary: built.dictionary, origin: origin)
         var outcome = LensWorksOrganizationOutcome(), failure: (any Error)?
         do { try await replay(step, undo: false, outcome: &outcome, admitted: current) } catch { failure = error }
         await pushOrganizationStep(step, history: history, scope: scope)
@@ -2458,7 +2529,9 @@ final class LensWorksCatalog {
         return resolved
     }
 
-    func createWorkingVersion(workspace: ProjectWorkspace) async {
+    /// `admitted` is what an agent's request was checked against (the original it may read and the folder it may
+    /// write into): with it, the folder chooser never opens and nothing is read or written anywhere else.
+    func createWorkingVersion(workspace: ProjectWorkspace, admitted: (original: String, output: String)? = nil) async {
         guard !closingRequested, let selected = selectedAsset, let catalogPath, !isBusy, workspace.canSwitch else { return }
         let scope = captureScope(), selectedID = selected.id
         let sourceEpoch = catalogSelectionEpoch, sourceQuery = queryOwner, sourcePage = pageAuthority, sourceOwner = selectionOwner
@@ -2472,7 +2545,11 @@ final class LensWorksCatalog {
             let asset = try await resolveSelectedOriginal()
             try checkScope(scope)
             guard selectedAsset?.id == selectedID else { throw CancellationError() }
-            if outputDirectory == nil { await chooseOutput(window: workspace.window); try checkScope(scope) }
+            if let admitted {
+                guard outputDirectory == admitted.output, try asset.originalURL.path == admitted.original else {
+                    error = "The photo’s original or the working-versions folder changed after the request was checked: nothing was opened."; return
+                }
+            } else if outputDirectory == nil { await chooseOutput(window: workspace.window); try checkScope(scope) }
             guard let output = outputDirectory, selectedAsset?.id == selectedID else { return }
             _ = try await LensWorksVersionStore.shared.canonicalPath(output, outside: catalogPath)
             try checkScope(scope)

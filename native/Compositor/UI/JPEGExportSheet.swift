@@ -14,7 +14,7 @@ struct JPEGExportSheet: View {
         self.session = session
         self.finish = finish
         var start = JPEGOptions()
-        if let saved = UserDefaults.standard.object(forKey: Self.qualityKey) as? Double, saved.isFinite {
+        if let saved = LensWorksUserState.defaults.object(forKey: Self.qualityKey) as? Double, saved.isFinite {
             start.quality = min(1, max(0, saved))
         }
         _options = State(initialValue: start)
@@ -82,7 +82,7 @@ struct JPEGExportSheet: View {
                     DialogColorSwatch.closePicker(session)
                     do {
                         guard let result else { return };try result.check()
-                        UserDefaults.standard.set(options.quality, forKey: Self.qualityKey)
+                        LensWorksUserState.defaults.set(options.quality, forKey: Self.qualityKey)
                         finish(result)
                     } catch { self.error=error.localizedDescription;self.result=nil;readyOptions=nil }
                 }

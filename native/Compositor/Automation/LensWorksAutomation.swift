@@ -72,7 +72,14 @@ struct LensWorksAgentConfirmation: Identifiable {
         let action: String
         /// What it acts on, clipped; the sheet shows it in its own one-line field.
         let name: String
-        init(action: String, name: String) { self.action = action; self.name = String(name.prefix(Self.nameLimit)) }
+        init(action: String, name: String) { self.action = action; self.name = Self.clipped(name) }
+        /// At most `nameLimit` characters, cut in the middle: a long path keeps the folder it starts in and the file
+        /// name it ends with, which is what the person is asked to let go of.
+        static func clipped(_ name: String) -> String {
+            guard name.count > nameLimit else { return name }
+            let head = (nameLimit - 1) / 2
+            return name.prefix(head) + "…" + name.suffix(nameLimit - 1 - head)
+        }
     }
     let id = UUID()
     let title: String
@@ -98,6 +105,8 @@ final class LensWorksAutomation {
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored let secretStore: LensWorksAutomationSecretStore
     @ObservationIgnored let tools: LensWorksAgentTools
+    /// The folders the person granted to automation: the only places an agent's command may name a file.
+    let folders: LensWorksGrantedFolders
     @ObservationIgnored private(set) var server: LensWorksAutomationServer!
     private(set) var isEnabled: Bool
     private(set) var secret: String?
@@ -124,12 +133,13 @@ final class LensWorksAutomation {
     /// Whether a confirmation asks for the person's attention in the Dock.
     @ObservationIgnored var requestsAttention = true
 
-    init(defaults: UserDefaults = .standard, secretStore: LensWorksAutomationSecretStore = LensWorksKeychainSecretStore(),
+    init(defaults: UserDefaults = LensWorksUserState.defaults, secretStore: LensWorksAutomationSecretStore = LensWorksUserState.secretStore(),
          socketPath: String = LensWorksAutomationServer.defaultSocketPath(),
          session: @escaping () -> EditorSession?, catalog: @escaping () -> LensWorksCatalog?) {
         self.defaults = defaults; self.secretStore = secretStore
         isEnabled = defaults.bool(forKey: Self.enabledKey)
-        tools = LensWorksAgentTools(session: session, catalog: catalog)
+        folders = LensWorksGrantedFolders(defaults: defaults)
+        tools = LensWorksAgentTools(session: session, catalog: catalog, folders: folders)
         tools.automation = self
         server = LensWorksAutomationServer(socketPath: socketPath, handler: { [weak self] request, caller in
             await self?.handle(request, caller: caller) ?? LensWorksAgentTools.encodeError(id: nil, code: -32000, "LensWorks is quitting.")
@@ -237,10 +247,19 @@ final class LensWorksAutomation {
     }
 
     /// Copies a secret (or a configuration carrying it), marked concealed so clipboard managers do not keep it.
-    func copyToPasteboard(_ text: String, pasteboard: NSPasteboard = .general) {
+    func copyToPasteboard(_ text: String, pasteboard: NSPasteboard = LensWorksUserState.pasteboard) {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboard.setString("", forType: Self.concealedPasteboardType)
+    }
+
+    /// Settings › Automation › Grant Folder…: the person picks a folder agents may read and write files in.
+    func chooseGrantedFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+        panel.prompt = "Grant"; panel.message = "AI agents will be able to open, import, save and export files inside this folder."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try folders.grant(url); lastError = nil } catch { lastError = error.localizedDescription }
     }
 
     // MARK: Confirmations

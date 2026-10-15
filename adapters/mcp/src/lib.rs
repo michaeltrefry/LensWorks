@@ -328,7 +328,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": {"name": "lensworks", "title": "LensWorks", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "Drives the running LensWorks app. Call get_state for layer and catalog ids, list_commands for what can run now and why not, invoke_command to run one or batch to run several as one step (document edits are labeled “(Agent)” in LensWorks history and Undo reverts them; permanent deletes ask the person first), and render_preview to see the result."
+        "instructions": "Drives the running LensWorks app. Call get_state for layer and catalog ids, list_commands for what can run now and why not, invoke_command to run one or batch to run several as one step (document edits are labeled “(Agent)” in LensWorks history and Undo reverts them; permanent deletes and replacing a file ask the person first; a file path is accepted only inside a folder the person granted in LensWorks › Settings › Automation, which get_state lists), and render_preview to see the result."
     })
 }
 

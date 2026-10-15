@@ -20,6 +20,8 @@ final class CompositorUITestsLaunchTests: XCTestCase {
     @MainActor
     func testLaunch() throws {
         let app = XCUIApplication()
+        // The marker keeps the launched app off the person's preferences, catalog index, clipboard and Open Recent.
+        app.launchEnvironment["XCTestConfigurationFilePath"] = try XCTUnwrap(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"])
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,

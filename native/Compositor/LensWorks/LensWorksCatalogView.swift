@@ -648,8 +648,8 @@ private struct LensWorksCatalogRecipeControls: View {
                 HStack {
                     let undoReason = catalog.catalogCommandAvailability(.recipe(.undo), expected: variant)
                     let redoReason = catalog.catalogCommandAvailability(.recipe(.redo), expected: variant)
-                    Button("Undo Catalog Recipe") { act(.recipe(.undo), expected: variant) }.disabled(undoReason != nil).help(undoReason ?? "Undo Catalog Recipe")
-                    Button("Redo Catalog Recipe") { act(.recipe(.redo), expected: variant) }.disabled(redoReason != nil).help(redoReason ?? "Redo Catalog Recipe")
+                    Button("Undo Catalog Recipe") { act(.recipe(.undo), expected: variant) }.disabled(undoReason != nil).help(undoReason ?? (catalog.recipeHistoryOrigin(redo: false) ?? .user).historyName("Undo Catalog Recipe"))
+                    Button("Redo Catalog Recipe") { act(.recipe(.redo), expected: variant) }.disabled(redoReason != nil).help(redoReason ?? (catalog.recipeHistoryOrigin(redo: true) ?? .user).historyName("Redo Catalog Recipe"))
                 }
                 Text("Catalog Rating · " + (catalog.selectedAsset?.rating.map { String($0) } ?? "Unrated")).font(.caption)
                 Menu("Catalog Rating") {

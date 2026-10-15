@@ -12,6 +12,12 @@ final class ProjectController {
     /// It is recorded by the next save and survives reloads of a package written elsewhere.
     var relinkedOriginal: (version: UUID, path: String, native: LWCatalogNativePath?)?
     private var saveGeneration = 0
+    /// Whether opening and saving add the project to File › Open Recent (macOS keeps that list for the person; tests
+    /// turn this off so a fixture never lands in it).
+    var recordsRecentProjects = true
+    /// Whether saving a catalog working version records it in the app's shared version index and as the last one
+    /// opened (tests turn this off so a fixture never lands in the person's own).
+    var sharesWorkingVersions = true
     private(set) var sourceCloseRequested = false
     private var standaloneCloseConfirmed = false
     /// Keeps the document in step with its package when something else writes it. See ProjectController+ExternalChanges.
@@ -75,6 +81,24 @@ final class ProjectController {
             try await ImageExporter.shared.exportPNG(snapshot, to: url, workingVersion: workingVersion)
         }
         catch { await showError("Couldn’t export PNG", error: error) }
+    }
+
+    /// Export PNG straight to `url`, for a caller that already chose the destination (an agent's granted path).
+    func exportPNG(to url: URL) async throws {
+        guard session.document != nil, begin() else { throw LensWorksCommandRefusal(reason: "Finish the current project operation first.") }
+        defer { session.isProjectBusy = false }
+        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        try await ImageExporter.shared.exportPNG(snapshot, to: url, workingVersion: workingVersion)
+    }
+    /// Export JPEG straight to `url` with `options`, without the export sheet.
+    func exportJPEG(to url: URL, options: JPEGOptions) async throws {
+        guard session.document != nil, begin() else { throw LensWorksCommandRefusal(reason: "Finish the current project operation first.") }
+        defer { session.isProjectBusy = false }
+        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        let raster = try await ImageExporter.shared.render(snapshot)
+        let data = try await ImageExporter.shared.jpegFile(raster, options: options)
+        try data.check()
+        try await ImageExporter.shared.write(data.file, to: url, workingVersion: workingVersion)
     }
 
     func canvasSize() async {
@@ -256,19 +280,19 @@ final class ProjectController {
                 if var version = savedVersion {
                     version.projectPath = destination.path
                     workingVersion = version
-                    UserDefaults.standard.set(destination.path, forKey: "LensWorks.lastWorkingVersion")
+                    if sharesWorkingVersions { LensWorksUserState.defaults.set(destination.path, forKey: "LensWorks.lastWorkingVersion") }
                 }
                 // Register before publishing the URL: the catalog lists working versions again when the project URL
                 // changes, and a listing that reached the index before this registration would miss the saved version.
                 var registrationError: Error?
-                if savedVersion != nil {
+                if savedVersion != nil, sharesWorkingVersions {
                     do { guard try await LensWorksCatalogIndex.shared.register(destination) else { throw LensWorksCatalogError.message("The saved package no longer contains its LensWorks source record.") } }
                     catch { registrationError = error }
                 }
                 session.projectURL = destination
                 session.history.markSaved(revision)
                 saveGeneration += 1
-                RecentProjects.shared.note(destination)
+                if recordsRecentProjects { RecentProjects.shared.note(destination) }
                 await rememberProjectDigest(for: destination)
                 watchProject(at: destination)
                 if let registrationError { await showError("The project was saved; its catalog registration needs reconciliation", error: registrationError) }
@@ -315,16 +339,18 @@ final class ProjectController {
         do {
             // Validate first. A corrupt project never discards the live document.
             var snapshot = try await ProjectStore.shared.load(from: source)
+            try agentRequest?.admit(snapshot)
             let previousSave = saveGeneration
             guard await confirmReplacement() else { return false }
             // Saving in the confirmation can replace the very file being opened.
             if saveGeneration != previousSave,
                session.projectURL?.resolvingSymlinksInPath() == source.resolvingSymlinksInPath() {
                 snapshot = try await ProjectStore.shared.load(from: source)
+                try agentRequest?.admit(snapshot)
             }
             session.installProject(snapshot, from: source)
             workingVersion = snapshot.workingVersion
-            RecentProjects.shared.note(source)
+            if recordsRecentProjects { RecentProjects.shared.note(source) }
             await rememberProjectDigest(for: source)
             watchProject(at: source)
             return true
@@ -403,7 +429,11 @@ final class ProjectController {
         return response == .alertThirdButtonReturn
     }
 
+    /// Set on the one controller an agent's file command is driving, for as long as it runs: an error there goes back
+    /// to the agent instead of into an alert. Every other project's errors still reach the person.
+    var agentRequest: ProjectAgentRequest?
     private func showError(_ title: String, error: Error) async {
+        if let agentRequest { agentRequest.failure = agentRequest.failure ?? title + ": " + error.localizedDescription; return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title
@@ -461,4 +491,11 @@ final class ProjectController {
         }
         processing = false
     }
+}
+
+/// What an agent's file command supplies in place of the person on the controller it drives: where a failure goes
+/// instead of an alert, and a check on a project that was read before it is installed.
+@MainActor final class ProjectAgentRequest {
+    var failure: String?
+    var admit: (ProjectSnapshot) throws -> Void = { _ in }
 }

@@ -23,14 +23,14 @@ final class RecentProjects {
     nonisolated static func menuTitle(_ url: URL) -> String { url.deletingPathExtension().lastPathComponent }
 
     func note(_ url: URL) {
-        NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        LensWorksUserState.noteRecentProject(url)
         refresh()
     }
     func clear() {
-        NSDocumentController.shared.clearRecentDocuments(nil)
+        LensWorksUserState.clearRecentProjects()
         refresh()
     }
     func refresh() {
-        urls = NSDocumentController.shared.recentDocumentURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        urls = LensWorksUserState.recentProjects.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 }

@@ -384,6 +384,8 @@ final class EditorSession {
     /// The selection as it was when a drag-move began; the drag is one undo step.
     @ObservationIgnored var selectionMoveOrigin: DocumentSelection?
     var pixelMove: PixelMove?
+    /// The clipboard Cut, Copy and Paste use. Tests give a session its own so they never touch the person's.
+    @ObservationIgnored var pasteboard = LensWorksUserState.pasteboard
     @ObservationIgnored var pixelClipboard: PixelClipboard?
     @ObservationIgnored var copiedLayer: CopiedLayer?
     var levels: LevelsEdit? { didSet { resumeFileRequests() } }
