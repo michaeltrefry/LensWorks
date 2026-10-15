@@ -474,51 +474,58 @@ struct PanoramaMergeTests {
     }
 
     /// A sky blown in two frames of different exposure and white balance records no level and no
-    /// colour in either. In the picture it is one neutral level, the same from both frames.
+    /// colour in either. In the picture it is one neutral level, the same from both frames;
+    /// also where only some of its channels are blown (red in one frame, red and green in the other).
     @Test func aRegionBlownInTwoFramesIsNeutralAndLevelAcrossTheSeam() throws {
         let tolerance = try PanoramaFixture.tolerance()
         let rotations = [Scene.rotation(yaw: -13, pitch: 0.5), Scene.rotation(yaw: 13, pitch: -0.5)]
         // Exposures 0.7 stop apart, and a different white balance.
         let gains = [SIMD3(0.8, 0.8, 0.8), SIMD3(1.15, 1.0, 0.9) * 1.3]
-        // Above 6° of elevation the scene is a sky five times brighter than anything else in it.
-        func scene(_ d: SIMD3<Double>) -> SIMD3<Double> { Scene.latitude(d) < -6 ? SIMD3(3.0, 2.8, 2.5) : Scene.radiance(PanoramaFixture.seed, d) }
-        let frames = try zip(rotations, gains).map { try Scene.view(rotation: $0, gain: $1, clip: 1, radiance: scene) }
-        // The sky is at the sensor's limit in every channel of both frames.
-        for frame in frames { #expect(frame.rgb(10 * 320 + 160) == SIMD3(1, 1, 1) && frame.clipLevel == SIMD3(repeating: 0.98)) }
-        let result = try LWPanoramaStitcher.stitch(frames)
-        // The exposures are still solved, from what is not blown.
-        for channel in 0..<3 {
-            let solved = Double(log2(result.alignment.gains[1][channel] / result.alignment.gains[0][channel]))
-            #expect(abs(solved - log2(gains[1][channel] / gains[0][channel])) < 0.06, "channel \(channel): \(solved)")
-        }
-        let turn = PanoramaTruth.toTruth(result, rotations)
-        var lowest = Float.infinity, highest: Float = 0, tint: Float = 0, pixels = 0, seamPairs = 0, step: Float = 0
-        for y in 0..<result.height {
-            for x in 0..<result.width {
-                // Sky, clear of its edge, that both frames see clear of their own edges.
-                let d = PanoramaTruth.direction(result, x, y, toTruth: turn)
-                guard Scene.latitude(d) < -9, rotations.allSatisfy({ rotation in
-                    let c = rotation.transpose * d
-                    guard c.z > 0 else { return false }
-                    let px = 300 * c.x / c.z + 159.5, py = 300 * c.y / c.z + 119.5
-                    return px >= 4 && py >= 4 && px <= 315 && py <= 235
-                }) else { continue }
-                let p = y * result.width + x, value = result.rgb(p)
-                lowest = min(lowest, value.min()); highest = max(highest, value.max()); tint = max(tint, (value.max() - value.min()) / value.max()); pixels += 1
-                if x + 1 < result.width, result.labels[p] != result.labels[p + 1] {
-                    seamPairs += 1
-                    step = max(step, abs(log2(LWPanoramaSeamMetric.luminance(value) / LWPanoramaSeamMetric.luminance(result.rgb(p + 1)))))
+        // Above 6° of elevation the scene is a sky brighter than anything else in it.
+        for (name, sky, blown) in [("every channel", SIMD3(3.0, 2.8, 2.5), [[true, true, true], [true, true, true]]),
+                                   ("some channels", SIMD3(1.6, 0.9, 0.3), [[true, false, false], [true, true, false]])] {
+            func scene(_ d: SIMD3<Double>) -> SIMD3<Double> { Scene.latitude(d) < -6 ? sky : Scene.radiance(PanoramaFixture.seed, d) }
+            let frames = try zip(rotations, gains).map { try Scene.view(rotation: $0, gain: $1, clip: 1, radiance: scene) }
+            // The sky is at the sensor's limit in exactly the channels said, in both frames.
+            for (frame, channels) in zip(frames, blown) {
+                let value = frame.rgb(10 * 320 + 160)
+                #expect((0..<3).allSatisfy { (value[$0] == 1) == channels[$0] } && frame.clipLevel == SIMD3(repeating: 0.98), "\(name): \(value)")
+            }
+            let result = try LWPanoramaStitcher.stitch(frames)
+            // The exposures are still solved, from what is not blown.
+            for channel in 0..<3 {
+                let solved = Double(log2(result.alignment.gains[1][channel] / result.alignment.gains[0][channel]))
+                #expect(abs(solved - log2(gains[1][channel] / gains[0][channel])) < 0.06, "channel \(channel): \(solved)")
+            }
+            let turn = PanoramaTruth.toTruth(result, rotations)
+            var lowest = Float.infinity, highest: Float = 0, tint: Float = 0, pixels = 0, seamPairs = 0, step: Float = 0
+            for y in 0..<result.height {
+                for x in 0..<result.width {
+                    // Sky, clear of its edge, that both frames see clear of their own edges.
+                    let d = PanoramaTruth.direction(result, x, y, toTruth: turn)
+                    guard Scene.latitude(d) < -9, rotations.allSatisfy({ rotation in
+                        let c = rotation.transpose * d
+                        guard c.z > 0 else { return false }
+                        let px = 300 * c.x / c.z + 159.5, py = 300 * c.y / c.z + 119.5
+                        return px >= 4 && py >= 4 && px <= 315 && py <= 235
+                    }) else { continue }
+                    let p = y * result.width + x, value = result.rgb(p)
+                    lowest = min(lowest, value.min()); highest = max(highest, value.max()); tint = max(tint, (value.max() - value.min()) / value.max()); pixels += 1
+                    if x + 1 < result.width, result.labels[p] != result.labels[p + 1] {
+                        seamPairs += 1
+                        step = max(step, abs(log2(LWPanoramaSeamMetric.luminance(value) / LWPanoramaSeamMetric.luminance(result.rgb(p + 1)))))
+                    }
                 }
             }
+            print("S44 blown sky (\(name)): \(pixels) pixels blown in both frames, levels \(lowest) to \(highest), worst tint \(tint), \(seamPairs) seam pairs with a worst step of \(step) stops")
+            #expect(pixels > 3000 && seamPairs > 20, "\(pixels) pixels, \(seamPairs) seam pairs")
+            #expect(tint < 0.02, "R, G and B differ by \(tint) of the level")
+            #expect(step < Float(tolerance) && log2(highest / lowest) < Float(tolerance), "step \(step), levels \(lowest) to \(highest)")
+            // It is the level of the frame with the least headroom, and nothing in the picture is brighter.
+            let ceiling = LWPanoramaStitcher.ceiling(result.alignment, clips: frames.map(\.clipLevel))
+            #expect(abs(highest - ceiling) < 0.002 && result.peak <= ceiling + 0.002 && ceiling == (0.98 / result.alignment.gains[1]).min(), "\(highest) \(ceiling) \(result.peak)")
+            #expect(LWPanoramaSeamMetric.measure(result, frames: frames).value < tolerance)
         }
-        print("S44 blown sky: \(pixels) pixels blown in both frames, levels \(lowest) to \(highest), worst tint \(tint), \(seamPairs) seam pairs with a worst step of \(step) stops")
-        #expect(pixels > 3000 && seamPairs > 20, "\(pixels) pixels, \(seamPairs) seam pairs")
-        #expect(tint < 0.02, "R, G and B differ by \(tint) of the level")
-        #expect(step < Float(tolerance) && log2(highest / lowest) < Float(tolerance), "step \(step), levels \(lowest) to \(highest)")
-        // It is the level of the frame with the least headroom, and nothing in the picture is brighter.
-        let ceiling = LWPanoramaStitcher.ceiling(result.alignment, clips: frames.map(\.clipLevel))
-        #expect(abs(highest - ceiling) < 0.002 && result.peak <= ceiling + 0.002 && ceiling == (0.98 / result.alignment.gains[1]).min(), "\(highest) \(ceiling) \(result.peak)")
-        #expect(LWPanoramaSeamMetric.measure(result, frames: frames).value < tolerance)
     }
 
     /// Twelve frames around the horizon: the canvas is the whole circle, and the frame that
