@@ -49,6 +49,13 @@ pub struct Limits {
     pub fuel_per_pixel: u64,
     /// The most parameters a plugin may declare.
     pub parameters: u64,
+    /// The most fuel one whole run (every tile of one layer) may spend, whoever started it.
+    pub fuel_run: u64,
+    /// The tighter whole-run bound for a run an agent started.
+    pub fuel_run_agent: u64,
+    /// The largest magnitude a color value a plugin wrote may have: the largest finite half float, which is the
+    /// extended range the renderer keeps.
+    pub color_magnitude: u64,
     pub interface_version: u32,
 }
 
@@ -63,8 +70,13 @@ pub const LIMITS: Limits = Limits {
     fuel_filter_base: 10_000_000,
     fuel_per_pixel: 4_000,
     parameters: 16,
+    fuel_run: FULL_TILE_FUEL * 1_024,
+    fuel_run_agent: FULL_TILE_FUEL * 256,
+    color_magnitude: 65_504,
     interface_version: INTERFACE_VERSION,
 };
+/// What `lw_filter_tile` may spend on one full tile: the unit the whole-run budgets are counted in.
+const FULL_TILE_FUEL: u64 = 10_000_000 + 4_000 * 65_536;
 
 /// Why a plugin was refused or stopped. The message is for the person: it never carries plugin-supplied text other
 /// than an import or export name, which is quoted and bounded.
@@ -220,6 +232,9 @@ pub struct Instance {
     buffer: TypedFunc<i32, i32>,
     filter: TypedFunc<TileArguments, i32>,
     failed: bool,
+    /// The whole-run budget this instance was given, and what is left of it.
+    run_budget: u64,
+    run_fuel: u64,
 }
 
 /// What stopped a call, in the person's terms.
@@ -247,8 +262,19 @@ fn stopped(error: &wasmi::Error, fuel: u64) -> PluginError {
 }
 
 impl Instance {
-    /// Validates `wasm` again and instantiates it with `parameters` as the values `param(index)` answers.
+    /// Validates `wasm` again and instantiates it with `parameters` as the values `param(index)` answers, under
+    /// the whole-run budget every run has.
     pub fn new(wasm: &[u8], parameters: &[f64]) -> Result<Self, PluginError> {
+        Self::with_run_fuel(wasm, parameters, LIMITS.fuel_run)
+    }
+
+    /// As [`Instance::new`], with `run_fuel` as the most fuel all of this instance's tiles together may spend. It
+    /// can only tighten the bound: a value over [`Limits::fuel_run`] is that limit.
+    pub fn with_run_fuel(
+        wasm: &[u8],
+        parameters: &[f64],
+        run_fuel: u64,
+    ) -> Result<Self, PluginError> {
         if parameters.len() as u64 > LIMITS.parameters {
             return refuse(format!(
                 "A plugin takes at most {} parameters.",
@@ -318,6 +344,39 @@ impl Instance {
             buffer,
             filter,
             failed: false,
+            run_budget: run_fuel.min(LIMITS.fuel_run),
+            run_fuel: run_fuel.min(LIMITS.fuel_run),
+        })
+    }
+
+    /// What is left of the whole-run budget.
+    pub fn run_fuel_left(&self) -> u64 {
+        self.run_fuel
+    }
+
+    /// Runs `call` with at most `allowance` fuel, less when the run's budget has less left, and charges what it
+    /// spent to the run. A call stopped for fuel it was denied by the run's budget says so.
+    fn metered<T>(
+        &mut self,
+        allowance: u64,
+        call: impl FnOnce(&mut Self) -> Result<T, wasmi::Error>,
+    ) -> Result<T, PluginError> {
+        let given = allowance.min(self.run_fuel);
+        self.store
+            .set_fuel(given)
+            .map_err(|error| PluginError(error.to_string()))?;
+        let result = call(self);
+        let left = self.store.get_fuel().unwrap_or(0);
+        self.run_fuel -= given.saturating_sub(left).min(self.run_fuel);
+        result.map_err(|error| {
+            if given < allowance && error.as_trap_code() == Some(TrapCode::OutOfFuel) {
+                PluginError(format!(
+                    "It used up its execution budget of {} fuel for the whole run and was stopped.",
+                    self.run_budget
+                ))
+            } else {
+                stopped(&error, allowance)
+            }
         })
     }
 
@@ -378,14 +437,9 @@ impl Instance {
         frame_height: u32,
     ) -> Result<(), PluginError> {
         let bytes = pixels.len() * 4;
-        let fuel_error = |error: wasmi::Error| PluginError(error.to_string());
-        self.store
-            .set_fuel(LIMITS.fuel_buffer_call)
-            .map_err(fuel_error)?;
-        let pointer = self
-            .buffer
-            .call(&mut self.store, bytes as i32)
-            .map_err(|error| stopped(&error, LIMITS.fuel_buffer_call))?;
+        let pointer = self.metered(LIMITS.fuel_buffer_call, |instance| {
+            instance.buffer.call(&mut instance.store, bytes as i32)
+        })?;
         let Some(range) = self.range(pointer, bytes) else {
             return refuse(format!(
                 "It did not provide a {bytes}-byte tile buffer inside its own memory."
@@ -393,13 +447,12 @@ impl Instance {
         };
         {
             let target = &mut self.memory.data_mut(&mut self.store)[range];
-            for (chunk, value) in target.chunks_exact_mut(4).zip(pixels.iter()) {
-                chunk.copy_from_slice(&value.to_le_bytes());
+            for (chunk, value) in target.as_chunks_mut::<4>().0.iter_mut().zip(pixels.iter()) {
+                *chunk = value.to_le_bytes();
             }
         }
         let fuel =
             LIMITS.fuel_filter_base + LIMITS.fuel_per_pixel * u64::from(width) * u64::from(height);
-        self.store.set_fuel(fuel).map_err(fuel_error)?;
         let arguments = (
             pointer,
             width as i32,
@@ -409,10 +462,9 @@ impl Instance {
             frame_width as i32,
             frame_height as i32,
         );
-        let status = self
-            .filter
-            .call(&mut self.store, arguments)
-            .map_err(|error| stopped(&error, fuel))?;
+        let status = self.metered(fuel, |instance| {
+            instance.filter.call(&mut instance.store, arguments)
+        })?;
         if status != 0 {
             return refuse(format!("It reported failure (code {status})."));
         }
@@ -422,17 +474,27 @@ impl Instance {
         };
         let source = &self.memory.data(&self.store)[range];
         // Checked whole before anything is copied out, so a refused tile leaves `pixels` untouched.
-        for (index, chunk) in source.chunks_exact(4).enumerate() {
-            let value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (index, chunk) in source.as_chunks::<4>().0.iter().enumerate() {
+            let value = f32::from_le_bytes(*chunk);
             if !value.is_finite() {
                 return refuse("It returned a value that is not a finite number.");
             }
-            if index % 4 == 3 && !(0.0..=1.0).contains(&value) {
-                return refuse("It returned an alpha value outside 0 through 1.");
+            if index % 4 == 3 {
+                if !(0.0..=1.0).contains(&value) {
+                    return refuse("It returned an alpha value outside 0 through 1.");
+                }
+            } else if value.abs() > LIMITS.color_magnitude as f32
+                && value.to_bits() != pixels[index].to_bits()
+            {
+                // A value the layer already held and the plugin passed through is the layer's own, not the plugin's.
+                return refuse(format!(
+                    "It returned a color value outside -{0} through {0}.",
+                    LIMITS.color_magnitude
+                ));
             }
         }
-        for (chunk, value) in source.chunks_exact(4).zip(pixels.iter_mut()) {
-            *value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (chunk, value) in source.as_chunks::<4>().0.iter().zip(pixels.iter_mut()) {
+            *value = f32::from_le_bytes(*chunk);
         }
         Ok(())
     }

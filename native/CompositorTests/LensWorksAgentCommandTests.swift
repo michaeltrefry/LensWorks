@@ -205,6 +205,17 @@ struct LensWorksAgentCommandTests {
         }
         @MainActor func selectAll(_ fixture: Fixture) { fixture.session.selectAll(); fixture.session.history.reset() }
         @MainActor func ids(_ fixture: Fixture) throws -> [String] { [try fixture.layer("Red").id.uuidString, try fixture.layer("Blue").id.uuidString] }
+        /// A live RAW layer, selected, with the sample invert's run retained on its source.
+        @MainActor func retainPluginStep(_ fixture: Fixture) async throws {
+            let original = fixture.granted.appendingPathComponent("procedural.dng")
+            try ProceduralDNG.write(to: original, width: 48, height: 32)
+            await fixture.session.importImages([original])
+            try #require(fixture.session.activeLayer?.liveSource != nil, "\(fixture.session.importError ?? "")")
+            try await fixture.session.plugins.install(from: LensWorksPluginSamples.package("invert"))
+            try await fixture.session.runPlugin(LensWorksPluginSamples.id("invert"), values: [])
+            fixture.session.history.reset()
+        }
+        @MainActor func retainedStep(_ fixture: Fixture) throws -> UUID { try #require(fixture.session.activeLayer?.liveSource?.plugins.first).id }
         let scenarios: [Scenario] = [
             .init(id: .selectLayers, arguments: { ["layers": [try $0.layer("Red").id.uuidString]] }, verify: { $0.session.activeLayer?.name == "Red" }, transient: true),
             .init(id: .newBlankLayer, verify: { $0.session.document?.layers.count == 3 }),
@@ -263,8 +274,13 @@ struct LensWorksAgentCommandTests {
             .init(id: .invert),
             // An installed plugin's filter, by the family command: the sample invert turns the blue layer yellow.
             .init(id: .pluginFilter, arguments: { _ in ["plugin": LensWorksPluginSamples.id("invert")] },
-                  prepare: { try $0.session.plugins.install(from: LensWorksPluginSamples.package("invert")) },
+                  prepare: { try await $0.session.plugins.install(from: LensWorksPluginSamples.package("invert")) },
                   verify: { $0.session.history.undoName == "Plugin: Sample Invert (Agent)" && $0.session.plugins.plugins.count == 1 }),
+            // A plugin step retained on a live RAW layer, re-run with the installed plugin or removed, by its id.
+            .init(id: .pluginStepRerun, arguments: { try ["step": retainedStep($0).uuidString] }, prepare: { try await retainPluginStep($0) },
+                  verify: { $0.session.activeLayer?.liveSource?.plugins.count == 1 && $0.session.history.undoName == "Re-run Plugin Step: Sample Invert (Agent)" }),
+            .init(id: .pluginStepRemove, arguments: { try ["step": retainedStep($0).uuidString] }, prepare: { try await retainPluginStep($0) },
+                  verify: { $0.session.activeLayer?.liveSource?.plugins.isEmpty == true && $0.session.history.undoName == "Remove Plugin Step: Sample Invert (Agent)" }),
             .init(id: .curves, arguments: { _ in ["settings": ["channels": [[["x": 0, "y": 0], ["x": 128, "y": 200], ["x": 255, "y": 255]], [["x": 0, "y": 0], ["x": 255, "y": 255]], [["x": 0, "y": 0], ["x": 255, "y": 255]], [["x": 0, "y": 0], ["x": 255, "y": 255]]]]] }),
             .init(id: .levels, arguments: { _ in ["settings": ["ranges": [["black": 40, "gamma": 1, "white": 200, "outputBlack": 0, "outputWhite": 255], ["black": 0, "gamma": 1, "white": 255, "outputBlack": 0, "outputWhite": 255],
                                                                     ["black": 0, "gamma": 1, "white": 255, "outputBlack": 0, "outputWhite": 255], ["black": 0, "gamma": 1, "white": 255, "outputBlack": 0, "outputWhite": 255]]]] }),

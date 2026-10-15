@@ -22,6 +22,7 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
     case pluginTrust = "It installs, removes or reloads a filter plugin: third-party code LensWorks will run, which only the person at the Mac decides to trust."
     case pluginProgress = "It is the Cancel button of the progress panel the person sees while a plugin filter runs; an agent’s own request just waits for that run to end."
+    case pluginSteps = "It opens the sheet listing a RAW layer’s retained plugin steps for the person; plugin.step.rerun and plugin.step.remove take the step id directly."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
 }
 
@@ -99,7 +100,9 @@ extension LensWorksCommandID {
              .addMask, .toggleMask, .deleteMask, .linkMask, .addEffect, .blendMode,
              .swapColors, .resetColors, .canvasDelete, .nudge, .movePixels,
              // An installed plugin's filter: its own command (plugin.run.<id>) is this family and is admitted as it is.
-             .pluginFilter:
+             .pluginFilter,
+             // A plugin step retained on a live RAW layer, re-run with the plugin installed now or removed.
+             .pluginStepRerun, .pluginStepRemove:
             .runnable(.document)
         // The open catalog.
         case .firstVariants, .moreVariants, .selectVariant, .copy, .exposure, .undoRecipe, .redoRecipe, .rating,
@@ -139,6 +142,7 @@ extension LensWorksCommandID {
         case .opacityDigit: .notRunnable(.opacityKeys)
         case .pluginInstall, .pluginRemove, .pluginReload: .notRunnable(.pluginTrust)
         case .pluginCancel: .notRunnable(.pluginProgress)
+        case .pluginSteps: .notRunnable(.pluginSteps)
         }
     }
 
@@ -172,7 +176,7 @@ extension LensWorksCommandID {
                         .invert, .canvasSize, .imageSize, .trim, .flipCanvasHorizontal, .flipCanvasVertical, .filter, .newAdjustment, .editAdjustment,
                         .transform, .layerViaCopy, .duplicateLayer, .clippingMask, .groupLayers, .ungroupLayers, .moveOutOfFolder, .newBlankLayer,
                         .moveLayerUp, .moveLayerDown, .mergeLayers, .flipLayerHorizontal, .flipLayerVertical, .deleteLayer, .addMask, .toggleMask,
-                        .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels, .pluginFilter,
+                        .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels, .pluginFilter, .pluginStepRerun, .pluginStepRemove,
                         .exposure, .undoRecipe, .redoRecipe, .addToVirtualFolder, .removeFromVirtualFolder, .addKeyword, .removeKeyword,
                         .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .undo, .redo])
         ]

@@ -113,6 +113,14 @@ extension EditorSession {
         defer { isProjectBusy = false }
         do {
             let clip = try selection?.clip(canvas: document.size)
+            // A live RAW layer stays live: Invert is retained on its source, in float, as Levels and Hue/Saturation
+            // are, and is applied again whenever the RAW is developed.
+            if !mask, let node = layer.liveSource, let original = layer.asset {
+                try await commitSourceAdjustment(admission: try captureDocumentEditAdmission(), layerID: layer.id, node: node, original: original,
+                    transform: layer.transform, mask: layer.mask, settings: LayerAdjustment(kind: .invert), selection: clip)
+                brushRevision += 1
+                return
+            }
             // A uniform 1×1 mask can't hold a partial selection; give it the layer's pixel grid first.
             if mask, clip != nil, image.width == 1, image.height == 1 {
                 image = try Self.expandedUniformMask(image, width: layer.asset?.image.width ?? Int(layer.size.width.rounded()),
@@ -132,7 +140,8 @@ extension EditorSession {
             } else {
                 self.document?.layers[index] = ImageLayer(id: current.id, asset: asset, name: current.name,
                     isVisible: current.isVisible, transform: current.transform, parentID: current.parentID, isGroup: false,
-                    opacity: current.opacity, blendMode: current.blendMode, mask: current.mask, maskSourceID: current.maskSourceID)
+                    opacity: current.opacity, blendMode: current.blendMode, mask: current.mask, maskSourceID: current.maskSourceID,
+                    effects: current.effects)
             }
             endEdit()
             brushRevision += 1
@@ -211,6 +220,7 @@ extension EditorSession {
     }
 
     private func applyPixelEdit(to layer: ImageLayer, name: String, _ paint: (BrushStroke) throws -> Void) async {
+        if let refusal = liveRawPixelEditRefusal(layer, name) { brushError = refusal; return }
         finishOpacityEdit()
         do {
             // On a mask, a fill covers the whole canvas, past the mask's own area, as the brush can.
@@ -220,5 +230,15 @@ extension EditorSession {
             try await commitRasterEdit(edit, name: name)
             brushRevision += 1
         } catch { brushError = error.localizedDescription }
+    }
+}
+
+extension EditorSession {
+    /// Why `name` cannot write over the pixels of `layer`, or nil when it can. Fill, Clear and Transform Selection are
+    /// not retained on a live RAW source, so on a live RAW layer they would turn it into plain pixels and lose its
+    /// development; they are refused instead, and the layer stays live. Its mask can still be edited.
+    func liveRawPixelEditRefusal(_ layer: ImageLayer, _ name: String) -> String? {
+        guard !isMaskSelected, layer.liveSource != nil else { return nil }
+        return "“\(layer.name)” is a live RAW layer, and \(name) is not kept with its RAW development, so it was not applied and the layer stays live. Use a new layer above it, or the Brush, which the layer keeps."
     }
 }

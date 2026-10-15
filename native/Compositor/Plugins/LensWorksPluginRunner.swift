@@ -24,13 +24,17 @@ nonisolated final class LensWorksPluginSandbox {
         }
     }
 
-    /// Validates `wasm` again and instantiates it. `parameters` answer the plugin's `param(index)` calls.
-    init(wasm: Data, parameters: [Double]) throws {
+    /// The most fuel one whole run may spend: every run's bound, and the tighter one for a run an agent started.
+    static func runFuel(for origin: LensWorksCommandOrigin) -> UInt64 { origin == .agent ? limits.fuel_run_agent : limits.fuel_run }
+
+    /// Validates `wasm` again and instantiates it. `parameters` answer the plugin's `param(index)` calls; all of
+    /// the instance's tiles together may spend at most `runFuel`.
+    init(wasm: Data, parameters: [Double], runFuel: UInt64 = LensWorksPluginSandbox.limits.fuel_run) throws {
         var opened: UnsafeMutableRawPointer?
         try Self.call { message, capacity in
             opened = wasm.withUnsafeBytes { bytes in
                 parameters.withUnsafeBufferPointer { values in
-                    lw_plugin_open(bytes.bindMemory(to: UInt8.self).baseAddress, wasm.count, values.baseAddress, values.count, message, capacity)
+                    lw_plugin_open(bytes.bindMemory(to: UInt8.self).baseAddress, wasm.count, values.baseAddress, values.count, runFuel, message, capacity)
                 }
             }
             return opened != nil
@@ -70,12 +74,14 @@ nonisolated enum LensWorksPluginRunner {
         let cancellation: LWFloatCancellation
         /// The side of the square tiles an 8-bit layer is cut into (a float plane uses its own stored tiles).
         var tileSide = LWFloatPlane.tileSide
+        /// The most fuel the whole run may spend (`LensWorksPluginSandbox.runFuel(for:)`).
+        var runFuel = LensWorksPluginSandbox.limits.fuel_run
         var progress: @Sendable (Double) -> Void = { _ in }
     }
 
     static func run(_ job: Job) throws -> ImportedImage {
         guard job.tileSide > 0, job.tileSide * job.tileSide <= Int(LensWorksPluginSandbox.limits.tile_pixels) else { throw ProjectError.invalid }
-        let sandbox = try LensWorksPluginSandbox(wasm: job.wasm, parameters: job.parameters)
+        let sandbox = try LensWorksPluginSandbox(wasm: job.wasm, parameters: job.parameters, runFuel: job.runFuel)
         if job.asset.linearPlane != nil || job.asset.linear != nil { return try runPlane(job, sandbox) }
         return try runBitmap(job, sandbox)
     }
@@ -124,13 +130,21 @@ nonisolated enum LensWorksPluginRunner {
         if let stored = job.asset.linearPlane { plane = stored }
         else if let surface = job.asset.linear { plane = try LWFloatCompositor.from(surface, workspace: workspace) }
         else { throw ProjectError.invalid }
+        let made = try filtered(plane, sandbox: sandbox, workspace: workspace, coverage: try coverage(job, width: plane.width, height: plane.height),
+                                check: { try check(job); try workspace.cancellation.check() }, progress: job.progress)
+        return try ImportedImage(plane: made, name: job.name)
+    }
+
+    /// `plane` through the plugin, a stored tile at a time, as a new plane; `plane` itself is never written. With
+    /// `coverage` the result is laid over the original through it.
+    private static func filtered(_ plane: LWFloatPlane, sandbox: LensWorksPluginSandbox, workspace: LWFloatWorkspace, coverage: Coverage?,
+                                 check: () throws -> Void, progress: (Double) -> Void) throws -> LWFloatPlane {
         let width = plane.width, height = plane.height
-        let coverage = try coverage(job, width: width, height: height)
         let builder = try workspace.makeBuilder(width: width, height: height)
         let total = Double(((width + LWFloatPlane.tileSide - 1) / LWFloatPlane.tileSide) * ((height + LWFloatPlane.tileSide - 1) / LWFloatPlane.tileSide))
         var done = 0.0
         while let range = builder.nextRange {
-            try check(job); try workspace.cancellation.check()
+            try check()
             let bytes = try range.validate(frameWidth: width, frameHeight: height)
             // The tile as read, the copy the plugin works on, and the surface handed to the builder.
             let lease = try workspace.workingSet.reserve(bytes * 3)
@@ -145,10 +159,15 @@ nonisolated enum LensWorksPluginRunner {
             for position in pixels.indices { pixels[position] = SIMD4(made[position * 4], made[position * 4 + 1], made[position * 4 + 2], made[position * 4 + 3]) }
             try builder.append(LWLinearSurface(width: range.width, height: range.height, pixels: pixels, maximumBytes: bytes), at: range)
             withExtendedLifetime(lease) {}
-            done += 1; job.progress(done / total)
+            done += 1; progress(done / total)
         }
-        try check(job)
-        return try ImportedImage(plane: builder.finish(), name: job.name)
+        try check()
+        return try builder.finish()
+    }
+    /// `plane` through the plugin with no selection: what a retained plugin step computes (LWSourceRetainedPlugin).
+    static func filtered(_ plane: LWFloatPlane, sandbox: LensWorksPluginSandbox, workspace: LWFloatWorkspace,
+                         check: () throws -> Void, progress: (Double) -> Void) throws -> LWFloatPlane {
+        try filtered(plane, sandbox: sandbox, workspace: workspace, coverage: nil, check: check, progress: progress)
     }
 
     // MARK: 8-bit layers

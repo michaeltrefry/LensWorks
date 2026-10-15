@@ -173,7 +173,7 @@ import UniformTypeIdentifiers
         let file=root.appendingPathComponent("Live.comp")
         try await ProjectStore.shared.save(snapshot,to:file)
         let reopened=try await ProjectStore.shared.load(from:file)
-        #expect(reopened.manifest.version == ProjectManifest.current)
+        #expect(reopened.manifest.version == ProjectManifest.float)
         #expect(reopened.manifest.workingSpace == "extended-linear-sRGB")
         #expect(reopened.manifest.workingSample == "float32-straight-RGBA")
         #expect(reopened.manifest.layers[0].liveSource == source)

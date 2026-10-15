@@ -1,0 +1,16 @@
+{
+  "interface": 1,
+  "id": "com.lensworks.sample.slow",
+  "name": "Sample Slow Invert",
+  "version": "1.0.0",
+  "parameters": [
+    {
+      "name": "spins",
+      "label": "Spins per tile",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000000000,
+      "default": 1000
+    }
+  ]
+}

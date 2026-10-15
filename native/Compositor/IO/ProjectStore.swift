@@ -11,10 +11,13 @@ extension UTType {
 }
 
 nonisolated struct ProjectManifest: Codable, Sendable {
-    /// The newest format version: saves write it only when the package uses version-13 content
-    /// (live RAW sources or float working samples). Every other save keeps writing `baseline`, so
-    /// projects without those features stay readable by builds that only understand version 12.
-    static let current = 13
+    /// The newest format version: saves write it only when the package uses version-14 content
+    /// (a filter-plugin run or an Invert retained on a live RAW source). A package with live RAW
+    /// sources or float working samples and nothing newer is written as `float`, and every other
+    /// save keeps writing `baseline`, so a project stays readable by every build that understands
+    /// what it holds.
+    static let current = 14
+    static let float = 13
     static let baseline = 12
     /// Every version `load` accepts. The package-header check, the manifest check and the error
     /// message all read this, so they cannot drift apart when `current` is bumped.
@@ -105,6 +108,14 @@ actor ProjectStore {
                 || layer.maskFile?.hasSuffix(".mask.plane") == true
         }
     }
+    /// Anything only version 14 can express: a live RAW source that retains a filter-plugin run or an Invert.
+    static func usesVersion14(_ manifest: ProjectManifest) -> Bool {
+        manifest.layers.contains { $0.liveSource?.usesFormat14 == true }
+    }
+    /// The format version a save of `manifest` writes: the oldest that can express what it holds.
+    static func writtenVersion(_ manifest: ProjectManifest) -> Int {
+        usesVersion14(manifest) ? ProjectManifest.current : usesVersion13(manifest) ? ProjectManifest.float : min(manifest.version, ProjectManifest.baseline)
+    }
     private struct Header: Decodable {
         let format: String
         let version: Int
@@ -125,7 +136,7 @@ actor ProjectStore {
         if floatContent {
             manifest.workingSpace="extended-linear-sRGB";manifest.workingSample="float32-straight-RGBA"
         }
-        manifest.version = Self.usesVersion13(manifest) ? ProjectManifest.current : min(manifest.version, ProjectManifest.baseline)
+        manifest.version = Self.writtenVersion(manifest)
         try validate(manifest)
         var images: [String: FileWrapper] = [:]
         var planeAssets: [String: LWFloatPlane] = [:]
@@ -370,6 +381,8 @@ actor ProjectStore {
             if let source = layer.liveSource {
                 guard manifest.version >= 13, layer.isGroup != true, layer.adjustment == nil,
                     layer.imageFile == "\(layer.id.uuidString).f32" || layer.imageFile == "\(layer.id.uuidString).plane" else { throw ProjectError.invalid }
+                // Retained plugin runs and a retained Invert arrived in version 14.
+                guard manifest.version >= 14 || !source.usesFormat14 else { throw ProjectError.invalid }
                 try source.validate()
             }
             if let text = layer.text {

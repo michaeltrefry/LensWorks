@@ -191,6 +191,11 @@ struct LensWorksAgentDocumentCommands {
     private func perform(_ id: LensWorksCommandID, _ arguments: LensWorksAgentArguments) async throws {
         switch id {
         case .pluginFilter: throw refuse("Run a plugin with its own command.")
+        case .pluginStepRerun, .pluginStepRemove:
+            let text = try arguments.required("step", try arguments.string("step"))
+            guard let step = UUID(uuidString: text) else { throw refuse("\(text.prefix(64)) is not a retained plugin step id.") }
+            try check(id)
+            if id == .pluginStepRerun { try await session.rerunPluginStep(step) } else { try await session.removePluginStep(step) }
         case .selectLayers:
             let ids = try arguments.required("layers", try arguments.uuids("layers"))
             guard Set(ids).count == ids.count else { throw refuse("Name each layer once.") }

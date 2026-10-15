@@ -8,6 +8,8 @@ nonisolated enum LWSourceOperation: Codable, Equatable, Sendable {
     case filter(UUID)
     case resample(UUID)
     case adjustment(UUID)
+    /// A filter plugin's run (project format 14): the plugin, its code's hash and its parameter values.
+    case plugin(UUID)
 }
 nonisolated struct LWSourceRetainedFilter: Codable, Equatable, Sendable {
     let id: UUID
@@ -46,12 +48,12 @@ nonisolated struct LWSourceRetainedFilter: Codable, Equatable, Sendable {
 }
 nonisolated extension LWLiveSourceNode {
     var orderedOperations: [LWSourceOperation] {
-        operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty ? retouch.indices.map(LWSourceOperation.retouch) : operations
+        operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty && plugins.isEmpty ? retouch.indices.map(LWSourceOperation.retouch) : operations
     }
     /// Production validation/map/replay traverses compatibility order without
     /// constructing an unowned retouch-index projection array.
     func forEachOrderedOperation(_ body:(LWSourceOperation)throws->Void) throws {
-        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty {
+        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty && plugins.isEmpty {
             for index in retouch.indices { try body(.retouch(index)) }
         } else { for operation in operations { try body(operation) } }
     }
@@ -71,8 +73,8 @@ nonisolated extension LWLiveSourceNode {
         return result
     }
     func validateOperationOrder() throws {
-        guard retouch.count <= 10000,filters.count <= 10000,resamples.count <= 10000,operations.count <= 20000,adjustments.count <= 10000 else { throw ProjectError.invalid }
-        let count=try LWSourceMetadataStorage.sum(retouch.count,LWSourceMetadataStorage.sum(filters.count,LWSourceMetadataStorage.sum(resamples.count,adjustments.count)))
+        guard retouch.count <= 10000,filters.count <= 10000,resamples.count <= 10000,operations.count <= 20000,adjustments.count <= 10000,plugins.count <= 10000 else { throw ProjectError.invalid }
+        let count=try LWSourceMetadataStorage.sum(plugins.count,LWSourceMetadataStorage.sum(retouch.count,LWSourceMetadataStorage.sum(filters.count,LWSourceMetadataStorage.sum(resamples.count,adjustments.count))))
         let allowance=try LWSourceMetadataStorage.collectionBytes(count:count,stride:MemoryLayout<LWSourceOperation>.stride+MemoryLayout<UUID>.stride+128)
         let charge=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.product(allowance,4),workingSet:metadataStorage?.workingSet ?? .sourceGraphs)
         defer { withExtendedLifetime(charge) {} }
@@ -80,6 +82,8 @@ nonisolated extension LWLiveSourceNode {
         for value in filters { guard filterIDs.insert(value.id).inserted else { throw ProjectError.invalid } }
         for value in resamples { guard resampleIDs.insert(value.id).inserted else { throw ProjectError.invalid } }
         for value in adjustments { guard adjustmentIDs.insert(value.id).inserted else { throw ProjectError.invalid } }
+        var pluginIDs=Set<UUID>(),external=Set<UUID>()
+        for value in plugins { guard pluginIDs.insert(value.id).inserted else { throw ProjectError.invalid } }
         var strokes = Set<Int>(), effects = Set<UUID>(), spatial = Set<UUID>(), tonal = Set<UUID>()
         try forEachOrderedOperation { operation in
             switch operation {
@@ -91,14 +95,16 @@ nonisolated extension LWLiveSourceNode {
                 guard resamples.contains(where: { $0.id == id }), spatial.insert(id).inserted else { throw ProjectError.invalid }
             case .adjustment(let id):
                 guard adjustments.contains(where:{$0.id == id}),tonal.insert(id).inserted else { throw ProjectError.invalid }
+            case .plugin(let id):
+                guard plugins.contains(where:{$0.id == id}),external.insert(id).inserted else { throw ProjectError.invalid }
             }
         }
-        guard strokes.count == retouch.count,effects == filterIDs,spatial == resampleIDs,tonal == adjustmentIDs else { throw ProjectError.invalid }
+        guard strokes.count == retouch.count,effects == filterIDs,spatial == resampleIDs,tonal == adjustmentIDs,external == pluginIDs else { throw ProjectError.invalid }
     }
     mutating func appendRetouch(_ stroke: LWSourceRetouchStroke) throws {
         try admitMetadataMutation(additionalBytes:LWSourceMetadataStorage.sum(stroke.retainedMetadataBytes,
             LWSourceMetadataStorage.sum(4096,LWSourceMetadataStorage.collectionBytes(count:retouch.count,stride:MemoryLayout<LWSourceOperation>.stride))))
-        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty { operations = retouch.indices.map(LWSourceOperation.retouch) }
+        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty && plugins.isEmpty { operations = retouch.indices.map(LWSourceOperation.retouch) }
         try stroke.validate(source: id)
         operations.append(.retouch(retouch.count)); retouch.append(stroke)
         try validateOperationOrder()
@@ -106,7 +112,7 @@ nonisolated extension LWLiveSourceNode {
     mutating func appendFilter(_ filter: LWSourceRetainedFilter) throws {
         try admitMetadataMutation(additionalBytes:LWSourceMetadataStorage.sum(filter.retainedMetadataBytes,
             LWSourceMetadataStorage.sum(4096,LWSourceMetadataStorage.collectionBytes(count:retouch.count,stride:MemoryLayout<LWSourceOperation>.stride))))
-        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty { operations = retouch.indices.map(LWSourceOperation.retouch) }
+        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty && plugins.isEmpty { operations = retouch.indices.map(LWSourceOperation.retouch) }
         try filter.validate(source: id)
         filters.append(filter); operations.append(.filter(filter.id))
         try validateOperationOrder()
@@ -116,15 +122,16 @@ nonisolated enum LWSourceOperationReplay {
     static func evaluate(_ node: LWLiveSourceNode, developed: LWFloatPlane,
         map inputMap: LWSourceSpatialMap, workspace: LWFloatWorkspace) throws -> (surface: LWFloatPlane, map: LWSourceSpatialMap) {
         try node.validateOperationOrder()
-        let replayCount=try LWSourceMetadataStorage.sum(node.retouch.count,LWSourceMetadataStorage.sum(node.filters.count,LWSourceMetadataStorage.sum(node.resamples.count,node.adjustments.count)))
+        let replayCount=try LWSourceMetadataStorage.sum(node.plugins.count,LWSourceMetadataStorage.sum(node.retouch.count,LWSourceMetadataStorage.sum(node.filters.count,LWSourceMetadataStorage.sum(node.resamples.count,node.adjustments.count))))
         let replayOwner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.sum(4096,
             LWSourceMetadataStorage.collectionBytes(count:replayCount,
-                stride:MemoryLayout<LWSourceRetainedFilter>.stride+MemoryLayout<LWSourceResample>.stride+MemoryLayout<LWSourceOperation>.stride+MemoryLayout<LWSourcePixelStage>.stride+MemoryLayout<LWSourceRetainedAdjustment>.stride)),
+                stride:MemoryLayout<LWSourceRetainedFilter>.stride+MemoryLayout<LWSourceResample>.stride+MemoryLayout<LWSourceOperation>.stride+MemoryLayout<LWSourcePixelStage>.stride+MemoryLayout<LWSourceRetainedAdjustment>.stride+MemoryLayout<LWSourceRetainedPlugin>.stride)),
             workingSet:workspace.workingSet,payloadOwners:inputMap.metadataStorage.map { [$0] } ?? [])
         var result = developed, map = inputMap
         map.metadataStorage=replayOwner
         var precedingFilters: [LWSourceRetainedFilter] = []
         var precedingResamples: [LWSourceResample] = [], precedingAdjustments:[LWSourceRetainedAdjustment]=[], precedingOperations: [LWSourceOperation] = []
+        var precedingPlugins:[LWSourceRetainedPlugin]=[]
         try node.forEachOrderedOperation { operation in
             try workspace.cancellation.check(); try Task.checkCancellation()
             let next: LWFloatPlane
@@ -134,6 +141,7 @@ nonisolated enum LWSourceOperationReplay {
                 // Other operations and old output planes are never sample sources.
                 var step = try node.metadataCopy(additionalBytes:4096)
                 step.retouch = [node.retouch[index]]; step.filters = precedingFilters; step.resamples = precedingResamples;step.adjustments=precedingAdjustments
+                step.plugins=precedingPlugins
                 step.operations = precedingOperations + [.retouch(0)]
                 next = try LWSourceRetouch.evaluate(step, developed: result, map: map, workspace: workspace)
             case .filter(let id):
@@ -145,6 +153,12 @@ nonisolated enum LWSourceOperationReplay {
                 guard let adjustment=node.adjustments.first(where:{$0.id == id}) else { throw ProjectError.invalid }
                 next=try LWSourceRetainedAdjustment.apply(adjustment,node:node,plane:result,map:map,workspace:workspace)
                 precedingAdjustments.append(adjustment);precedingOperations.append(operation)
+            case .plugin(let id):
+                // The plugin installed now must be the code that made the step: anything else throws with the
+                // reason, and the caller keeps the pixels it had.
+                guard let step=node.plugins.first(where:{$0.id == id}) else { throw ProjectError.invalid }
+                next=try LWSourceRetainedPlugin.apply(step,node:node,plane:result,map:map,workspace:workspace)
+                precedingPlugins.append(step);precedingOperations.append(operation)
             case .resample(let id):
                 guard let operation = node.resamples.first(where: { $0.id == id }) else { throw ProjectError.invalid }
                 try operation.validate(source: node.id)
@@ -239,7 +253,7 @@ nonisolated extension LWLiveSourceNode {
                 case .resample(let id):
                     guard let value=resamples.first(where:{$0.id==id}) else { throw ProjectError.invalid }
                     count=try LWSourceMetadataStorage.sum(count,1);bytes=try LWSourceMetadataStorage.sum(bytes,value.stage.retainedMetadataBytes)
-                case .retouch,.adjustment: break
+                case .retouch,.adjustment,.plugin: break
                 }
             }
             guard count <= 20000 else { throw ProjectError.invalid }
@@ -250,7 +264,7 @@ nonisolated extension LWLiveSourceNode {
                 switch operation {
                 case .filter(let id): guard let value=filters.first(where:{$0.id==id}) else { throw ProjectError.invalid };stages.append(contentsOf:value.spatialStages)
                 case .resample(let id): guard let value=resamples.first(where:{$0.id==id}) else { throw ProjectError.invalid };stages.append(value.stage)
-                case .retouch,.adjustment: break
+                case .retouch,.adjustment,.plugin: break
                 }
             }
             let result=LWSourceSpatialMap(geometry:coordinateMap,optics:settings.optics,width:originalWidth,height:originalHeight,stages:stages,metadataStorage:owner)
@@ -323,7 +337,7 @@ nonisolated extension LWLiveSourceNode {
     mutating func appendResample(_ operation: LWSourceResample) throws {
         try admitMetadataMutation(additionalBytes:LWSourceMetadataStorage.sum(operation.stage.retainedMetadataBytes,
             LWSourceMetadataStorage.sum(4096,LWSourceMetadataStorage.collectionBytes(count:retouch.count,stride:MemoryLayout<LWSourceOperation>.stride))))
-        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty { operations = retouch.indices.map(LWSourceOperation.retouch) }
+        if operations.isEmpty && filters.isEmpty && resamples.isEmpty && adjustments.isEmpty && plugins.isEmpty { operations = retouch.indices.map(LWSourceOperation.retouch) }
         try operation.validate(source:id)
         resamples.append(operation); operations.append(.resample(operation.id)); try validateOperationOrder()
     }

@@ -1,7 +1,8 @@
 import AppKit
 
 /// Whole-image adjustment dialogs retain ordered float operations beneath layers.
-/// FilterKind stays the existing public seventeen-kind menu contract.
+/// FilterKind stays the existing public seventeen-kind menu contract. Image › Invert is
+/// retained the same way (project format 14): it has no settings beyond its kind.
 nonisolated struct LWSourceRetainedAdjustment: Codable, Equatable, Sendable {
     let id:UUID
     private(set) var sourceID:UUID
@@ -11,9 +12,10 @@ nonisolated struct LWSourceRetainedAdjustment: Codable, Equatable, Sendable {
     let captureFrame:LWSourceRetouchFrame
     let selectionPlaneID:UUID?
     func validate(source:UUID) throws {
-        guard sourceID == source,settings.isValid,settings.kind == .hsv || settings.kind == .levels else { throw ProjectError.invalid }
+        guard sourceID == source,settings.isValid,Self.retains(settings.kind) else { throw ProjectError.invalid }
         try captureFrame.validate()
     }
+    static func retains(_ kind:AdjustmentKind) -> Bool { kind == .hsv || kind == .levels || kind == .invert }
     var retainedMetadataBytes:Int {
         var bytes=MemoryLayout<Self>.stride
         for value in [captureFrame.retainedMetadataBytes,
@@ -45,15 +47,22 @@ nonisolated struct LWSourceRetainedAdjustment: Codable, Equatable, Sendable {
             plane.width == map.developedWidth,plane.height == map.developedHeight else { throw ProjectError.invalid }
         let changed=try operation.settings.apply(plane,makeBuilder:{ try workspace.makeBuilder(width:$0,height:$1) },
             makeScratchDirectory:{ try workspace.makeScratchDirectory() },fileOwner:workspace)
-        guard let key=operation.selectionPlaneID else { return changed }
+        return try blend(changed,over:plane,selectionPlaneID:operation.selectionPlaneID,captureFrame:operation.captureFrame,
+            node:node,map:map,workspace:workspace)
+    }
+    /// Lays an operation's whole-plane result over what it was made from, through the selection retained with
+    /// the operation. The selection stays where it was drawn on the document, whatever the source's geometry is now.
+    static func blend(_ changed:LWFloatPlane,over plane:LWFloatPlane,selectionPlaneID:UUID?,captureFrame:LWSourceRetouchFrame,
+        node:LWLiveSourceNode,map:LWSourceSpatialMap,workspace:LWFloatWorkspace) throws -> LWFloatPlane {
+        guard let key=selectionPlaneID else { return changed }
         guard let asset=node.planeAssets[key],let mask=asset.plane,mask.workingSet === workspace.workingSet,
-            mask.width == operation.captureFrame.developedWidth,mask.height == operation.captureFrame.developedHeight else { throw ProjectError.invalid }
+            mask.width == captureFrame.developedWidth,mask.height == captureFrame.developedHeight else { throw ProjectError.invalid }
         let coverage=mask.sampler(),pixels=changed.sampler()
         return try LWFloatCompositor.map(plane,workspace:workspace) { old,x,y in
             try workspace.cancellation.check()
             guard let source=try map.sourcePointIfInBounds(CGPoint(x:CGFloat(x)+0.5,y:CGFloat(y)+0.5)),
-                let document=try operation.captureFrame.documentPointIfInBounds(source) else { return old }
-            let captured=try operation.captureFrame.documentToDevelopedPixel(document)
+                let document=try captureFrame.documentPointIfInBounds(source) else { return old }
+            let captured=try captureFrame.documentToDevelopedPixel(document)
             let amount=try coverage.sample(captured).w
             guard amount.isFinite,(0...1).contains(amount) else { throw ProjectError.invalid }
             let new=try pixels.pixel(x:x,y:y)
@@ -92,7 +101,7 @@ nonisolated enum LWSourceAdjustmentPreparation {
     static func prepare(_ source:LWLiveSourceNode,before:LWFloatPlane,map:LWSourceSpatialMap,
         settings:LayerAdjustment,selection:SelectionClip?,transform:LayerTransform,workspace:LWFloatWorkspace) throws -> Result {
         try source.validate();try workspace.cancellation.check()
-        guard transform.isValid,settings.isValid,settings.kind == .hsv || settings.kind == .levels else { throw ProjectError.invalid }
+        guard transform.isValid,settings.isValid,LWSourceRetainedAdjustment.retains(settings.kind) else { throw ProjectError.invalid }
         let frame=try source.capturedFrame(transform:transform)
         let coverage=try LWSourceSelectionPlane.capture(selection,mapping:BrushRaster.pixelToDocument(transform,width:before.width,height:before.height),
             width:before.width,height:before.height,workspace:workspace)

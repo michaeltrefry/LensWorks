@@ -83,7 +83,7 @@ struct LensWorksPluginTests {
         // Nothing is installed: no plugin command exists anywhere.
         #expect(LensWorksCommandRegistry.dynamicDescriptors(store).isEmpty && LensWorksCommandAudit.currentTitles("Filter/Plugins", plugins: store) == [])
 
-        let outcome = try store.install(from: Samples.package("invert"))
+        let outcome = try await store.install(from: Samples.package("invert"))
         guard case .installed(let installed) = outcome else { Issue.record("expected a first install, got \(outcome)"); return }
         #expect(installed.id == id && installed.manifest.name == "Sample Invert" && installed.manifest.version == "1.0.0")
         #expect(installed.moduleHash == LensWorksPluginManifest.sha256(try Samples.module("invert")) && installed.moduleHash.count == 64)
@@ -141,10 +141,10 @@ struct LensWorksPluginTests {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let session = fixture.session, id = Samples.id("brightness"), command = "plugin.run." + id
         let builtIn = fixture.tools.listCommands().count
-        try store.install(from: Samples.package("brightness")); try store.install(from: Samples.package("invert"))
+        try await store.install(from: Samples.package("brightness")); try await store.install(from: Samples.package("invert"))
         let rows = fixture.tools.listCommands()
         #expect(rows.count == builtIn + 2 && rows.suffix(2).compactMap { $0["id"] as? String } == [command, "plugin.run." + Samples.id("invert")])
-        #expect(fixture.tools.listCommands(prefix: "plugin.run.").count == 2 && fixture.tools.listCommands(prefix: "plugin.").count == 7)
+        #expect(fixture.tools.listCommands(prefix: "plugin.run.").count == 2 && fixture.tools.listCommands(prefix: "plugin.").count == 10)
         let row = try #require(rows.first { $0["id"] as? String == command })
         #expect(row["agentInvocable"] as? Bool == true && row["kind"] as? String == "document" && row["batchable"] as? Bool == true && row["available"] as? Bool == true)
         #expect(row["title"] as? String == "Sample Brightness (\(id))" && row["menu"] as? String == "Filter/Plugins" && row["undoable"] as? Bool == true
@@ -201,7 +201,7 @@ struct LensWorksPluginTests {
     /// plugin runs; nothing crashes or changes.
     @Test func everyPluginArgumentOutsideItsDeclarationIsRefusedWithoutACrashOrAChange() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
-        try store.install(from: Samples.package("brightness"))
+        try await store.install(from: Samples.package("brightness"))
         let session = fixture.session, before = session.document, command = "plugin.run." + Samples.id("brightness")
         let descriptor = try #require(LensWorksCommandRegistry.dynamicDescriptors(store).first)
         var sent = 0
@@ -258,7 +258,7 @@ struct LensWorksPluginTests {
         ]
         for plugin in hostile {
             // Each conforms to the interface, so it installs: what it does when run is the sandbox's to contain.
-            try store.install(from: Samples.package(plugin.sample))
+            try await store.install(from: Samples.package(plugin.sample))
             let id = Samples.id(plugin.sample)
             let expected = "The plugin \(plugin.name) (\(id)) failed, and the document was not changed. " + plugin.reason
             // As the person runs it, from the menu: reported to them, nothing changed, the app usable again.
@@ -276,7 +276,7 @@ struct LensWorksPluginTests {
             #expect(try pixel(fixture, x: 100, y: 50) == blue0)
         }
         // One failing member rolls a whole agent batch back.
-        try store.install(from: Samples.package("invert"))
+        try await store.install(from: Samples.package("invert"))
         let batch = await fixture.tools.call("batch", arguments: ["commands": [["command": "plugin.run." + Samples.id("invert")], ["command": "plugin.run." + Samples.id("trap")]]])
         #expect(batch["isError"] as? Bool == true && text(batch).contains("It trapped (reached unreachable code)") && session.document == before && session.history.undoCount == 0, "\(text(batch))")
         // After all of that the app and the document are unharmed: a good plugin still runs.
@@ -288,12 +288,12 @@ struct LensWorksPluginTests {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let session = fixture.session, before = session.document
         let named = "The plugin’s module was refused. The module imports “wasi_snapshot_preview1.fd_write”, which the filter interface does not provide. A plugin may import only lensworks_filter_v1.param."
-        #expect(throws: LensWorksPluginFailure(named)) { try store.install(from: Samples.package("forbidden-import")) }
+        await #expect(throws: LensWorksPluginFailure(named)) { try await store.install(from: Samples.package("forbidden-import")) }
         #expect(store.plugins.isEmpty && store.damaged.isEmpty && LensWorksCommandRegistry.dynamicDescriptors(store).isEmpty)
         #expect(((try? FileManager.default.contentsOfDirectory(atPath: store.directory.path)) ?? []).isEmpty, "nothing of a refused package is kept")
         #expect(text(await fixture.invoke("plugin.run." + Samples.id("forbidden-import"))) == "No plugin with that id is installed: list_commands lists each installed plugin’s command.")
         // The settings pane reports the refusal, with the import named.
-        store.perform { try store.install(from: Samples.package("forbidden-import")).message }
+        await store.perform { try await store.install(from: Samples.package("forbidden-import")).message }
         #expect(store.lastError == named && store.lastMessage == nil)
 
         // The sandbox itself refuses it at load, whatever the store thought: validate, and instantiate.
@@ -302,7 +302,7 @@ struct LensWorksPluginTests {
         #expect(throws: LensWorksPluginFailure.self) { _ = try LensWorksPluginSandbox(wasm: forbidden, parameters: []) }
 
         // Installed files swapped behind LensWorks's back never run: the bytes must hash to what was installed.
-        try store.install(from: Samples.package("invert"))
+        try await store.install(from: Samples.package("invert"))
         let id = Samples.id("invert"), installedModule = store.directory.appendingPathComponent(id).appendingPathComponent("filter.wasm")
         try forbidden.write(to: installedModule)
         let changed = "The plugin \(id) cannot run. " + LensWorksPluginStore.changedProblem
@@ -316,47 +316,47 @@ struct LensWorksPluginTests {
         var fields = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: record)) as? [String: Any])
         fields["moduleSHA256"] = LensWorksPluginManifest.sha256(forbidden)
         try JSONSerialization.data(withJSONObject: fields).write(to: record)
-        store.refresh()
+        await store.refresh()
         #expect(store.plugins.map(\.id) == [id] && store.damaged.isEmpty, "the listing checks hashes; the sandbox checks the code")
         let again = "The plugin Sample Invert (\(id)) failed, and the document was not changed. The module imports “wasi_snapshot_preview1.fd_write”, which the filter interface does not provide. A plugin may import only lensworks_filter_v1.param."
         await #expect(throws: LensWorksPluginFailure(again)) { try await session.runPlugin(id, values: []) }
         #expect(text(await fixture.invoke("plugin.run." + id)) == again)
         #expect(session.document == before && session.history.undoCount == 0 && !session.isProjectBusy && session.pluginRun == nil)
-        try store.remove(id)
+        try await store.remove(id)
         #expect(store.plugins.isEmpty && !FileManager.default.fileExists(atPath: store.directory.appendingPathComponent(id).path))
     }
 
-    @Test func aMalformedOversizedOrIncompletePackageIsRefusedAtInstall() throws {
+    @Test func aMalformedOversizedOrIncompletePackageIsRefusedAtInstall() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let good = try Samples.module("invert")
-        @MainActor func refusal(_ package: URL) -> String {
-            do { try store.install(from: package); return "installed" } catch { return error.localizedDescription }
+        @MainActor func refusal(_ package: URL) async -> String {
+            do { try await store.install(from: package); return "installed" } catch { return error.localizedDescription }
         }
-        #expect(refusal(try package(in: fixture, module: Data("not a module".utf8))) == "The plugin’s module was refused. The file is not a WebAssembly module.")
-        #expect(refusal(try package(in: fixture, module: good.prefix(good.count / 2))).hasPrefix("The plugin’s module was refused. The module is not valid WebAssembly for this host:"))
-        #expect(refusal(try package(in: fixture, module: Data())).hasPrefix("The plugin’s module was refused."))
+        #expect(await refusal(try package(in: fixture, module: Data("not a module".utf8))) == "The plugin’s module was refused. The file is not a WebAssembly module.")
+        #expect(await refusal(try package(in: fixture, module: good.prefix(good.count / 2))).hasPrefix("The plugin’s module was refused. The module is not valid WebAssembly for this host:"))
+        #expect(await refusal(try package(in: fixture, module: Data())).hasPrefix("The plugin’s module was refused."))
         let limit = Int(LensWorksPluginSandbox.limits.module_bytes)
-        #expect(refusal(try package(in: fixture, module: good + Data(count: limit))) == "The package’s filter.wasm is over the \(limit)-byte limit.")
+        #expect(await refusal(try package(in: fixture, module: good + Data(count: limit))) == "The package’s filter.wasm is over the \(limit)-byte limit.")
         let empty = fixture.harness.root.appendingPathComponent("empty.lwplugin", isDirectory: true)
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
-        #expect(refusal(empty) == "The package has no plugin.json file.")
+        #expect(await refusal(empty) == "The package has no plugin.json file.")
         let noModule = try package(in: fixture)
         try FileManager.default.removeItem(at: noModule.appendingPathComponent("filter.wasm"))
-        #expect(refusal(noModule) == "The package has no filter.wasm file.")
-        #expect(refusal(Samples.package("invert").appendingPathComponent("plugin.json")).hasPrefix("Choose a plugin package:"))
+        #expect(await refusal(noModule) == "The package has no filter.wasm file.")
+        #expect(await refusal(Samples.package("invert").appendingPathComponent("plugin.json")).hasPrefix("Choose a plugin package:"))
         // A link in place of the module or of the package is not followed.
         let linked = try package(in: fixture)
         try FileManager.default.removeItem(at: linked.appendingPathComponent("filter.wasm"))
         try FileManager.default.createSymbolicLink(at: linked.appendingPathComponent("filter.wasm"), withDestinationURL: Samples.package("invert").appendingPathComponent("filter.wasm"))
-        #expect(refusal(linked) == "The package has no filter.wasm file.")
+        #expect(await refusal(linked) == "The package has no filter.wasm file.")
         let link = fixture.harness.root.appendingPathComponent("link.lwplugin")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: Samples.package("invert"))
-        #expect(refusal(link).hasPrefix("Choose a plugin package:"))
+        #expect(await refusal(link).hasPrefix("Choose a plugin package:"))
         #expect(store.plugins.isEmpty && store.damaged.isEmpty)
     }
 
     /// A plugin's strings are untrusted: bounded, plain, never a built-in command's name, and always shown with its id.
-    @Test func aManifestIsCheckedAndItsStringsCannotImpersonateLensWorks() throws {
+    @Test func aManifestIsCheckedAndItsStringsCannotImpersonateLensWorks() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         @MainActor func refusal(_ data: Data) -> String {
             do { _ = try LensWorksPluginManifest(data: data); return "accepted" } catch { return error.localizedDescription }
@@ -413,10 +413,10 @@ struct LensWorksPluginTests {
         #expect(longest.menuTitle.count == 40 + 64 + 4 && longest.menuTitle.hasSuffix("…") && longest.menuTitle.contains("(" + longest.id + ")"))
         #expect(LensWorksCommandRegistry.pluginDescriptor(longest).label == longest.name + " (" + longest.id + ")" && longest.historyName == "Plugin: " + longest.name)
         // A refused manifest installs nothing, and two installed plugins cannot share a name.
-        #expect(throws: LensWorksPluginFailure.self) { try store.install(from: try package(in: fixture, manifest: try manifest(["name": "Invert"]))) }
-        try store.install(from: Samples.package("invert"))
+        await #expect(throws: LensWorksPluginFailure.self) { try await store.install(from: try package(in: fixture, manifest: try manifest(["name": "Invert"]))) }
+        try await store.install(from: Samples.package("invert"))
         let twin = try package(in: fixture, manifest: try manifest(["name": "sample invert"]))
-        #expect(throws: LensWorksPluginFailure(prefix + "“name” is already the name of the installed plugin \(Samples.id("invert")).")) { try store.install(from: twin) }
+        await #expect(throws: LensWorksPluginFailure(prefix + "“name” is already the name of the installed plugin \(Samples.id("invert")).")) { try await store.install(from: twin) }
         #expect(store.plugins.map(\.id) == [Samples.id("invert")])
     }
 
@@ -428,16 +428,16 @@ struct LensWorksPluginTests {
         // The person's own package folder, which they go on editing after installing it.
         let source = try package(in: fixture, manifest: try manifest(), from: "invert")
         let id = "com.example.test", command = "plugin.run." + id
-        let first = try store.install(from: source).plugin, blue0 = try pixel(fixture, x: 10, y: 10)
+        let first = try await store.install(from: source).plugin, blue0 = try pixel(fixture, x: 10, y: 10)
         #expect(ok(await fixture.invoke(command)))
         #expect(try near(pixel(fixture, x: 10, y: 10), inverted(blue0)))
         #expect(ok(await fixture.invoke("edit.undo")))
 
         // Unchanged on disk: Reload says so and keeps the hash.
-        #expect(try store.reload(id) == .unchanged(first))
+        #expect(try await store.reload(id) == .unchanged(first))
         // New code under the same id: Reload detects it by hash and the next run uses it.
         try Samples.module("gradient").write(to: source.appendingPathComponent("filter.wasm"))
-        let reloaded = try store.reload(id)
+        let reloaded = try await store.reload(id)
         let gradientHash = LensWorksPluginManifest.sha256(try Samples.module("gradient"))
         #expect(reloaded == .replaced(reloaded.plugin, previousHash: first.moduleHash) && reloaded.plugin.moduleHash == gradientHash
                 && reloaded.plugin.moduleHash != first.moduleHash)
@@ -451,22 +451,22 @@ struct LensWorksPluginTests {
         #expect(ok(await fixture.invoke("edit.undo")))
         // A manifest change (a new version, a new parameter) is a reload too, and the command's arguments follow it.
         try manifest(["version": "2.0.0"], parameters: [["name": "amount", "label": "Amount", "type": "number", "minimum": 0, "maximum": 1, "default": 0.5]]).write(to: source.appendingPathComponent("plugin.json"))
-        let second = try store.reload(id).plugin
+        let second = try await store.reload(id).plugin
         #expect(second.manifest.version == "2.0.0" && second.manifestHash != reloaded.plugin.manifestHash && second.moduleHash == reloaded.plugin.moduleHash)
         #expect(((fixture.tools.listCommands(prefix: command).first?["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])?.keys.sorted() == ["amount", "layer"])
         // Installing the same package again is detected the same way.
-        #expect(try store.install(from: source) == .unchanged(second))
+        #expect(try await store.install(from: source) == .unchanged(second))
         // A reload that would be refused leaves the installed plugin as it was.
         try Samples.module("forbidden-import").write(to: source.appendingPathComponent("filter.wasm"))
-        #expect(throws: LensWorksPluginFailure.self) { try store.reload(id) }
+        await #expect(throws: LensWorksPluginFailure.self) { try await store.reload(id) }
         try Samples.module("gradient").write(to: source.appendingPathComponent("filter.wasm"))
         try manifest(["id": "com.example.other"]).write(to: source.appendingPathComponent("plugin.json"))
-        #expect(throws: LensWorksPluginFailure("The package at \(source.standardizedFileURL.path) is now the plugin com.example.other, not \(id). Install it as a new plugin instead.")) { try store.reload(id) }
-        #expect(try store.load(id).plugin == second && store.plugins == [second])
+        await #expect(throws: LensWorksPluginFailure("The package at \(source.standardizedFileURL.path) is now the plugin com.example.other, not \(id). Install it as a new plugin instead.")) { try await store.reload(id) }
+        #expect(try await store.load(id).plugin == second && store.plugins == [second])
 
         // Removing it removes the command everywhere: the menu's titles, the registry's list, and for agents.
         let before = session.document
-        try store.remove(id)
+        try await store.remove(id)
         #expect(store.plugins.isEmpty && LensWorksCommandRegistry.dynamicDescriptors(store).isEmpty && LensWorksCommandAudit.currentTitles("Filter/Plugins", plugins: store) == [])
         #expect(fixture.tools.listCommands(prefix: "plugin.run.").isEmpty && fixture.tools.listCommands().count == LensWorksCommandRegistry.descriptors.count)
         #expect(text(await fixture.invoke(command)) == "No plugin with that id is installed: list_commands lists each installed plugin’s command.")
@@ -475,11 +475,14 @@ struct LensWorksPluginTests {
         session.beginPlugin(id)
         await #expect(throws: LensWorksCommandRefusal(reason: "The plugin \(id) is not installed.")) { try await session.runPlugin(id, values: []) }
         #expect(session.document == before && session.history.undoCount == 0 && session.pluginRun == nil && session.pluginParameters == nil)
-        #expect(throws: LensWorksPluginFailure("That plugin is not installed.")) { try store.remove(id) }
-        #expect(throws: LensWorksPluginFailure("That plugin is not installed.")) { try store.reload(id) }
+        await #expect(throws: LensWorksPluginFailure("That plugin is not installed.")) { try await store.remove(id) }
+        await #expect(throws: LensWorksPluginFailure("That plugin is not installed.")) { try await store.reload(id) }
         // A new store over the same folder (the next launch) finds what is installed, and nothing else.
-        try store.install(from: Samples.package("invert"))
+        try await store.install(from: Samples.package("invert"))
         let relaunched = LensWorksPluginStore(directory: store.directory)
+        // The folder is read off the main actor: nothing is listed until that is done, and `loaded` waits for it.
+        #expect(relaunched.plugins.isEmpty)
+        await relaunched.loaded()
         #expect(relaunched.plugins == store.plugins && relaunched.plugins.map(\.id) == [Samples.id("invert")] && relaunched.damaged.isEmpty)
     }
 
@@ -518,7 +521,7 @@ struct LensWorksPluginTests {
     @Test func aFloatLayerStaysFloatAndAPluginSeesOnlyTheLayerItWasGiven() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let session = fixture.session
-        try store.install(from: Samples.package("invert")); try store.install(from: Samples.package("gradient")); try store.install(from: Samples.package("brightness"))
+        try await store.install(from: Samples.package("invert")); try await store.install(from: Samples.package("gradient")); try await store.install(from: Samples.package("brightness"))
         // A 300×280 float plane (four stored tiles) holding values past display white, as a third layer.
         let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
         let width = 300, height = 280
@@ -581,7 +584,7 @@ struct LensWorksPluginTests {
     @Test func aRunningPluginLeavesTheAppLiveAndCancelStopsItWithNothingChanged() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let session = fixture.session
-        try store.install(from: Samples.package("brightness"))
+        try await store.install(from: Samples.package("brightness"))
         // A layer big enough to take a while in a debug build: 2048×2048 is 64 tiles.
         session.insert(ImportedImage(image: try Fixture.image(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1), width: 2048, height: 2048),
                                      thumbnail: try Fixture.image(CGColor(red: 0, green: 0, blue: 0, alpha: 1), width: 8, height: 8), name: "Big"))
@@ -600,6 +603,8 @@ struct LensWorksPluginTests {
         while !outcome.finished, (session.pluginRun?.progress ?? 0) == 0, ContinuousClock.now < deadline { turns += 1; try await Task.sleep(for: .milliseconds(2)) }
         let run = try #require(session.pluginRun, "the plugin is still running after its first tiles")
         #expect(turns > 0 && run.progress > 0 && run.progress < 1 && session.isProjectBusy && run.plugin.id == Samples.id("brightness"))
+        // The person's run has every run's whole-run budget.
+        #expect(run.runFuel == LensWorksPluginSandbox.limits.fuel_run)
         // While it runs nothing else may start on the document.
         #expect(session.menuReason(.pluginFilter, argument: Samples.id("brightness"), canStart: true) == "Finish the current project operation first.")
         #expect(session.menuReason(.invert, canStart: true) == "Finish the current project operation first.")
@@ -610,6 +615,8 @@ struct LensWorksPluginTests {
         // The person's Cancel during an agent's run is that request's refusal, and rolls its transaction back.
         let asked = Task { @MainActor in await fixture.invoke("plugin.run." + Samples.id("brightness"), ["amount": 0.1]) }
         while session.pluginRun == nil || session.pluginRun?.progress == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+        // An agent's run has the tighter one.
+        #expect(session.pluginRun?.runFuel == LensWorksPluginSandbox.limits.fuel_run_agent && LensWorksPluginSandbox.limits.fuel_run_agent < LensWorksPluginSandbox.limits.fuel_run)
         session.cancelPlugin()
         let refused = await asked.value
         #expect(text(refused) == "The plugin Sample Brightness (\(Samples.id("brightness"))) was cancelled in LensWorks, and the document was not changed.")
@@ -620,11 +627,154 @@ struct LensWorksPluginTests {
         session.cancelPlugin()
     }
 
+    /// A plugin that spends nearly all of its fuel on every tile, and never traps, is slow rather than stuck: the
+    /// whole run's budget stops it, with the document and its history untouched.
+    @Test func aRunThatSpendsNearlyItsWholeFuelOnEveryTileIsStoppedByTheRunBudgetWithTheDocumentUnchanged() async throws {
+        let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
+        let session = fixture.session, id = Samples.id("slow")
+        try await store.install(from: Samples.package("slow"))
+        // The 200×100 layer in 50-pixel tiles is eight tiles of 2,500 pixels: each may spend 20,000,000 fuel, and
+        // 1,900,000 spins (ten fuel each) spend about nineteen of those twenty million.
+        let spins = 1_900_000.0, tile: UInt64 = 10_000_000 + 4_000 * 2_500
+        let before = session.document, blue0 = try pixel(fixture, x: 10, y: 10)
+        // Three and a half tiles' worth for the whole run: the fourth tile is stopped, by the run's budget.
+        let budget = tile * 7 / 2
+        let stopped = "The plugin Sample Slow Invert (\(id)) failed, and the document was not changed. It used up its execution budget of \(budget) fuel for the whole run and was stopped."
+        await #expect(throws: LensWorksPluginFailure(stopped)) { try await session.runPlugin(id, values: [spins], tileSide: 50, runFuel: budget) }
+        #expect(session.document == before && session.history.undoCount == 0 && session.pluginRun == nil && !session.isProjectBusy)
+        #expect(try pixel(fixture, x: 10, y: 10) == blue0)
+        // The same budget stops an agent's run, as that request's refusal, and a person's Filter › Plugins run, as its alert.
+        await #expect(throws: LensWorksPluginFailure(stopped)) { try await session.runPlugin(id, values: [spins], origin: .agent, tileSide: 50, runFuel: budget) }
+        #expect(session.document == before && session.history.undoCount == 0 && !session.isProjectBusy)
+        // One tile over its own fuel is still stopped by the tile's budget, not the run's.
+        let perTile = "The plugin Sample Slow Invert (\(id)) failed, and the document was not changed. It ran past its execution budget of \(tile) fuel for this call (an endless loop?) and was stopped."
+        await #expect(throws: LensWorksPluginFailure(perTile)) { try await session.runPlugin(id, values: [spins * 2], tileSide: 50) }
+        #expect(session.document == before && session.history.undoCount == 0)
+        // Under the budget every run has, the same slow run completes: it is slow, not stuck.
+        try await session.runPlugin(id, values: [spins], tileSide: 50)
+        #expect(try near(pixel(fixture, x: 10, y: 10), inverted(blue0)) && near(pixel(fixture, x: 199, y: 99), inverted(blue0)))
+        #expect(session.history.undoCount == 1 && session.history.undoName == "Plugin: Sample Slow Invert")
+    }
+
+    /// An agent never edits the document — or runs a plugin — under a sheet the person has open on it.
+    @Test func anAgentWaitsWhileThePersonHasAPluginsParameterSheetOpen() async throws {
+        let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
+        let session = fixture.session, id = Samples.id("brightness")
+        try await store.install(from: Samples.package("brightness")); try await store.install(from: Samples.package("invert"))
+        let before = session.document
+        #expect(session.agentModalReason == nil)
+        session.beginPlugin(id)
+        try #require(session.pluginParameters != nil, "Filter › Plugins on a plugin with parameters opened its sheet")
+        let waiting = "Finish the current edit in LensWorks first."
+        #expect(session.agentModalReason == waiting && fixture.tools.agentAvailability(.invert) == waiting)
+        for (command, arguments) in [("image.invert", [String: Any]()), ("plugin.run." + Samples.id("invert"), [:]), ("plugin.run." + id, ["amount": 0.5]), ("layer.newBlank", [:]), ("select.all", [:])] {
+            let refused = await fixture.invoke(command, arguments)
+            #expect(refused["isError"] as? Bool == true && text(refused) == waiting, "\(command)")
+        }
+        #expect(session.document == before && session.history.undoCount == 0 && session.pluginParameters != nil)
+        // The sheet closed, the same request runs.
+        session.cancelPluginParameters()
+        #expect(session.agentModalReason == nil)
+        #expect(ok(await fixture.invoke("image.invert")) && session.history.undoCount == 1 && session.history.undoName == "Invert (Agent)")
+    }
+
+    /// Reading a package, compiling its module to check it, and hashing every installed module happen off the main
+    /// actor, at install and at launch.
+    @Test func installingAndReadingTheInstalledPluginsNeverHoldsTheMainActor() async throws {
+        let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
+        final class Seen: @unchecked Sendable {
+            private let lock = NSLock(); private var work: [String] = [], onMain = false
+            func note(_ name: String) { lock.lock(); work.append(name); onMain = onMain || Thread.isMainThread; lock.unlock() }
+            var taken: (work: [String], onMain: Bool) { lock.lock(); defer { lock.unlock(); work = []; onMain = false }; return (work, onMain) }
+        }
+        let seen = Seen()
+        await store.loaded()
+        store.observer = { seen.note($0) }
+        let placing = Seen()
+        store.place = { placing.note("place"); try LensWorksPluginFiles.place(staged: $0, destination: $1) }
+        try await store.install(from: Samples.package("invert"))
+        // The package is checked (its module compiled), written, put in place and the folder read again: none on the main thread.
+        var taken = seen.taken
+        #expect(taken.work == ["check", "write", "scan"] && !taken.onMain)
+        #expect(placing.taken == (["place"], false))
+        _ = try await store.load(Samples.id("invert"))
+        taken = seen.taken
+        #expect(taken.work == ["read"] && !taken.onMain)
+        try await store.reload(Samples.id("invert"))
+        taken = seen.taken
+        #expect(taken.work == ["check", "read"] && !taken.onMain, "an unchanged package is checked and compared, and nothing is written")
+        await store.refresh()
+        taken = seen.taken
+        #expect(taken.work == ["scan"] && !taken.onMain)
+        // At launch the store is made without reading anything: the folder is read behind it.
+        let relaunched = LensWorksPluginStore(directory: store.directory)
+        #expect(relaunched.plugins.isEmpty && relaunched.damaged.isEmpty)
+        await relaunched.loaded()
+        #expect(relaunched.plugins == store.plugins && relaunched.plugins.count == 1)
+        // Changes queued together run one at a time, in order, each seeing the one before.
+        async let first = store.install(from: Samples.package("brightness"))
+        async let second = store.install(from: Samples.package("gradient"))
+        async let third: Void = store.remove(Samples.id("invert"))
+        _ = try await (first, second, third)
+        #expect(store.plugins.map(\.id) == [Samples.id("brightness"), Samples.id("gradient")] && store.damaged.isEmpty)
+    }
+
+    /// Replacing an installed plugin never leaves it uninstalled: the old folder stays until the new one has taken
+    /// its place, so a failure part-way keeps the plugin that was there.
+    @Test func aFailureWhileReplacingAnInstalledPluginLeavesTheOldOneInstalled() async throws {
+        let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
+        let session = fixture.session, id = Samples.id("invert")
+        let source = fixture.harness.root.appendingPathComponent("invert.lwplugin", isDirectory: true)
+        try FileManager.default.copyItem(at: Samples.package("invert"), to: source)
+        let first = try await store.install(from: source).plugin
+        let installed = store.directory.appendingPathComponent(id), original = try Samples.module("invert")
+        func leftovers() throws -> [String] { try FileManager.default.contentsOfDirectory(atPath: store.directory.path).filter { $0 != id } }
+
+        // The step itself, failing for real: the staged folder is not there to move in. The installed one is untouched.
+        let missing = store.directory.appendingPathComponent(".installing-missing", isDirectory: true)
+        #expect(throws: (any Error).self) { try LensWorksPluginFiles.place(staged: missing, destination: installed) }
+        #expect(try Data(contentsOf: installed.appendingPathComponent("filter.wasm")) == original)
+        #expect(FileManager.default.fileExists(atPath: installed.appendingPathComponent(LensWorksPluginStore.recordName).path))
+        // And succeeding: the staged folder takes the place whole, and nothing of it is left beside it.
+        let staged = store.directory.appendingPathComponent(".installing-test", isDirectory: true)
+        try FileManager.default.copyItem(at: installed, to: staged)
+        try Data("marker".utf8).write(to: staged.appendingPathComponent("marker"))
+        try LensWorksPluginFiles.place(staged: staged, destination: installed)
+        #expect(FileManager.default.fileExists(atPath: installed.appendingPathComponent("marker").path) && !FileManager.default.fileExists(atPath: staged.path))
+        #expect(try leftovers().isEmpty)
+        try FileManager.default.removeItem(at: installed.appendingPathComponent("marker"))
+
+        // The package changes (the gradient sample's module), and putting the new copy in place fails.
+        try Samples.module("gradient").write(to: source.appendingPathComponent("filter.wasm"))
+        struct Injected: LocalizedError { var errorDescription: String? { "The disk is full." } }
+        final class Calls: @unchecked Sendable { var destinations: [URL] = [] }
+        let calls = Calls()
+        store.place = { _, destination in calls.destinations.append(destination); throw Injected() }
+        await #expect(throws: LensWorksPluginFailure("The plugin could not be installed: The disk is full.")) { try await store.reload(id) }
+        #expect(calls.destinations.map(\.lastPathComponent) == [id])
+        // The old plugin is still installed, still the bytes that were installed, and still runs — as the old code.
+        #expect(store.plugins == [first] && store.damaged.isEmpty)
+        #expect(try await store.load(id).module == original)
+        #expect(try leftovers().isEmpty, "no staging folder is left behind")
+        let blue0 = try pixel(fixture, x: 10, y: 10)
+        try await session.runPlugin(id, values: [])
+        #expect(try near(pixel(fixture, x: 10, y: 10), inverted(blue0)))
+        session.undo()
+        // A first install that fails the same way installs nothing and leaves nothing.
+        await #expect(throws: LensWorksPluginFailure("The plugin could not be installed: The disk is full.")) { try await store.install(from: Samples.package("brightness")) }
+        #expect(try store.plugins == [first] && leftovers().isEmpty)
+        // With the failure gone the replacement goes through, and the new code runs.
+        store.place = { try LensWorksPluginFiles.place(staged: $0, destination: $1) }
+        let second = try await store.reload(id)
+        #expect(try second == .replaced(second.plugin, previousHash: first.moduleHash) && store.plugins == [second.plugin] && leftovers().isEmpty)
+        #expect(try await store.load(id).module == Samples.module("gradient"))
+    }
+
     /// A pending transform or gradient would be applied on the way in, so a plugin waits for the person to finish it.
     @Test func aPluginWaitsForAPendingTransformOrOpenEdit() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let session = fixture.session, id = Samples.id("invert")
-        try store.install(from: Samples.package("invert"))
+        try await store.install(from: Samples.package("invert"))
         let before = session.document
         session.transformCommand()
         try #require(session.transformEdit != nil)
@@ -648,10 +798,10 @@ struct LensWorksPluginTests {
     @Test func thePluginPaneSheetAndPanelShowInstalledPluginsThroughRegisteredCommands() async throws {
         let (fixture, store) = try fixture(); defer { fixture.cleanUp() }
         let session = fixture.session
-        try store.install(from: Samples.package("brightness")); try store.install(from: Samples.package("invert"))
+        try await store.install(from: Samples.package("brightness")); try await store.install(from: Samples.package("invert"))
         // One damaged entry: its module replaced behind LensWorks's back.
         try Data("changed".utf8).write(to: store.directory.appendingPathComponent(Samples.id("invert")).appendingPathComponent("filter.wasm"))
-        store.refresh()
+        await store.refresh()
         #expect(store.plugins.map(\.id) == [Samples.id("brightness")] && store.damaged.map(\.id) == [Samples.id("invert")])
         let window = fixture.harness.window
         fixture.harness.showWindow()
@@ -664,11 +814,14 @@ struct LensWorksPluginTests {
         #expect(laidOut(LensWorksPluginSettingsView(store: store)).height > 100)
         // The pane's actions: Reload reports the unchanged hash, Remove removes, and a failure is kept for the person.
         let brightness = try #require(store.plugin(Samples.id("brightness")))
-        #expect(LensWorksCommandDispatcher.perform(.init(.pluginReload, brightness.id)) { store.perform { try store.reload(brightness.id).message } })
+        var started: Task<Void, Never>?
+        #expect(LensWorksCommandDispatcher.perform(.init(.pluginReload, brightness.id)) { started = store.start { try await store.reload(brightness.id).message } })
+        await started?.value
         #expect(store.lastMessage == "Sample Brightness (\(brightness.id)) is unchanged: SHA-256 \(brightness.moduleHash)." && store.lastError == nil)
-        #expect(LensWorksCommandDispatcher.perform(.init(.pluginRemove, Samples.id("invert"))) { store.perform { try store.remove(Samples.id("invert")); return "Removed." } })
+        #expect(LensWorksCommandDispatcher.perform(.init(.pluginRemove, Samples.id("invert"))) { started = store.start { try await store.remove(Samples.id("invert")); return "Removed." } })
+        await started?.value
         #expect(store.damaged.isEmpty && store.lastMessage == "Removed.")
-        store.perform { try store.reload("com.example.absent").message }
+        await store.perform { try await store.reload("com.example.absent").message }
         #expect(store.lastError == "That plugin is not installed." && store.lastMessage == nil)
         #expect(laidOut(LensWorksPluginSettingsView(store: store)).height > 100)
 
@@ -688,7 +841,7 @@ struct LensWorksPluginTests {
         #expect(session.pluginParameters == nil && session.history.undoName == "Plugin: Sample Brightness")
         #expect(try pixel(fixture, x: 3, y: 3) == [255, blue0[1], blue0[2], 255], "red gained 0.5 × 2 and was clamped")
         // The progress panel lays out for a run in flight, and with none.
-        session.pluginRun = LensWorksPluginRun(plugin: brightness)
+        session.pluginRun = LensWorksPluginRun(plugin: brightness, runFuel: LensWorksPluginSandbox.limits.fuel_run)
         #expect(laidOut(LensWorksPluginProgressPanel(session: session)).height > 60)
         session.pluginRun = nil
         #expect(laidOut(LensWorksPluginProgressPanel(session: session)).height > 30)
@@ -720,16 +873,21 @@ struct LensWorksPluginTests {
             }
             return try await titles()
         }
-        #expect(try await waiting(for: ["Install Plugin…"]) == ["Install Plugin…"])
-        try store.install(from: Samples.package("invert"))
-        defer { try? store.remove(id) }
-        #expect(try await waiting(for: [title, "Install Plugin…"]) == [title, "Install Plugin…"])
-        let item = try #require(try await plugins().items.first { $0.title == title })
-        #expect(LensWorksCommandAudit.command(for: item, path: "Filter/Plugins") == .init(.pluginFilter) && item.keyEquivalent.isEmpty)
-        let violations = LensWorksCommandAudit.audit(mainMenu: try #require(NSApp.mainMenu))
-        #expect(violations.isEmpty, "Registry bypasses: \(violations.map(\.description).joined(separator: "; "))")
-        try store.remove(id)
-        #expect(try await waiting(for: ["Install Plugin…"]) == ["Install Plugin…"])
+        // The submenu's own two commands are always there: the retained steps of the selected RAW layer, and Install.
+        let fixed = ["Retained Plugin Steps…", "Install Plugin…"]
+        #expect(try await waiting(for: fixed) == fixed)
+        try await store.install(from: Samples.package("invert"))
+        do {
+            #expect(try await waiting(for: [title] + fixed) == [title] + fixed)
+            let item = try #require(try await plugins().items.first { $0.title == title })
+            #expect(LensWorksCommandAudit.command(for: item, path: "Filter/Plugins") == .init(.pluginFilter) && item.keyEquivalent.isEmpty)
+            let steps = try #require(try await plugins().items.first { $0.title == "Retained Plugin Steps…" })
+            #expect(LensWorksCommandAudit.command(for: steps, path: "Filter/Plugins") == .init(.pluginSteps))
+            let violations = LensWorksCommandAudit.audit(mainMenu: try #require(NSApp.mainMenu))
+            #expect(violations.isEmpty, "Registry bypasses: \(violations.map(\.description).joined(separator: "; "))")
+        } catch { try? await store.remove(id); throw error }
+        try await store.remove(id)
+        #expect(try await waiting(for: fixed) == fixed)
         #expect(LensWorksCommandAudit.audit(mainMenu: try #require(NSApp.mainMenu)).isEmpty)
     }
 
@@ -739,6 +897,9 @@ struct LensWorksPluginTests {
         #expect(limits.module_bytes == 4_194_304 && limits.memory_bytes == 16_777_216 && limits.table_elements == 4_096 && limits.stack_bytes == 1_048_576
                 && limits.recursion_depth == 1_024 && limits.tile_pixels == 65_536 && limits.fuel_buffer_call == 1_000_000 && limits.fuel_filter_base == 10_000_000
                 && limits.fuel_per_pixel == 4_000 && limits.parameters == 16 && limits.interface_version == 1)
+        // The whole-run budgets — 1,024 full tiles' worth of fuel, 256 when an agent starts the run — and the color range.
+        #expect(limits.fuel_run == 272_144_000 * 1_024 && limits.fuel_run_agent == 272_144_000 * 256 && limits.color_magnitude == 65_504)
+        #expect(LensWorksPluginSandbox.runFuel(for: .user) == limits.fuel_run && LensWorksPluginSandbox.runFuel(for: .agent) == limits.fuel_run_agent)
         #expect(Int(limits.tile_pixels) == LWFloatPlane.tileSide * LWFloatPlane.tileSide, "one stored float tile is one plugin tile")
         #expect(LensWorksPluginStore.shared.directory.path == LensWorksUserState.applicationSupport.path + "/Plugins")
         #expect(EditorSession().plugins === LensWorksPluginStore.shared)

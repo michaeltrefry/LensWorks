@@ -58,6 +58,7 @@ extension EditorSession {
         case .flipLayerHorizontal, .flipLayerVertical: return commandReason(!canTransform, "Select a layer that can be transformed first.")
         case .deleteLayer: return layerEditReason ?? commandReason(activeLayer == nil, "Select a layer first.")
         case .pluginFilter: return pluginReason(argument)
+        case .pluginSteps, .pluginStepRerun, .pluginStepRemove: return pluginStepsReason
         default: return nil
         }
     }

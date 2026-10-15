@@ -58,7 +58,11 @@ red, green, blue, alpha.
   values may lie outside 0–1 on a float layer.
 - Alpha is **straight** (not premultiplied), from 0 through 1.
 
-A plugin must return finite values and an alpha from 0 through 1; anything else fails the run.
+A plugin must return finite values, an alpha from 0 through 1, and color values within ±65,504; anything else
+fails the run. 65,504 is the largest finite half-precision float: it is the extended range LensWorks's renderer
+keeps for float data (the tile renderer and the display conversion clamp there), so a larger value could never be
+shown or blended as written. The bound applies to what the plugin wrote: a value already outside it that the
+plugin passed through bit for bit is the layer's own and is accepted unchanged.
 
 LensWorks keeps a layer in the storage it already has. A float layer (a developed RAW, for instance) is read and
 written as float and keeps values outside 0–1. An 8-bit layer is converted to this format a tile at a time and
@@ -157,6 +161,14 @@ validity, imports, exports, limits) without running it, and only then copies the
 Application Support folder (`Plugins/<id>/`) and records the SHA-256 of each. A refused package leaves nothing
 behind. Settings lists each installed plugin with its name, id, version and module hash.
 
+Reading a package, compiling its module to check it, hashing the installed modules (at launch, every one) and
+moving folders all happen off the main thread, one change at a time; the window never waits for them. At launch
+the list of installed plugins fills in when the folder has been read.
+
+The new copy is written whole into a staging folder beside its place and then put there. Over an installed plugin
+that is one atomic replacement (`FileManager.replaceItemAt`): the old folder stays until the new one has taken its
+place, so a failure at any point leaves the plugin that was installed, installed.
+
 **Every run** reads LensWorks's own copy, checks both files still hash to what was installed, and validates the
 module again as it is instantiated. If the installed files were changed behind LensWorks's back the plugin does not
 run and is listed as damaged, with only Remove offered.
@@ -186,20 +198,73 @@ progress with a Cancel button (a registered command, `plugin.cancel`, also on Es
 between tiles — at most one tile's fuel later.
 
 The result replaces the layer's pixels as one history entry, `Plugin: Name`, which one Undo reverts. As with the
-built-in filters, the layer keeps its name, placement, opacity, blend mode, mask and effects; live text, a shape or
-a live RAW source becomes pixels. A saved project holds the resulting pixels and no reference to the plugin, so it
+built-in filters, the layer keeps its name, placement, opacity, blend mode, mask and effects; live text or a shape
+becomes pixels. For such a layer a saved project holds the resulting pixels and no reference to the plugin, so it
 opens the same whether or not the plugin is still installed.
 
+### On a live RAW layer
+
+A live RAW layer stays live, as it does under a built-in filter. The run is retained on the layer's source as one
+step in its ordered operations (`LWSourceRetainedPlugin`), recording:
+
+- the plugin's id, and the name it had;
+- the SHA-256 of the `filter.wasm` that ran;
+- the filter interface version;
+- the parameter values;
+- the selection, if there was one, kept where it was drawn on the document.
+
+Whenever the RAW is developed again — a Camera Raw change, another retained edit, an export — the step runs again
+on the new development, in order with the layer's other retained operations, and gives exactly what running the
+plugin fresh on that development gives. One Undo of the run restores the layer, its source included.
+
+A step runs only with the code that made it. If, when the RAW is developed, the plugin
+
+- is not installed,
+- is installed but its files are not the ones that were installed,
+- is installed with a module whose SHA-256 is not the one the step recorded (it was reloaded or replaced),
+- was recorded under a filter interface this LensWorks does not provide, or
+- fails (any of the failures above) or the development is cancelled,
+
+then the development stops. The step is neither skipped nor run with different code: the layer keeps the pixels
+and the source it had, history gains nothing, and the person is told which step and why — for instance
+
+> The retained plugin step Sample Invert (com.lensworks.sample.invert) on this layer could not be applied again, so
+> the layer was not changed. The installed plugin is not the code that made this step: its module’s SHA-256 is …,
+> and the step recorded …. Choose Filter › Plugins › Retained Plugin Steps… to re-run the step with the plugin
+> installed now, or to remove it (an agent: plugin.step.rerun or plugin.step.remove with step …).
+
+An agent whose command caused the development is refused with the same words. Until the step is dealt with the
+layer cannot be developed again (its pixels as they stand still display, save and reopen).
+
+**Filter › Plugins › Retained Plugin Steps…** lists the selected RAW layer's steps, each with its plugin, recorded
+hash, values and whether it can be applied again as it stands, and offers:
+
+- **Re-run with Installed Plugin** — binds the step to the plugin as installed now (its hash and interface, the
+  recorded values, the same selection and place in the order) and develops the layer with it. It is refused if the
+  plugin is not installed or no longer takes the recorded values.
+- **Remove Step** — drops the step and develops the layer without it.
+
+Each is one history entry, reverted by one Undo. Agents have the same two as commands, `plugin.step.rerun` and
+`plugin.step.remove`, taking the `step` id the refused development named (and optionally `layer`); each is one
+history entry labeled `(Agent)`. Re-running binds the step only to the plugin the person installed, which an agent can
+already run with `plugin.run`, so it grants an agent nothing new. The sheet itself, `plugin.steps`, is the person's.
+
+A project holding a retained plugin step is written as project format version 14 (a live RAW project without one
+is still version 13). It stores the step, not the plugin: it reopens with the layer's pixels as saved whether or
+not the plugin is installed, and the rules above apply the next time the RAW is developed. Image › Invert on a
+live RAW layer is retained the same way, as a built-in step, and is version-14 content too.
+
 **A run either completes or changes nothing.** If the plugin is missing or damaged, loops, recurses without end,
-asks for too much memory, traps, reads or writes outside its memory, returns a value that is not finite or an alpha
-outside 0–1, reports failure, or is cancelled, the document and its history are exactly as they were, and the person
-(or the agent) is told which plugin failed and why.
+asks for too much memory, spends the whole run's budget, traps, reads or writes outside its memory, returns a value
+that is not finite, a color outside ±65,504 or an alpha outside 0–1, reports failure, or is cancelled, the document
+and its history are exactly as they were, and the person (or the agent) is told which plugin failed and why.
 
 ### For agents
 
 Each installed plugin is its own command, `plugin.run.<id>`, listed by `list_commands` with a JSON schema generated
 from the manifest: every declared parameter with its type, range and choices, plus `layer`. It is admitted like
-every other command: an argument the manifest does not declare is refused by name, as is a value of the wrong type,
+every other command — including that an agent never runs one while the person has a plugin's parameter sheet or
+the retained-steps sheet open: an argument the manifest does not declare is refused by name, as is a value of the wrong type,
 a number that is not finite or lies outside its declared range, and a choice not in the list. The command `plugin.run`
 takes a `plugin` id and runs that plugin with its default parameter values. Both can be members of a document
 batch. A run by an agent is one history entry labeled `Plugin: Name (Agent)`. No plugin command takes a file path.
@@ -224,16 +289,40 @@ These are compiled into the sandbox (`adapters/plugins/src/lib.rs`, `LIMITS`) an
 | Fuel for `lw_tile_buffer` | 1,000,000 | The call is stopped. |
 | Fuel to instantiate | 10,000,000 | The plugin is not started. |
 | Fuel for `lw_filter_tile` | 10,000,000 + 4,000 per pixel of the tile (272,144,000 for a full tile) | The call is stopped. |
+| Fuel for a whole run (every tile of one layer) | 278,675,456,000 — 1,024 full tiles' worth | The run fails; the document is unchanged. |
+| Fuel for a whole run an agent started | 69,668,864,000 — 256 full tiles' worth | The run fails; the document is unchanged. |
+| Color a plugin writes | finite, within ±65,504 | The run fails. |
 | Output | exactly the tile buffer: `width × height × 16` bytes | Nothing else is read back. |
 | Compile limits | 10,000 functions, 1,000 globals, 1,000 data and 1,000 element segments, 32 parameters and 32 results per function, at least 40 bytes per function on average | Refused at install. |
 | Parameters | 16 | Refused at install. |
 | Installed plugins | 64 | Install is refused. |
 
 Fuel is roughly one unit per executed instruction, plus a charge per byte for bulk memory operations. A full tile's
-budget of 272 million units is about four thousand instructions per pixel; the interpreter spends it in roughly a
-tenth of a second on Apple silicon, which is how long an endless loop runs before it is stopped. There is no
-wall-clock limit: a plugin that uses its whole budget on every tile and still succeeds is slow rather than stuck,
-and the person can cancel it.
+budget of 272 million units is about four thousand instructions per pixel.
+
+**How long that is.** Measured on an Apple M5 Max with the release runtime (`wasmi` 2.0.0), five runs each of one
+256×256 tile spending its whole 272,144,000 fuel, while the machine was heavily loaded with other builds (load
+average above 100): an endless loop (the `loop` sample) 0.13–0.17 s; bulk `memory.fill` 0.18–0.24 s and
+`memory.copy` 0.26–0.29 s; floating-point square roots and divisions 0.20–0.62 s; loads scattered across 16 MiB
+(cache misses) 0.22–0.53 s. The worst measured is **0.62 s for one full tile**. Fuel counts instructions, not time,
+so that is the worst measured, not a guarantee; an idle machine is faster.
+
+**The whole-run budget.** Per-tile fuel alone would let a plugin that spends nearly all of it on every tile, and
+never traps, hold a very large layer busy for a long time. So every run — whoever started it, including a retained
+step applied again while a RAW is developed — also has a budget for all its tiles together: 1,024 full tiles'
+worth of fuel. At the worst measured rate that is at most about 10.6 minutes of plugin execution
+(1,024 × 0.62 s), and about 2.9 minutes for the endless loop. A run an agent started has a quarter of that: 256
+full tiles' worth, at most about 2.6 minutes (about 44 s for the endless loop) — an agent cannot press Cancel, so
+its bound is the tighter one. A retained step applied again while a RAW is developed has every run's budget,
+whatever caused the development (a development is not a plugin run an agent started). A run that reaches its budget fails like any other failure, with the document unchanged:
+
+> It used up its execution budget of 69668864000 fuel for the whole run and was stopped.
+
+The budget counts fuel actually spent, so it does not limit ordinary filters: the sample invert spends about
+1,800,000 fuel on a full tile, under 1% of the tile's allowance, and would need a layer of 150,000 tiles (about
+10 gigapixels) to reach it. A 100-megapixel layer (1,526 tiles) leaves a plugin about 2,800 instructions per pixel,
+and about 700 when an agent runs it. There is still no wall-clock limit, and the person can cancel a run they are
+watching at any time.
 
 ## Building a plugin
 
@@ -275,7 +364,7 @@ Put `filter.wasm` beside a `plugin.json`, install the folder, and use Reload aft
 
 ### The sample plugins
 
-`adapters/plugins/samples` holds ten packages, each with its `filter.wat` source, its `plugin.json`, and the built
+`adapters/plugins/samples` holds eleven packages, each with its `filter.wat` source, its `plugin.json`, and the built
 `filter.wasm`:
 
 | Sample | What it is for |
@@ -283,6 +372,7 @@ Put `filter.wasm` beside a `plugin.json`, install the folder, and use Reload aft
 | `invert` | A filter with no parameters. |
 | `brightness` | Every parameter type: a ranged number, a choice, a boolean, a ranged integer. |
 | `gradient` | Depends on each pixel's position in the layer: shows that tiling agrees with one whole frame. |
+| `slow` | Counts down from its one parameter on every tile, then inverts it: succeeds slowly, for the whole-run budget. |
 | `loop`, `recursion`, `memory-bomb`, `trap`, `oob-write`, `not-a-number` | Hostile: each conforms to the interface, installs, and is stopped and reported when run. |
 | `forbidden-import` | Hostile: asks for a WASI file write and is refused at install. |
 
@@ -302,9 +392,14 @@ and fails if a committed module is not exactly what its source produces.
 ## Tests
 
 - `adapters/plugins/tests/sandbox.rs` — the sandbox itself: forbidden imports refused by name, each limit, each way
-  of failing, tiles against whole frames, the C interface.
+  of failing, the whole-run budget, the color range, tiles against whole frames, the C interface.
 - `adapters/plugins/tests/samples.rs` — the committed samples match their sources.
 - `native/CompositorTests/LensWorksPluginTests.swift` — the app: install, the menu command, pixels and Undo;
   agents listing and running a plugin with typed parameters; every argument outside its declaration refused; every
   hostile sample stopped with the document unchanged; refusal at install and again at load; manifests and
-  untrusted strings; remove and reload; float layers, selections and tiling; liveness and Cancel.
+  untrusted strings; remove and reload; float layers, selections and tiling; liveness and Cancel; the whole-run
+  budget; file work off the main thread; a failed replacement leaving the old plugin installed.
+- `native/CompositorTests/LensWorksRetainedPluginTests.swift` — live RAW layers: a run retained on the source and
+  applied again when the RAW is developed; a removed or changed plugin stopping the development with its reason,
+  and the person re-running or removing the step; save and reopen in format version 14; a failing or cancelled
+  step; the persisted record against `Fixtures/retained-plugin-step.v14.json`; Invert retained the same way.

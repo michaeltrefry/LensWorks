@@ -99,6 +99,8 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     // exactly as this id is. Installing, removing and reloading are the person's alone.
     case pluginFilter = "plugin.run", pluginCancel = "plugin.cancel"
     case pluginInstall = "plugin.install", pluginRemove = "plugin.remove", pluginReload = "plugin.reload"
+    // A plugin run retained on a live RAW layer: the sheet listing the layer's steps, and re-running or removing one.
+    case pluginSteps = "plugin.steps", pluginStepRerun = "plugin.step.rerun", pluginStepRemove = "plugin.step.remove"
 }
 nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
@@ -241,6 +243,8 @@ nonisolated private func reference(_ name: String, _ description: String, requir
 nonisolated private enum Argument {
     typealias P = LensWorksCommandParameter
     /// The one layer a command acts on.
+    /// A plugin step retained on a live RAW layer, as a refused development names it.
+    static let step = [P(name: "step", type: .uuid, description: "A retained plugin step’s id, as a development that could not apply it names it.", required: true)]
     static let layer = P(name: "layer", type: .uuid, description: "A layer id from get_state. It becomes the selected layer first, as clicking its row would; defaults to the selected layer.")
     /// The layers a command acts on.
     static let layers = P(name: "layers", type: .uuidArray, description: "Layer ids from get_state. They become the selected layers first, as clicking their rows would; defaults to the selected layers.")
@@ -519,7 +523,10 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .pluginCancel, label: "Cancel", menu: "Plugin Progress"),
         .init(id: .pluginInstall, label: "Install Plugin…", menu: "Settings/Plugins", menus: ["Settings/Plugins", "Filter/Plugins"]),
         .init(id: .pluginRemove, label: "Remove", menu: "Settings/Plugins", parameters: reference("plugin", "An installed plugin’s id.")),
-        .init(id: .pluginReload, label: "Reload", menu: "Settings/Plugins", parameters: reference("plugin", "An installed plugin’s id."))
+        .init(id: .pluginReload, label: "Reload", menu: "Settings/Plugins", parameters: reference("plugin", "An installed plugin’s id.")),
+        .init(id: .pluginSteps, label: "Retained Plugin Steps…", menu: "Filter/Plugins"),
+        .init(id: .pluginStepRerun, label: "Re-run with Installed Plugin", menu: "Retained Plugin Steps", parameters: Argument.step + [Argument.layer], undoable: true, historyOwner: .document),
+        .init(id: .pluginStepRemove, label: "Remove Step", menu: "Retained Plugin Steps", parameters: Argument.step + [Argument.layer], undoable: true, historyOwner: .document)
     ]
     /// What every installed plugin's command id starts with; the plugin's own id follows.
     static let pluginCommandPrefix = "plugin.run."

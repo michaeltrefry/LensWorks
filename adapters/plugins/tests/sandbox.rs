@@ -73,6 +73,10 @@ fn the_limits_are_the_documented_values() {
         (1_000_000, 10_000_000, 4_000)
     );
     assert_eq!((LIMITS.parameters, LIMITS.interface_version), (16, 1));
+    // The whole-run budgets, in full tiles' worth of fuel, and the color range a plugin may write.
+    assert_eq!(LIMITS.fuel_run, 272_144_000 * 1_024);
+    assert_eq!(LIMITS.fuel_run_agent, 272_144_000 * 256);
+    assert_eq!(LIMITS.color_magnitude, 65_504);
 }
 
 #[test]
@@ -347,6 +351,87 @@ fn an_endless_loop_is_stopped_by_its_fuel_budget() {
     );
 }
 
+/// A plugin that spends nearly its whole fuel on every tile and never traps is slow, not stuck: the whole run's
+/// budget is what stops it, with the tile it was stopped on left untouched.
+#[test]
+fn a_run_that_spends_nearly_full_fuel_on_every_tile_is_stopped_by_the_run_budget() {
+    let wasm = sample("slow");
+    validate(&wasm).unwrap();
+    let tile_fuel = LIMITS.fuel_filter_base + LIMITS.fuel_per_pixel * 64;
+    // What one spin costs, measured: the fuel two runs of different lengths spend.
+    let spent = |spins: f64| {
+        let mut instance = Instance::new(&wasm, &[spins]).unwrap();
+        let mut tile = pixels(64);
+        instance.filter_tile(&mut tile, 8, 8, 0, 0, 8, 8).unwrap();
+        LIMITS.fuel_run - instance.run_fuel_left()
+    };
+    let (short, long) = (spent(1_000.0), spent(101_000.0));
+    let per_spin = (long - short) / 100_000;
+    assert!(per_spin >= 1, "a spin costs fuel");
+    println!("one spin costs {per_spin} fuel; an 8x8 tile with 1,000 spins costs {short}");
+    // Ninety-five hundredths of a tile's fuel, on every tile.
+    let spins = ((tile_fuel * 95 / 100 - short) / per_spin) as f64;
+    let each = spent(spins);
+    assert!(
+        each > tile_fuel * 9 / 10 && each < tile_fuel,
+        "one tile spends {each} of {tile_fuel}"
+    );
+    // A budget of three and a half such tiles: three succeed and are inverted, the fourth is stopped.
+    let budget = each * 7 / 2;
+    let mut instance = Instance::with_run_fuel(&wasm, &[spins], budget).unwrap();
+    let before = pixels(64);
+    for done in 1..=3u64 {
+        let mut tile = before.clone();
+        instance.filter_tile(&mut tile, 8, 8, 0, 0, 8, 32).unwrap();
+        assert_eq!(tile[0], 1.0 - before[0]);
+        assert_eq!(instance.run_fuel_left(), budget - each * done);
+    }
+    let mut tile = before.clone();
+    let error = instance
+        .filter_tile(&mut tile, 8, 8, 0, 24, 8, 32)
+        .unwrap_err();
+    assert_eq!(
+        error.0,
+        format!(
+            "It used up its execution budget of {budget} fuel for the whole run and was stopped."
+        )
+    );
+    assert_eq!(tile, before, "the stopped tile is untouched");
+    let mut tile = before.clone();
+    assert_eq!(
+        instance
+            .filter_tile(&mut tile, 8, 8, 0, 24, 8, 32)
+            .unwrap_err()
+            .0,
+        "The plugin already failed during this run."
+    );
+    // With the budget every run has, the same four tiles all succeed.
+    let mut instance = Instance::new(&wasm, &[spins]).unwrap();
+    for _ in 0..4 {
+        let mut tile = before.clone();
+        instance.filter_tile(&mut tile, 8, 8, 0, 0, 8, 32).unwrap();
+    }
+    // The budget can only be tightened.
+    assert_eq!(
+        Instance::with_run_fuel(&wasm, &[0.0], u64::MAX)
+            .unwrap()
+            .run_fuel_left(),
+        LIMITS.fuel_run
+    );
+    // An endless loop under a run budget smaller than its tile's fuel is stopped by the run budget, and says so.
+    let mut instance = Instance::with_run_fuel(&sample("loop"), &[], 5_000_000).unwrap();
+    let mut tile = before.clone();
+    assert_eq!(
+        instance
+            .filter_tile(&mut tile, 8, 8, 0, 0, 8, 8)
+            .unwrap_err()
+            .0,
+        "It used up its execution budget of 5000000 fuel for the whole run and was stopped."
+    );
+    // What is left is less than the interpreter's smallest charge.
+    assert!(instance.run_fuel_left() < 1_000);
+}
+
 #[test]
 fn unbounded_recursion_is_stopped_by_the_stack_limit() {
     assert_eq!(
@@ -422,6 +507,59 @@ fn a_buffer_or_result_the_host_cannot_use_is_refused() {
         )),
         "It returned a value that is not a finite number."
     );
+    // A color the plugin wrote must lie inside the extended range the renderer keeps, either side of zero.
+    for (value, refused) in [
+        ("65504", false),
+        ("-65504", false),
+        ("65505", true),
+        ("-65505", true),
+        ("3.0e38", true),
+        ("-3.0e38", true),
+    ] {
+        let wasm = with(
+            "",
+            &format!("(f32.store offset=4 (local.get $ptr) (f32.const {value})) (i32.const 0)"),
+        );
+        if refused {
+            assert_eq!(
+                failure(&wasm),
+                "It returned a color value outside -65504 through 65504.",
+                "{value}"
+            );
+        } else {
+            let mut tile = pixels(64);
+            Instance::new(&wasm, &[])
+                .unwrap()
+                .filter_tile(&mut tile, 8, 8, 0, 0, 8, 8)
+                .unwrap();
+            assert_eq!(tile[1], value.parse::<f32>().unwrap());
+        }
+    }
+    // A value past the range that the layer already held, and the plugin passed through untouched, is not the
+    // plugin's: the tile is accepted and that value is exactly as it was.
+    let mut tile = pixels(64);
+    (tile[0], tile[5]) = (1.0e9, -2.5e7);
+    Instance::new(&sample("brightness"), &[0.5, 3.0, 0.0, 1.0])
+        .unwrap()
+        .filter_tile(&mut tile, 8, 8, 0, 0, 8, 8)
+        .unwrap();
+    assert_eq!(
+        (tile[0], tile[5], tile[2]),
+        (1.0e9, -2.5e7, 2.0 / 96.0 + 0.5)
+    );
+    // The same value changed by the plugin is the plugin's, and refused.
+    let mut tile = pixels(64);
+    tile[0] = 1.0e9;
+    let before = tile.clone();
+    let error = Instance::new(&sample("invert"), &[])
+        .unwrap()
+        .filter_tile(&mut tile, 8, 8, 0, 0, 8, 8)
+        .unwrap_err();
+    assert_eq!(
+        error.0,
+        "It returned a color value outside -65504 through 65504."
+    );
+    assert_eq!(tile, before);
     for pointer in ["0", "-16", "1114100", "2147483632"] {
         let wasm = module(&format!(
             r#"(module (memory (export "memory") 17) (func (export "lw_tile_buffer") (param i32) (result i32) (i32.const {pointer}))
@@ -500,6 +638,7 @@ fn the_c_interface_reports_failures_as_bounded_messages() {
                 bad.len(),
                 std::ptr::null(),
                 0,
+                LIMITS.fuel_run,
                 message.as_mut_ptr(),
                 message.len()
             )
@@ -525,6 +664,7 @@ fn the_c_interface_reports_failures_as_bounded_messages() {
             good.len(),
             std::ptr::null(),
             0,
+            LIMITS.fuel_run,
             message.as_mut_ptr(),
             message.len(),
         );

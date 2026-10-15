@@ -46,6 +46,9 @@ nonisolated struct LWLiveSourceNode: Codable, Equatable, Sendable {
     var resamples: [LWSourceResample] = []
     var operations: [LWSourceOperation] = []
     var adjustments:[LWSourceRetainedAdjustment] = []
+    /// Filter-plugin runs retained in order (project format 14). Written only when there are any, so a
+    /// source without one stays readable by builds that know format 13.
+    var plugins:[LWSourceRetainedPlugin] = []
     /// Runtime-only; shared by immutable value copies and retained history. An
     /// admitted mutation installs a fresh owner before any copy-on-write growth.
     var metadataStorage: LWSourceMetadataStorage? = nil
@@ -53,8 +56,25 @@ nonisolated struct LWLiveSourceNode: Codable, Equatable, Sendable {
     enum CodingKeys: String,CodingKey {
         case schema,id,revision,sourceLineage,original,rawHint,originalRevision,originalWidth,originalHeight,metadata,provenance,
             decoderSourceRevision,catalogAuthority,whiteBalance,settings,grainSeed,coordinateMap,retouch,selectedDevelopments,
-            sampleComposites,planeAssets,filters,resamples,operations,adjustments
+            sampleComposites,planeAssets,filters,resamples,operations,adjustments,plugins
     }
+    func encode(to encoder:any Encoder) throws {
+        var c=encoder.container(keyedBy:CodingKeys.self)
+        try c.encode(schema,forKey:.schema);try c.encode(id,forKey:.id);try c.encode(revision,forKey:.revision)
+        try c.encode(sourceLineage,forKey:.sourceLineage);try c.encode(original,forKey:.original);try c.encode(rawHint,forKey:.rawHint)
+        try c.encode(originalRevision,forKey:.originalRevision);try c.encode(originalWidth,forKey:.originalWidth)
+        try c.encode(originalHeight,forKey:.originalHeight);try c.encode(metadata,forKey:.metadata);try c.encode(provenance,forKey:.provenance)
+        try c.encode(decoderSourceRevision,forKey:.decoderSourceRevision);try c.encodeIfPresent(catalogAuthority,forKey:.catalogAuthority)
+        try c.encode(whiteBalance,forKey:.whiteBalance);try c.encode(settings,forKey:.settings);try c.encode(grainSeed,forKey:.grainSeed)
+        try c.encode(coordinateMap,forKey:.coordinateMap);try c.encode(retouch,forKey:.retouch)
+        try c.encode(selectedDevelopments,forKey:.selectedDevelopments);try c.encode(sampleComposites,forKey:.sampleComposites)
+        try c.encode(planeAssets,forKey:.planeAssets);try c.encode(filters,forKey:.filters);try c.encode(resamples,forKey:.resamples)
+        try c.encode(operations,forKey:.operations);try c.encode(adjustments,forKey:.adjustments)
+        if !plugins.isEmpty { try c.encode(plugins,forKey:.plugins) }
+    }
+    /// Whether this source holds anything only project format 14 can express: a retained plugin step, or a
+    /// retained Invert.
+    var usesFormat14:Bool { !plugins.isEmpty || adjustments.contains { $0.settings.kind == .invert } }
     static func == (a:Self,b:Self)->Bool {
         a.schema==b.schema && a.id==b.id && a.revision==b.revision && a.sourceLineage==b.sourceLineage &&
         a.original==b.original && a.rawHint==b.rawHint && a.originalRevision==b.originalRevision && a.originalWidth==b.originalWidth &&
@@ -62,7 +82,8 @@ nonisolated struct LWLiveSourceNode: Codable, Equatable, Sendable {
         a.decoderSourceRevision==b.decoderSourceRevision && a.catalogAuthority==b.catalogAuthority &&
         a.whiteBalance==b.whiteBalance && a.settings==b.settings && a.grainSeed==b.grainSeed && a.coordinateMap==b.coordinateMap &&
         a.retouch==b.retouch && a.selectedDevelopments==b.selectedDevelopments && a.sampleComposites==b.sampleComposites &&
-        a.planeAssets==b.planeAssets && a.filters==b.filters && a.resamples==b.resamples && a.operations==b.operations && a.adjustments==b.adjustments
+        a.planeAssets==b.planeAssets && a.filters==b.filters && a.resamples==b.resamples && a.operations==b.operations && a.adjustments==b.adjustments &&
+        a.plugins==b.plugins
     }
     func metadataCopy(additionalBytes:Int = 0) throws -> Self {
         let owner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.sum(retainedPayloadBytes,additionalBytes),
@@ -164,6 +185,10 @@ nonisolated struct LWLiveSourceNode: Codable, Equatable, Sendable {
         for adjustment in adjustments {
             guard sourceLineage.contains(adjustment.upstreamRevision) else { throw ProjectError.invalid }
             try adjustment.validate(source:id)
+        }
+        for plugin in plugins {
+            guard sourceLineage.contains(plugin.upstreamRevision) else { throw ProjectError.invalid }
+            try plugin.validate(source:id)
         }
         for filter in filters {
             guard sourceLineage.contains(filter.upstreamRevision) else { throw ProjectError.invalid }
@@ -424,7 +449,7 @@ actor LWSourceDeveloper {
                 }
                 let original = try await input(node.whiteBalance)
                 if let side = previewMaximumSide, node.selectedDevelopments.isEmpty, node.retouch.isEmpty, node.filters.isEmpty,
-                    node.resamples.isEmpty, node.adjustments.isEmpty,
+                    node.resamples.isEmpty, node.adjustments.isEmpty, node.plugins.isEmpty,
                     let reduced = Self.previewExtent(width: original.width, height: original.height, maximumSide: side) {
                     let small = try LWFloatCompositor.downscale(original, width: reduced.width, height: reduced.height, workspace: workspace)
                     let developed = try node.settings.develop(small, seed: node.grainSeed, scale: reduced.scale,
@@ -912,6 +937,12 @@ nonisolated extension LWLiveSourceNode {
                     asset.reference.height == adjustment.captureFrame.developedHeight else { throw ProjectError.invalid }
             }
         }
+        for plugin in plugins {
+            if let key=plugin.selectionPlaneID {
+                guard let asset=planeAssets[key],asset.reference.width == plugin.captureFrame.developedWidth,
+                    asset.reference.height == plugin.captureFrame.developedHeight else { throw ProjectError.invalid }
+            }
+        }
         for filter in filters {
             if let key = filter.selectionPlaneID {
                 guard let frame = filter.selectionFrame, let asset = planeAssets[key],
@@ -967,6 +998,8 @@ nonisolated extension LWLiveSourceNode {
         for operation in resamples { stage(operation.stage) }
         array(adjustments.count,MemoryLayout<LWSourceRetainedAdjustment>.stride)
         for value in adjustments { add(value.retainedMetadataBytes) }
+        array(plugins.count,MemoryLayout<LWSourceRetainedPlugin>.stride)
+        for value in plugins { add(value.retainedMetadataBytes) }
         array(filters.count,MemoryLayout<LWSourceRetainedFilter>.stride)
         for filter in filters { frame(filter.captureFrame);stage(filter.pixelStage)
             if let selection=filter.selectionFrame { frame(selection) }
@@ -1204,7 +1237,7 @@ nonisolated extension LWLiveSourceNode {
         let required: Set<String> = ["schema","id","revision","sourceLineage","original","rawHint","originalRevision",
             "originalWidth","originalHeight","metadata","provenance","decoderSourceRevision","whiteBalance",
             "settings","grainSeed","coordinateMap","retouch","selectedDevelopments","sampleComposites"]
-        let allowed = required.union(["catalogAuthority","planeAssets","filters","resamples","operations","adjustments"])
+        let allowed = required.union(["catalogAuthority","planeAssets","filters","resamples","operations","adjustments","plugins"])
         let actual = Set(c.allKeys.map(\.stringValue))
         guard required.isSubset(of: actual), actual.isSubset(of: allowed) else { throw ProjectError.invalid }
         schema = try c.decode(Int.self, forKey: .init("schema"))
@@ -1231,6 +1264,7 @@ nonisolated extension LWLiveSourceNode {
         resamples = try c.decodeIfPresent([LWSourceResample].self, forKey: .init("resamples")) ?? []
         operations = try c.decodeIfPresent([LWSourceOperation].self, forKey: .init("operations")) ?? []
         adjustments=try c.decodeIfPresent([LWSourceRetainedAdjustment].self,forKey:.init("adjustments")) ?? []
+        plugins=try c.decodeIfPresent([LWSourceRetainedPlugin].self,forKey:.init("plugins")) ?? []
         // The archive deliberately externalizes backing bytes before encoding
         // this record. Decode checks schema/metadata here; hydrate validates all
         // required backing, identities and semantic state before publication.

@@ -247,6 +247,7 @@ struct CompositorApp: App {
                                                    reason: reason(.pluginFilter, plugin.id)) { session.beginPlugin(plugin.id) }
                         }
                         if !session.plugins.plugins.isEmpty { Divider() }
+                        LensWorksCommandButton(.pluginSteps, reason: reason(.pluginSteps)) { session.beginPluginSteps() }
                         LensWorksCommandButton(.pluginInstall) { session.plugins.chooseAndInstall() }
                     }
                 }

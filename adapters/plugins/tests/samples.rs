@@ -27,6 +27,7 @@ fn every_committed_sample_is_what_its_source_assembles_to() {
             "not-a-number",
             "oob-write",
             "recursion",
+            "slow",
             "trap"
         ]
         .map(|name| format!("{name}.lwplugin"))

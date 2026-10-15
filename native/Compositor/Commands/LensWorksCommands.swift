@@ -99,7 +99,7 @@ extension EditorSession {
         if isProjectBusy || isImporting { return "Finish the current project operation first." }
         if commandInteraction != nil || renamingLayerID != nil { return "Finish the current layer interaction first." }
         if gradientEdit != nil || !canUseHistory || cropRect != nil || pixelMove != nil || hueSaturation != nil
-            || filterEdit != nil || adjustmentEditingID != nil { return "Finish the current edit in LensWorks first." }
+            || filterEdit != nil || adjustmentEditingID != nil || pluginParameters != nil || pluginSteps != nil { return "Finish the current edit in LensWorks first." }
         return nil
     }
     /// Why an agent cannot step document history now, or nil when it can. An agent never steps history under a

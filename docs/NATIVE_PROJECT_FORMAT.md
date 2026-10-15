@@ -26,3 +26,27 @@ This first format extension establishes the raster working-version relationship.
 The complete live RAW document contract, independent named versions, persistent
 undo/checkpoints, compositions, recovery and portable export retain their explicit
 owning stories in epic 24655. Version 12 does not establish those acceptances.
+
+## Version 14: retained plugin steps and Invert on live RAW sources
+
+Version 13 carries live RAW sources and float working samples. Version 14 adds two things a live RAW source's
+ordered operations may hold, and nothing else:
+
+- a **filter-plugin step** — the source record's optional `plugins` array and the `plugin` operation: each step's
+  id, the plugin's id and name, the SHA-256 of the module that ran, the filter interface version, the parameter
+  values, the capture frame, and an optional selection plane (`docs/PLUGINS.md`, "On a live RAW layer");
+- a retained adjustment of kind **Invert** (Image › Invert on a live RAW layer), beside the Hue/Saturation and
+  Levels adjustments version 13 retains.
+
+The writer follows the existing rule — the oldest version that can express the package: 14 only when some source
+holds one of these (`ProjectStore.usesVersion14`), 13 for other live RAW or float content, 12 otherwise. The
+`plugins` key is written only when there is a step, so a version-13 package holds exactly the keys it did. The
+reader accepts versions 1–14 and refuses a package below 14 that carries either. A build that knows only version
+13 refuses a version-14 package by its version, rather than opening it and losing the step.
+
+`native/CompositorTests/Fixtures/retained-plugin-step.v14.json` is the step record as stored; a test holds the
+reader and writer to it.
+
+Fill, Clear and Transform Selection have no retained form on a live RAW source. On a live RAW layer each is refused
+with its reason (the layer's mask can still be filled or cleared) rather than turning the layer into plain pixels
+and losing its development.

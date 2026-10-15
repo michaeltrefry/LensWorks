@@ -400,6 +400,8 @@ final class EditorSession {
     var pluginParameters: LensWorksPluginParameterEdit?
     /// Why the plugin filter the person ran did not apply, for its alert.
     var pluginError: String?
+    /// The sheet listing the plugin steps retained on a live RAW layer (Filter › Plugins › Retained Plugin Steps…).
+    var pluginSteps: LensWorksPluginStepsEdit?
     var filterSettings = FilterSettings()
     @ObservationIgnored var hueSaturationTask: Task<Void, Never>?
     /// The newest preview request while one is already rendering.

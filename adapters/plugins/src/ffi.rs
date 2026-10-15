@@ -81,7 +81,8 @@ pub unsafe extern "C" fn lw_plugin_validate(
     unsafe { guarded(message, capacity, || crate::validate(bytes(wasm, length)?)) }
 }
 
-/// Validates and instantiates a module. Returns null on failure, with the reason in `message`.
+/// Validates and instantiates a module whose tiles together may spend at most `run_fuel` (never more than the
+/// limits' `fuel_run`). Returns null on failure, with the reason in `message`.
 ///
 /// # Safety
 /// As `lw_plugin_validate`; `parameters` points to `count` readable doubles (or is null when `count` is 0).
@@ -91,6 +92,7 @@ pub unsafe extern "C" fn lw_plugin_open(
     length: usize,
     parameters: *const f64,
     count: usize,
+    run_fuel: u64,
     message: *mut c_char,
     capacity: usize,
 ) -> *mut c_void {
@@ -105,7 +107,7 @@ pub unsafe extern "C" fn lw_plugin_open(
             } else {
                 std::slice::from_raw_parts(parameters, count)
             };
-            let instance = Instance::new(bytes(wasm, length)?, values)?;
+            let instance = Instance::with_run_fuel(bytes(wasm, length)?, values, run_fuel)?;
             opened = Box::into_raw(Box::new(instance)).cast();
             Ok(())
         });

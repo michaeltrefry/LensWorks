@@ -1,0 +1,63 @@
+{
+  "captureFrame" : {
+    "geometry" : [
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1
+    ],
+    "height" : 64,
+    "layerTransform" : {
+      "flipX" : false,
+      "flipY" : false,
+      "origin" : [
+        4,
+        8
+      ],
+      "rotation" : 0,
+      "sampling" : "High quality",
+      "size" : [
+        96,
+        64
+      ]
+    },
+    "optics" : {
+      "distortion" : 0,
+      "enableLensProfile" : false,
+      "greenAmount" : 0,
+      "greenHueHigh" : 120,
+      "greenHueLow" : 60,
+      "profileDistortion" : 100,
+      "profileVignetting" : 100,
+      "purpleAmount" : 0,
+      "purpleHueHigh" : 310,
+      "purpleHueLow" : 270,
+      "removeChromaticAberration" : false,
+      "vignetteAmount" : 0,
+      "vignetteMidpoint" : 50
+    },
+    "stages" : [
+
+    ],
+    "width" : 96
+  },
+  "id" : "0F5C4E1A-7B1D-4C0E-9A63-2D1B5E8F7A10",
+  "interface" : 1,
+  "moduleHash" : "d923b62a1ac8592118d7bd4ef271fe37fa3638a9007ee543bbb6411c5255e1d5",
+  "name" : "Sample Brightness",
+  "parameters" : [
+    0.25,
+    2,
+    0,
+    3
+  ],
+  "plugin" : "com.lensworks.sample.brightness",
+  "selectionPlaneID" : "9B8A7C6D-5E4F-4A3B-8C2D-1E0F9A8B7C6D",
+  "sourceID" : "6A1E0C55-3B7F-4D2A-8E91-5C4D3B2A1F00",
+  "upstreamRevision" : "C2D3E4F5-0617-4829-A3B4-C5D6E7F80912"
+}

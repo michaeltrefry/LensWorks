@@ -10,12 +10,16 @@ extension LensWorksPluginStore {
         panel.prompt = "Install"
         panel.message = "Choose a plugin package: a folder holding \(LensWorksPluginManifest.fileName) and \(LensWorksPluginManifest.moduleName). A plugin runs in a sandbox and sees only the pixels of the layer it is run on."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        perform { try self.install(from: url).message }
+        start { try await self.install(from: url).message }
     }
     /// Runs a store change for the settings pane, keeping what happened (or why it did not) for the person.
-    func perform(_ change: () throws -> String) {
-        do { lastMessage = try change(); lastError = nil }
+    func perform(_ change: @MainActor () async throws -> String) async {
+        do { lastMessage = try await change(); lastError = nil }
         catch { lastError = error.localizedDescription; lastMessage = nil }
+    }
+    /// A button's action: the change runs without holding the window, and its result arrives in the pane.
+    @discardableResult func start(_ change: @escaping @MainActor () async throws -> String) -> Task<Void, Never> {
+        Task { await perform(change) }
     }
 }
 
@@ -41,9 +45,9 @@ struct LensWorksPluginSettingsView: View {
                             Text(verbatim: plugin.manifest.name).fontWeight(.medium)
                             Text(verbatim: plugin.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
                             Spacer()
-                            LensWorksCommandButton(.pluginReload, argument: plugin.id) { store.perform { try store.reload(plugin.id).message } }
+                            LensWorksCommandButton(.pluginReload, argument: plugin.id) { store.start { try await store.reload(plugin.id).message } }
                             LensWorksCommandButton(.pluginRemove, argument: plugin.id, role: .destructive) {
-                                store.perform { try store.remove(plugin.id); return "Removed \(plugin.manifest.name) (\(plugin.id))." }
+                                store.start { try await store.remove(plugin.id); return "Removed \(plugin.manifest.name) (\(plugin.id))." }
                             }
                         }
                         Text(verbatim: "Version \(plugin.manifest.version) · interface \(plugin.manifest.interface) · \(plugin.manifest.parameters.count) parameter\(plugin.manifest.parameters.count == 1 ? "" : "s")")
@@ -60,13 +64,13 @@ struct LensWorksPluginSettingsView: View {
                             Text(verbatim: plugin.problem).font(.caption).foregroundStyle(.red)
                         }
                         Spacer()
-                        LensWorksCommandButton(.pluginRemove, argument: plugin.id, role: .destructive) { store.perform { try store.remove(plugin.id); return "Removed \(plugin.id)." } }
+                        LensWorksCommandButton(.pluginRemove, argument: plugin.id, role: .destructive) { store.start { try await store.remove(plugin.id); return "Removed \(plugin.id)." } }
                     }
                 }
             }
             Section("Limits") {
                 let limits = LensWorksPluginSandbox.limits
-                Text("Module at most \(limits.module_bytes / 1_048_576) MB · memory at most \(limits.memory_bytes / 1_048_576) MB · one table of at most \(limits.table_elements) elements · stack \(limits.stack_bytes / 1024) KB and \(limits.recursion_depth) calls deep · tiles of at most \(limits.tile_pixels) pixels · \(limits.fuel_filter_base) + \(limits.fuel_per_pixel) per pixel units of execution fuel per tile.")
+                Text("Module at most \(limits.module_bytes / 1_048_576) MB · memory at most \(limits.memory_bytes / 1_048_576) MB · one table of at most \(limits.table_elements) elements · stack \(limits.stack_bytes / 1024) KB and \(limits.recursion_depth) calls deep · tiles of at most \(limits.tile_pixels) pixels · \(limits.fuel_filter_base) + \(limits.fuel_per_pixel) per pixel units of execution fuel per tile, and \(limits.fuel_run / 272_144_000) full tiles’ worth for a whole run (\(limits.fuel_run_agent / 272_144_000) when an agent starts it) · color values within ±\(limits.color_magnitude).")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -142,6 +146,46 @@ struct LensWorksPluginProgressPanel: View {
     }
 }
 
+/// The plugin steps retained on a live RAW layer: each with the plugin, the hash of the code that made it and its
+/// parameter values, whether it can be applied again as it stands, and Re-run and Remove.
+struct LensWorksPluginStepsSheet: View {
+    let session: EditorSession
+    @Bindable var edit: LensWorksPluginStepsEdit
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Retained Plugin Steps").font(.headline)
+            Text("A plugin run on a RAW layer is kept with the layer and applied again whenever the RAW is developed, with the same plugin code and values. A step whose plugin is missing or has changed stops the layer from being developed until you re-run it with the plugin installed now, or remove it.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(edit.steps) { state in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        // The plugin's own name is only ever shown beside its id.
+                        Text(verbatim: state.step.name).fontWeight(.medium)
+                        Text(verbatim: state.step.plugin).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                        Spacer()
+                        LensWorksCommandButton(.pluginStepRerun, argument: state.id.uuidString,
+                                               reason: state.installed ? nil : "The plugin is not installed.") { session.performPluginStep { try await session.rerunPluginStep(state.id) } }
+                        LensWorksCommandButton(.pluginStepRemove, argument: state.id.uuidString, role: .destructive) { session.performPluginStep { try await session.removePluginStep(state.id) } }
+                    }
+                    Text(verbatim: "SHA-256 " + state.step.moduleHash).font(.system(.caption2, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    if !state.step.parameters.isEmpty {
+                        Text(verbatim: "Values " + state.step.parameters.map(LensWorksPluginManifest.plain).joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let problem = state.problem { Text(verbatim: problem.reason).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+                    else { Text("Applied again as recorded when the RAW is developed.").font(.caption).foregroundStyle(.secondary) }
+                }
+                .accessibilityIdentifier("LensWorks.plugins.step")
+            }
+            if let error = edit.error { Text(verbatim: error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("LensWorks.plugins.stepError") }
+            HStack {
+                Spacer()
+                Button("Done") { session.closePluginSteps() }.registeredCommandShortcut(.cancel, role: .cancelAction)
+            }
+        }
+        .padding(20).frame(width: 520)
+    }
+}
+
 /// What a plugin puts in front of the person in the editor window: its parameter sheet, the progress panel of a
 /// run that is taking a while, and the alert that says why a run was not applied. Titles are LensWorks's own.
 struct LensWorksPluginPresentation: ViewModifier {
@@ -152,6 +196,7 @@ struct LensWorksPluginPresentation: ViewModifier {
                 Button("OK") { session.pluginError = nil }
             } message: { Text(verbatim: session.pluginError ?? "") }
             .sheet(item: $session.pluginParameters) { edit in LensWorksPluginParameterSheet(session: session, edit: edit) }
+            .sheet(item: $session.pluginSteps) { edit in LensWorksPluginStepsSheet(session: session, edit: edit) }
             .sheet(isPresented: Binding(get: { session.pluginRun?.showsPanel == true }, set: { _ in })) { LensWorksPluginProgressPanel(session: session) }
     }
 }
