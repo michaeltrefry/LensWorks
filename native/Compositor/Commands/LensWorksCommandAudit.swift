@@ -40,13 +40,15 @@ import AppKit
     }
 
     /// The main menu: the application menu's path is "App", every other top-level menu its title.
-    static func audit(mainMenu: NSMenu) -> [Violation] {
+    /// `session` is the document whose checkpoints and versions the menus list: the app's front tab's unless a
+    /// caller (a test) audits a menu built for another one.
+    static func audit(mainMenu: NSMenu, session: EditorSession? = nil) -> [Violation] {
         var violations: [Violation] = []
         var claimed: [ShortcutChord: Int] = [:]
         for (index, top) in mainMenu.items.enumerated() {
             guard let submenu = top.submenu else { continue }
             if submenu === NSApp.servicesMenu { continue }
-            violations += audit(menu: submenu, path: index == 0 ? "App" : top.title, claimed: &claimed)
+            violations += audit(menu: submenu, path: index == 0 ? "App" : top.title, session: session, claimed: &claimed)
         }
         // Each registered menu shortcut appears on exactly one rendered item.
         for definition in ShortcutDefinition.all where definition.isMenu {
@@ -60,25 +62,25 @@ import AppKit
         return violations
     }
     /// A context or pull-down menu built in AppKit, under `path`.
-    static func audit(menu: NSMenu, path: String) -> [Violation] {
+    static func audit(menu: NSMenu, path: String, session: EditorSession? = nil) -> [Violation] {
         var claimed: [ShortcutChord: Int] = [:]
-        return audit(menu: menu, path: path, claimed: &claimed)
+        return audit(menu: menu, path: path, session: session, claimed: &claimed)
     }
 
-    private static func audit(menu: NSMenu, path: String, claimed: inout [ShortcutChord: Int]) -> [Violation] {
+    private static func audit(menu: NSMenu, path: String, session: EditorSession?, claimed: inout [ShortcutChord: Int]) -> [Violation] {
         var violations: [Violation] = []
         for item in menu.items where !item.isSeparatorItem {
             // A hidden item still answers its key equivalent when it allows that, so it is audited too.
             if item.isHidden && item.submenu == nil && !(item.allowsKeyEquivalentWhenHidden && !item.keyEquivalent.isEmpty) { continue }
             if let submenu = item.submenu {
                 if submenu === NSApp.servicesMenu { continue }
-                violations += audit(menu: submenu, path: path + "/" + item.title, claimed: &claimed)
+                violations += audit(menu: submenu, path: path + "/" + item.title, session: session, claimed: &claimed)
                 continue
             }
             let chord = Self.chord(item)
             if let chord { claimed[chord, default: 0] += 1 }
             if isSystem(item, path: path) { continue }
-            guard let command = command(for: item, path: path) else {
+            guard let command = command(for: item, path: path, session: session) else {
                 violations.append(.init(path: path, title: item.title, problem: "menu item is not a registered command"
                     + (chord.map { " (and its shortcut \($0.label) bypasses the registry)" } ?? "")))
                 continue
@@ -93,18 +95,26 @@ import AppKit
 
     /// The titles a menu of user files lists right now. An item in a menu whose command accepts any title (the
     /// user's files, tabs) must carry its command identifier or be one of these, so a rogue item there is caught.
-    static func currentTitles(_ path: String) -> [String]? {
-        path == "File/Open Recent" ? RecentProjects.shared.urls.map(RecentProjects.menuTitle) : nil
+    /// `session` is the document whose menus are audited; the app's front tab's when none is given.
+    static func currentTitles(_ path: String, session given: EditorSession? = nil) -> [String]? {
+        if path == "File/Open Recent" { return RecentProjects.shared.urls.map(RecentProjects.menuTitle) }
+        // The document's checkpoints and its photo's other versions, by the names the person gave them.
+        let session = given ?? CompositorApplicationDelegate.current?.session
+        switch path {
+        case "Edit/Restore Checkpoint", "Edit/Rename Checkpoint", "Edit/Delete Checkpoint": return session?.history.checkpoints.map(\.name) ?? []
+        case "File/Switch to Version", "File/Delete Version": return session?.siblingVersions.map(\.name) ?? []
+        default: return nil
+        }
     }
 
     /// The registered command a rendered item is: its identifier, else the one command whose menu path and titles
     /// accept it (preferring the one whose shortcut it carries, for same-titled items like View › Snap).
-    static func command(for item: NSMenuItem, path: String) -> LensWorksCommandInvocation? {
+    static func command(for item: NSMenuItem, path: String, session: EditorSession? = nil) -> LensWorksCommandInvocation? {
         if let raw = item.identifier?.rawValue, let invocation = LensWorksCommandInvocation(identifier: raw),
            LensWorksCommandRegistry.descriptor(invocation.id).menus.contains(path) {
             return invocation
         }
-        let listed = currentTitles(path)?.contains(item.title) == true
+        let listed = currentTitles(path, session: session)?.contains(item.title) == true
         let candidates = LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch != .any && $0.accepts(title: item.title) }
             + LensWorksCommandRegistry.descriptors.filter { $0.menus.contains(path) && $0.titleMatch == .any && listed }
         let chord = Self.chord(item)

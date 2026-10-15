@@ -11,10 +11,16 @@ extension UTType {
 }
 
 nonisolated struct ProjectManifest: Codable, Sendable {
-    /// The newest format version: saves write it only when the package uses version-13 content
-    /// (live RAW sources or float working samples). Every other save keeps writing `baseline`, so
-    /// projects without those features stay readable by builds that only understand version 12.
-    static let current = 13
+    /// The newest format version. A save writes the lowest version that can express the document: `baseline`
+    /// unless it uses version-13 content (live RAW sources or float working samples), `floatContent` unless it
+    /// uses version-15 content (a baked coverage on a live source layer). So a project without those features
+    /// stays readable by a build that only understands the version it needs.
+    static let current = 15
+    /// Version 14 is the retained filter-plugin step and Invert on live RAW sources (sc-25324). This build never
+    /// writes it: a baked coverage is written as 15, other float or live RAW content as 13. A version-14 package
+    /// opens when what it holds is content this build knows.
+    static let retainedPluginSteps = 14
+    static let floatContent = 13
     static let baseline = 12
     /// Every version `load` accepts. The package-header check, the manifest check and the error
     /// message all read this, so they cannot drift apart when `current` is bumped.
@@ -72,13 +78,51 @@ nonisolated struct ProjectLayerRecord: Codable, Sendable {
     var liveSourceFile: String? = nil
     var planeArchiveReference: LWFloatPlaneArchive.Reference? = nil
     var maskPlaneArchiveReference: LWFloatPlaneArchive.Reference? = nil
+    /// Version 15: coverage baked into a live source layer ("<id>.coverage.plane"), over the layer's own pixel
+    /// grid. It multiplies the layer's alpha wherever the layer is composited, beside the layer's own mask (which
+    /// may be switched off), and survives every development of the layer from its original.
+    var coverageFile: String? = nil
+    var coveragePlaneArchiveReference: LWFloatPlaneArchive.Reference? = nil
+}
+
+/// The pixel files a layer record can name, and the image each is in a snapshot.
+nonisolated enum ProjectLayerSlot: CaseIterable, Sendable {
+    case image, mask, coverage
+    /// A mask and a baked coverage are both one-channel coverage images.
+    var isCoverage: Bool { self != .image }
+}
+nonisolated extension ProjectLayerRecord {
+    func file(_ slot: ProjectLayerSlot) -> String? {
+        switch slot { case .image: imageFile; case .mask: maskFile; case .coverage: coverageFile }
+    }
+    func planeReference(_ slot: ProjectLayerSlot) -> LWFloatPlaneArchive.Reference? {
+        switch slot { case .image: planeArchiveReference; case .mask: maskPlaneArchiveReference; case .coverage: coveragePlaneArchiveReference }
+    }
+    /// The name a float plane has in the package's `images` folder.
+    func planeFile(_ slot: ProjectLayerSlot) -> String {
+        switch slot { case .image: "\(id.uuidString).plane"; case .mask: "\(id.uuidString).mask.plane"; case .coverage: "\(id.uuidString).coverage.plane" }
+    }
+}
+nonisolated extension ProjectSnapshot {
+    func asset(_ slot: ProjectLayerSlot, for layer: UUID) -> ImportedImage? {
+        switch slot { case .image: images[layer]; case .mask: masks[layer]; case .coverage: coverages[layer] }
+    }
+    /// The coverage baked into a layer, when its record names one.
+    func bakedCoverage(for layer: ProjectLayerRecord) -> ImportedImage? { layer.coverageFile == nil ? nil : coverages[layer.id] }
 }
 
 nonisolated struct ProjectSnapshot: @unchecked Sendable {
-    let manifest: ProjectManifest
+    var manifest: ProjectManifest
     let images: [UUID: ImportedImage]
     var masks: [UUID: ImportedImage] = [:]
+    /// Baked coverage, by layer (see `ProjectLayerRecord.coverageFile`).
+    var coverages: [UUID: ImportedImage] = [:]
     var workingVersion: LensWorksWorkingVersion? = nil
+    /// The undo history and checkpoints the package holds (see LWHistoryArchive); nil when it holds none.
+    var history: LWHistoryArchive.Index? = nil
+    /// Set when the package holds a History folder written by a newer build: this build cannot read it and must
+    /// not throw it away without asking (the next save would otherwise replace the package without it).
+    var newerHistorySchema: Int? = nil
 }
 
 nonisolated enum ProjectError: LocalizedError {
@@ -96,6 +140,25 @@ nonisolated enum ProjectError: LocalizedError {
 
 actor ProjectStore {
     static let shared = ProjectStore()
+    /// Any field that only version 15 can express.
+    static func usesVersion15(_ manifest: ProjectManifest) -> Bool {
+        manifest.layers.contains { $0.coverageFile != nil || $0.coveragePlaneArchiveReference != nil }
+    }
+    /// How old a staged package beside a project has to be before a save may take it for one a killed save left
+    /// behind. A save that is still writing touches its staged package far more recently than this.
+    static let abandonedStageAge: TimeInterval = 60 * 60
+    /// Removes the staged packages (".LensWorks-<uuid>.comp") that saves which never finished left in `folder`.
+    /// Each can hold a full copy of a document and its history, and nothing else would ever collect them.
+    nonisolated static func removeAbandonedStages(in folder: URL, now: Date = Date()) {
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey], options: []) else { return }
+        for entry in entries {
+            let name = entry.lastPathComponent
+            guard name.hasPrefix(".LensWorks-"), name.hasSuffix(".comp"), UUID(uuidString: String(name.dropFirst(11).dropLast(5))) != nil,
+                  let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey]), values.isDirectory == true,
+                  let modified = values.contentModificationDate, now.timeIntervalSince(modified) > abandonedStageAge else { continue }
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
     /// Any field or file kind that only version 13 can express.
     static func usesVersion13(_ manifest: ProjectManifest) -> Bool {
         manifest.workingSpace != nil || manifest.workingSample != nil || manifest.layers.contains { layer in
@@ -110,14 +173,10 @@ actor ProjectStore {
         let version: Int
     }
 
-    func save(_ snapshot: ProjectSnapshot, to url: URL, quickLook: QuickLookImages? = nil, workingVersion: LensWorksWorkingVersion? = nil) throws {
-        try validate(snapshot.manifest)
-        let sourceProtection = try LWSourceDestinationAuthority(snapshot)
-        try sourceProtection.validate(url)
-        let version = workingVersion ?? snapshot.workingVersion
-        guard snapshot.manifest.workingVersionID == nil || snapshot.manifest.workingVersionID == version?.id else { throw ProjectError.invalid }
-        try version?.validateDestination(url)
-        var manifest = snapshot.manifest
+    /// The manifest as a save writes it: float working samples declared, and the lowest format version that can
+    /// express what the document uses.
+    nonisolated func normalized(_ value: ProjectManifest, snapshot: ProjectSnapshot, version: LensWorksWorkingVersion?) throws -> ProjectManifest {
+        var manifest = value
         manifest.workingVersionID = version?.id
         if version != nil { manifest.version = ProjectManifest.current }
         let floatContent=manifest.layers.contains(where:{$0.liveSource != nil})
@@ -125,31 +184,51 @@ actor ProjectStore {
         if floatContent {
             manifest.workingSpace="extended-linear-sRGB";manifest.workingSample="float32-straight-RGBA"
         }
-        manifest.version = Self.usesVersion13(manifest) ? ProjectManifest.current : min(manifest.version, ProjectManifest.baseline)
+        manifest.version = Self.usesVersion15(manifest) ? ProjectManifest.current
+            : Self.usesVersion13(manifest) ? ProjectManifest.floatContent : min(manifest.version, ProjectManifest.baseline)
         try validate(manifest)
+        return manifest
+    }
+
+    /// With `history`, the package also takes the document's undo history and checkpoints, in the same atomic
+    /// publication; the result says what was kept, and what had to go to stay within the storage limit.
+    @discardableResult
+    func save(_ snapshot: ProjectSnapshot, to url: URL, quickLook: QuickLookImages? = nil, workingVersion: LensWorksWorkingVersion? = nil,
+              history: LWHistoryArchive.Capture? = nil) throws -> LWHistoryArchive.Commit? {
+        try validate(snapshot.manifest)
+        let sourceProtection = try LWSourceDestinationAuthority(snapshot)
+        try sourceProtection.validate(url)
+        let version = workingVersion ?? snapshot.workingVersion
+        guard snapshot.manifest.workingVersionID == nil || snapshot.manifest.workingVersionID == version?.id else { throw ProjectError.invalid }
+        try version?.validateDestination(url)
+        var manifest = try normalized(snapshot.manifest, snapshot: snapshot, version: version)
         var images: [String: FileWrapper] = [:]
         var planeAssets: [String: LWFloatPlane] = [:]
         var planeReferences: [String: LWFloatPlaneArchive.Reference] = [:]
-        var pixels = 0, maskPixels = 0
+        var pixels = 0, maskPixels = 0, coveragePixels = 0
         for layer in snapshot.manifest.layers {
-          for isMask in [false, true] {
-            guard let filename = isMask ? layer.maskFile : layer.imageFile else { continue }
-            guard let asset = (isMask ? snapshot.masks : snapshot.images)[layer.id] else { throw ProjectError.missingImage }
+          for slot in ProjectLayerSlot.allCases {
+            let isMask = slot.isCoverage
+            guard let filename = layer.file(slot) else { continue }
+            guard let asset = snapshot.asset(slot, for: layer.id) else { throw ProjectError.missingImage }
             if isMask {
                 guard LayerMask.isValid(asset.image) else { throw ProjectError.invalid }
-                try checkSize(width: asset.image.width, height: asset.image.height, used: &maskPixels)
+                if slot == .mask { try checkSize(width: asset.image.width, height: asset.image.height, used: &maskPixels) }
+                else { try checkSize(width: asset.image.width, height: asset.image.height, used: &coveragePixels) }
             } else { try checkSize(width: asset.image.width, height: asset.image.height, used: &pixels) }
             if let plane = asset.linearPlane {
-                let reference=isMask ? layer.maskPlaneArchiveReference : layer.planeArchiveReference
-                guard filename == "\(layer.id.uuidString)." + (isMask ? "mask.plane" : "plane"),
+                let reference = layer.planeReference(slot)
+                guard filename == layer.planeFile(slot),
                     reference == (try LWFloatPlaneArchive.reference(plane)) else { throw ProjectError.invalid }
                 try asset.validatePlaneRead()
                 let placeholder = FileWrapper(directoryWithFileWrappers: [:])
                 placeholder.fileAttributes = [FileAttributeKey.type.rawValue: FileAttributeType.typeDirectory.rawValue, FileAttributeKey.posixPermissions.rawValue: 0o700]
                 images[filename] = placeholder; planeAssets["images/" + filename] = plane
-                planeReferences["images/" + filename] = isMask ? layer.maskPlaneArchiveReference : layer.planeArchiveReference
+                planeReferences["images/" + filename] = reference
                 continue
             }
+            // A baked coverage is always a float plane.
+            guard slot != .coverage else { throw ProjectError.invalid }
             let data = try autoreleasepool {
                 if let linear = asset.linear, !isMask {
                     guard filename.hasSuffix(".f32") else { throw ProjectError.invalid }
@@ -201,13 +280,19 @@ actor ProjectStore {
         let package = FileWrapper(directoryWithFileWrappers: contents)
         var coordinationError: NSError?
         var writeError: Error?
+        var commit: LWHistoryArchive.Commit?
+        // What history need not copy, because this package holds it as the document itself.
+        let current = history.map { LWHistoryArchive.currentDocument(snapshot, manifest: manifest, sources: Set(sourceProjection.assets.keys),
+            planes: Set(sourceProjection.planes.values.map(\.reference.manifestSHA256)), assets: $0.assets) }
+        let manifestDigest = LWHistoryArchive.digest(metadata)
         NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { destination in
             do {
                 try sourceProtection.validate(destination)
                 // Foundation stages a sibling package and atomically replaces the
                 // destination only once the complete package has been written.
-                if planeAssets.isEmpty {
+                if planeAssets.isEmpty, history?.record.isEmpty != false {
                     try package.write(to: destination, options: .atomic, originalContentsURL: nil)
+                    commit = history.map { LWHistoryArchive.Commit(limitBytes: $0.limitBytes, rasters: current?.rasters ?? [:]) }
                 } else {
                     let parent = destination.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
                     let staged = parent.appendingPathComponent(".LensWorks-" + UUID().uuidString + ".comp", isDirectory: true)
@@ -221,15 +306,22 @@ actor ProjectStore {
                             to: staged.appendingPathComponent(filename, isDirectory: true))
                         guard planeReferences[filename] == reference else { throw ProjectError.invalid }
                     }
+                    if let history, let current {
+                        commit = try LWHistoryArchive.write(history, current: current, manifestSHA256: manifestDigest, into: staged)
+                        try history.fault?(.publish)
+                    }
                     // Same-directory safe-save publishes only after every complete
                     // tile and its whole content hash have been staged successfully.
                     if FileManager.default.fileExists(atPath: destination.path) {
                         _ = try FileManager.default.replaceItemAt(destination, withItemAt: staged)
                     } else { try FileManager.default.moveItem(at: staged, to: destination) }
                 }
+                // This save is published. Staged packages that saves which never finished left beside it go now.
+                Self.removeAbandonedStages(in: destination.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL)
             } catch { writeError = error }
         }
         if let error = coordinationError ?? writeError as NSError? { throw error }
+        return commit
     }
 
     func load(from url: URL) throws -> ProjectSnapshot {
@@ -284,19 +376,25 @@ actor ProjectStore {
         guard manifest.workingVersionID == workingVersion?.id || manifest.workingVersionID == nil else { throw ProjectError.invalid }
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
-        var pixels = 0, maskPixels = 0
+        var coverages: [UUID: ImportedImage] = [:]
+        var pixels = 0, maskPixels = 0, coveragePixels = 0
         for layer in manifest.layers {
-          for isMask in [false, true] {
-            guard let filename = isMask ? layer.maskFile : layer.imageFile else { continue }
+          for slot in ProjectLayerSlot.allCases {
+            let isMask = slot == .mask
+            guard let filename = layer.file(slot) else { continue }
             let file = url.appendingPathComponent("images").appendingPathComponent(filename)
             if filename.hasSuffix(".plane") {
-                guard manifest.version >= 13, let reference = isMask ? layer.maskPlaneArchiveReference : layer.planeArchiveReference else { throw ProjectError.invalid }
+                guard manifest.version >= 13, let reference = layer.planeReference(slot) else { throw ProjectError.invalid }
                 let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
                 let plane = try LWFloatPlaneArchive.read(from: file, reference: reference, workspace: workspace)
-                if isMask { try checkSize(width:plane.width,height:plane.height,used:&maskPixels);masks[layer.id]=try ImportedImage(maskPlane:plane,name:"Layer Mask") }
-                else { try checkSize(width:plane.width,height:plane.height,used:&pixels);images[layer.id]=try ImportedImage(plane:plane,name:layer.name) }
+                switch slot {
+                case .mask: try checkSize(width:plane.width,height:plane.height,used:&maskPixels);masks[layer.id]=try ImportedImage(maskPlane:plane,name:"Layer Mask")
+                case .coverage: try checkSize(width:plane.width,height:plane.height,used:&coveragePixels);coverages[layer.id]=try ImportedImage(maskPlane:plane,name:"Baked Coverage")
+                case .image: try checkSize(width:plane.width,height:plane.height,used:&pixels);images[layer.id]=try ImportedImage(plane:plane,name:layer.name)
+                }
                 continue
             }
+            guard slot != .coverage else { throw ProjectError.invalid }
             try checkFile(file, inside: url, maximumBytes: 512 * 1024 * 1024)
             if filename.hasSuffix(".f32"), !isMask {
                 guard manifest.version >= 13 else { throw ProjectError.invalid }
@@ -332,7 +430,12 @@ actor ProjectStore {
             if isMask { masks[layer.id] = asset } else { images[layer.id] = asset }
           }
         }
-        let snapshot = ProjectSnapshot(manifest: manifest, images: images, masks: masks, workingVersion: workingVersion)
+        var snapshot = ProjectSnapshot(manifest: manifest, images: images, masks: masks, coverages: coverages, workingVersion: workingVersion)
+        switch LWHistoryArchive.stored(in: url, manifestSHA256: metadataFile.sha256) {
+        case .usable(let index): snapshot.history = index
+        case .newer(let schema): snapshot.newerHistorySchema = schema
+        case .none: break
+        }
         return try migrateCompactFloatBackings(snapshot)
     }
     private func migrateCompactFloatBackings(_ snapshot:ProjectSnapshot)throws->ProjectSnapshot {
@@ -347,10 +450,10 @@ actor ProjectStore {
             manifest.layers[i].planeArchiveReference=try LWFloatPlaneArchive.reference(plane)
         }
         try validate(manifest)
-        return ProjectSnapshot(manifest:manifest,images:snapshot.images,masks:snapshot.masks,workingVersion:snapshot.workingVersion)
+        var migrated=snapshot;migrated.manifest=manifest;return migrated
     }
 
-    private func validate(_ manifest: ProjectManifest) throws {
+    nonisolated func validate(_ manifest: ProjectManifest) throws {
         guard manifest.format == "com.compositor.project" else { throw ProjectError.invalid }
         guard ProjectManifest.supported.contains(manifest.version) else { throw ProjectError.version(manifest.version) }
         guard manifest.colorSpace == "sRGB",manifest.workingVersionID == nil || manifest.version >= 12 else { throw ProjectError.invalid }
@@ -416,12 +519,19 @@ actor ProjectStore {
                 guard manifest.version >= 13, let reference = layer.planeArchiveReference else { throw ProjectError.invalid }
                 try reference.validate()
             } else { guard layer.planeArchiveReference == nil else { throw ProjectError.invalid } }
+            // A baked coverage belongs to a live source layer: its pixels are developed afresh from the original,
+            // so coverage cannot be kept in them. Any other layer takes a bake into its own pixels.
+            if let file = layer.coverageFile {
+                guard manifest.version >= 15, file == layer.planeFile(.coverage), layer.liveSource != nil || layer.liveSourceFile != nil,
+                      let reference = layer.coveragePlaneArchiveReference else { throw ProjectError.invalid }
+                try reference.validate()
+            } else { guard layer.coveragePlaneArchiveReference == nil else { throw ProjectError.invalid } }
         }
         if let id = manifest.activeLayerID, !ids.contains(id) { throw ProjectError.invalid }
         try validateGuides(manifest)
     }
 
-    private func validateGuides(_ manifest: ProjectManifest) throws {
+    nonisolated private func validateGuides(_ manifest: ProjectManifest) throws {
         let guides = manifest.guides ?? []
         if manifest.version < 8 {
             guard guides.isEmpty else { throw ProjectError.invalid }

@@ -2634,6 +2634,55 @@ final class LensWorksCatalog {
     }
 
     func noteSaved(_ project: URL) { defaults.set(project.path, forKey: "LensWorks.lastWorkingVersion") }
+
+    // MARK: Independent named versions
+
+    /// An independent copy of a saved working version, listed under the same photo. The original is only read.
+    /// A tab that has the version open finishes writing first: the copy is never taken between two saves (the
+    /// copy is also a coordinated read). Changes the tab has not saved are not copied.
+    @discardableResult
+    func duplicateVersion(_ version: LensWorksWorkingVersion, named name: String, workspace: ProjectWorkspace? = nil) async -> LensWorksWorkingVersion? {
+        guard !closingRequested, !isBusy else { return nil }
+        let scope = captureScope(), busy = beginBusy(); defer { finishBusy(busy) }
+        do {
+            await LensWorksVersionActions.tab(for: version, in: workspace)?.controller.finishSaving()
+            let copy = try await LensWorksVersionStore.shared.duplicate(version, named: name)
+            _ = try await index.register(URL(fileURLWithPath: copy.projectPath))
+            if scopeIsCurrent(scope) { await refreshVersions() }
+            return copy
+        } catch { if scopeIsCurrent(scope) { self.error = error.localizedDescription }; return nil }
+    }
+    /// Renames a working version; a tab that has it open takes the new name at once.
+    @discardableResult
+    func renameVersion(_ version: LensWorksWorkingVersion, to name: String, workspace: ProjectWorkspace?) async -> Bool {
+        guard !closingRequested, !isBusy else { return false }
+        let scope = captureScope(), busy = beginBusy(); defer { finishBusy(busy) }
+        do {
+            let index = index
+            _ = try await LensWorksVersionActions.rename(version, to: name, workspace: workspace) { _ = try await index.register($0) }
+            if scopeIsCurrent(scope) { await refreshVersions() }
+            return true
+        } catch { if scopeIsCurrent(scope) { self.error = error.localizedDescription }; return false }
+    }
+    /// Deletes a working version after asking. `answer` and `remove` stand in for the person and the Trash in tests.
+    /// With `confirmation` (the person's Allow for an agent's request) nothing is asked again.
+    @discardableResult
+    func deleteVersion(_ version: LensWorksWorkingVersion, workspace: ProjectWorkspace?, answer: LWLossAnswer? = nil, confirmation: LWLossConfirmation? = nil,
+                       remove: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) async -> Bool {
+        guard !closingRequested, !isBusy else { return false }
+        let scope = captureScope(), busy = beginBusy(); defer { finishBusy(busy) }
+        let result = if let confirmation {
+            await LensWorksVersionActions.delete(version, confirmation: confirmation, index: index, workspace: workspace, remove: remove)
+        } else {
+            await LensWorksVersionActions.delete(version, index: index, workspace: workspace, window: workspace?.window, answer: answer, remove: remove)
+        }
+        if scopeIsCurrent(scope) {
+            if case .failure(let failure) = result { error = failure.localizedDescription }
+            await refreshVersions()
+        }
+        if case .success(true) = result { return true }
+        return false
+    }
     func reconcileWorkingVersions() async {
         guard !closingRequested else { return }
         let scope = captureScope(), output = outputDirectory

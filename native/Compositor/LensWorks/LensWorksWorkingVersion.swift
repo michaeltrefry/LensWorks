@@ -133,6 +133,97 @@ actor LensWorksVersionStore {
             originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent, originalNativePath: version.originalNativePath, originalVariantKey: version.originalVariantKey)
     }
     func validate(_ version: LensWorksWorkingVersion?, destination: URL) throws { try version?.validateDestination(destination) }
+
+    // MARK: Independent named versions
+
+    /// A version's name as it is stored: trimmed, not empty, at most 1,024 UTF-8 bytes.
+    nonisolated static func versionName(_ name: String) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.utf8.count <= 1_024, !trimmed.utf8.contains(0) else {
+            throw LensWorksCatalogError.message("A version needs a name of at most 1,024 bytes.")
+        }
+        return trimmed
+    }
+    /// Where a new version named `name` goes in `folder`: the name with the characters a file name cannot hold
+    /// replaced, and the start of its identifier so two versions with one name never collide.
+    /// A file name holds 255 UTF-8 bytes, not characters, so the name is cut to a byte budget (between
+    /// characters, never inside one); a leading dot, which would hide the package in the Finder, is replaced too.
+    nonisolated static let packageNameBytes = 120
+    nonisolated static func packageURL(named name: String, id: UUID, in folder: URL) -> URL {
+        var safe = "", bytes = 0
+        for character in name {
+            let kept: Character = "/:\u{0}".contains(character) || (safe.isEmpty && character == ".") ? "-" : character
+            let size = String(kept).utf8.count
+            guard bytes + size <= packageNameBytes else { break }
+            safe.append(kept); bytes += size
+        }
+        return folder.appendingPathComponent("\(safe)-\(id.uuidString.prefix(8)).comp")
+    }
+    /// The version at `version.projectPath`, if the package there still is that version.
+    private func current(_ version: LensWorksWorkingVersion) throws -> (record: LensWorksWorkingVersion, project: URL) {
+        let project = URL(fileURLWithPath: version.projectPath)
+        guard FileManager.default.fileExists(atPath: project.path), let record = try LensWorksWorkingVersion.read(from: project), record.id == version.id else {
+            throw LensWorksCatalogError.message("“\(version.name)” is no longer at \(version.projectPath). Reconcile working versions and try again.")
+        }
+        return (record, project)
+    }
+    /// An independent copy of a saved version, beside it, under a new identity and name: every layer, mask, source
+    /// link, checkpoint and undo step. The original package is only read. The copy is assembled out of sight and
+    /// appears complete or not at all.
+    func duplicate(_ version: LensWorksWorkingVersion, named name: String) throws -> LensWorksWorkingVersion {
+        let name = try Self.versionName(name)
+        let (record, source) = try current(version)
+        let id = UUID(), folder = source.deletingLastPathComponent()
+        let destination = Self.packageURL(named: name, id: id, in: folder)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { throw LensWorksCatalogError.message("A project named \(destination.lastPathComponent) already exists.") }
+        let staged = folder.appendingPathComponent(".LensWorks-" + UUID().uuidString + ".comp", isDirectory: true)
+        defer { if FileManager.default.fileExists(atPath: staged.path) { try? FileManager.default.removeItem(at: staged) } }
+        // A coordinated read: a save of this version still writing in a tab (or anywhere else) finishes first, so
+        // the copy is never taken from a package caught between two saves.
+        var coordination: NSError?, copying: Error?
+        NSFileCoordinator().coordinate(readingItemAt: source, options: .withoutChanges, error: &coordination) { current in
+            do { try FileManager.default.copyItem(at: current, to: staged) } catch { copying = error }
+        }
+        if let error = coordination ?? copying as NSError? { throw error }
+        // The manifest names the version it belongs to; only that one value changes, so nothing else is re-encoded.
+        struct Header: Decodable { let workingVersionID: UUID? }
+        let manifestURL = staged.appendingPathComponent("manifest.json")
+        var manifest = try Data(contentsOf: manifestURL)
+        if let old = try JSONDecoder().decode(Header.self, from: manifest).workingVersionID {
+            guard let text = String(data: manifest, encoding: .utf8) else { throw ProjectError.invalid }
+            let pattern = try NSRegularExpression(pattern: "(\"workingVersionID\"\\s*:\\s*\")" + NSRegularExpression.escapedPattern(for: old.uuidString) + "\"", options: [.caseInsensitive])
+            let range = NSRange(text.startIndex..., in: text)
+            guard pattern.numberOfMatches(in: text, range: range) == 1 else { throw ProjectError.invalid }
+            manifest = Data(pattern.stringByReplacingMatches(in: text, range: range, withTemplate: "$1" + id.uuidString + "\"").utf8)
+            try manifest.write(to: manifestURL)
+        }
+        let copy = LensWorksWorkingVersion(id: id, photoID: record.photoID, catalogPath: record.catalogPath, originalPath: record.originalPath,
+            projectPath: destination.path, name: name, originalNativePath: record.originalNativePath, originalVariantKey: record.originalVariantKey)
+        try copy.encoded().write(to: staged.appendingPathComponent("LensWorks.json"))
+        try LWHistoryArchive.rebind(staged, manifestSHA256: LWHistoryArchive.digest(manifest))
+        guard try LensWorksWorkingVersion.read(from: staged)?.id == id else { throw ProjectError.invalid }
+        try FileManager.default.moveItem(at: staged, to: destination)
+        return copy
+    }
+    /// Renames a saved version in place. Its identity, its file and everything in it stay as they are.
+    func rename(_ version: LensWorksWorkingVersion, to name: String) throws -> LensWorksWorkingVersion {
+        let name = try Self.versionName(name)
+        var (record, project) = try current(version)
+        record.name = name
+        let embedded = project.appendingPathComponent("LensWorks.json")
+        let target = FileManager.default.fileExists(atPath: embedded.path) ? embedded : LensWorksWorkingVersion.sidecar(for: project)
+        try record.encoded().write(to: target, options: .atomic)
+        return record
+    }
+    /// Takes a saved version's package out of its folder with `remove` (the Trash, unless a caller says otherwise).
+    /// Callers ask the person first: see `LWLossConfirmation`.
+    func delete(_ version: LensWorksWorkingVersion, confirmation: LWLossConfirmation, remove: @Sendable (URL) throws -> Void) throws {
+        guard confirmation.subject == version.id else { throw LensWorksCatalogError.message("Deleting “\(version.name)” was not confirmed.") }
+        let (_, project) = try current(version)
+        let sidecar = LensWorksWorkingVersion.sidecar(for: project)
+        try remove(project)
+        if FileManager.default.fileExists(atPath: sidecar.path) { try remove(sidecar) }
+    }
     func list(paths: [String], directory: String?) -> LensWorksVersionListing {
         var projects = Set(paths), errors: [String] = []
         if let directory {

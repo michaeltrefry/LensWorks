@@ -1,7 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// A fingerprint of the project manifest, LensWorks source identity, and each asset’s name and size. A
+/// A fingerprint of the project manifest, LensWorks source identity, each asset’s name and size, and the index of
+/// its saved history. A
 /// package that was only touched (a sync client rewriting metadata, a permission change, the same bytes saved again)
 /// has the same digest as before, so it is not treated as a change.
 ///
@@ -33,6 +34,16 @@ nonisolated struct ProjectDigest: Equatable, Sendable {
             hasher.update(data: Data(name.utf8))
             let count = UInt64(values.fileSize ?? 0)
             withUnsafeBytes(of: count) { hasher.update(bufferPointer: $0) }
+        }
+        // The saved history's index: a save elsewhere that only adds, renames or deletes a checkpoint (or only
+        // changes the undo steps) rewrites nothing else, and this session's next save would overwrite it unseen.
+        let history = LWHistoryArchive.root(of: url).appendingPathComponent("index.json")
+        if let values = try? history.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
+           values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize {
+            hasher.update(data: Data("History/index.json".utf8))
+            // An index too large to be one this build reads is told apart by its size alone.
+            if size <= LWHistoryArchive.maximumIndexBytes { hasher.update(data: try Data(contentsOf: history)) }
+            else { withUnsafeBytes(of: UInt64(size)) { hasher.update(bufferPointer: $0) } }
         }
         return ProjectDigest(value: Data(hasher.finalize()))
     }

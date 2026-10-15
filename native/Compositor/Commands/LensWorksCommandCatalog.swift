@@ -94,12 +94,22 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case automationRevokeSecret = "automation.secret.revoke", automationCopyConfiguration = "automation.configuration.copy"
     case automationAllow = "automation.confirmation.allow", automationDecline = "automation.confirmation.decline"
     case automationGrantFolder = "automation.folder.grant", automationRevokeFolder = "automation.folder.revoke"
+    // Independent named versions, checkpoints and saved history (S17).
+    case duplicateVersion = "file.version.duplicate", renameVersion = "file.version.rename"
+    case switchVersion = "file.version.switch", deleteVersion = "file.version.delete"
+    case createVersion = "catalog.version.create", openVersion = "catalog.version.open"
+    case deleteCatalogVersion = "catalog.version.delete"
+    case newCheckpoint = "edit.checkpoint.new", restoreCheckpoint = "edit.checkpoint.restore"
+    case renameCheckpoint = "edit.checkpoint.rename", deleteCheckpoint = "edit.checkpoint.delete"
+    case historyStorage = "edit.historyStorage"
 }
 nonisolated enum LensWorksCommandHistoryOwner: String, Codable, Sendable {
     case document, nativeRecipe, nativeMetadata, none
 }
 nonisolated enum LensWorksCommandParameterType: String, Codable, Sendable {
     case uuid, uuidArray, optionalBoolean, unitInterval, layerName, cursor, variant, catalogCopyName, exposure, rating
+    /// A working version's or a checkpoint's name: nonempty once trimmed, at most 1,024 UTF-8 bytes, no NUL.
+    case historyName
     /// One value from the closed set in `choices`.
     case choice
     /// An identity the invoking surface owns (a recent file, project tab, folder, keyword or photo).
@@ -227,6 +237,10 @@ nonisolated private func choice(_ name: String, _ values: [String], required: Bo
 nonisolated private func reference(_ name: String, _ description: String, required: Bool = true) -> [LensWorksCommandParameter] {
     [.init(name: name, type: .reference, description: description, required: required)]
 }
+/// A version's or checkpoint's name, as an agent passes it.
+nonisolated private func historyName(_ description: String) -> LensWorksCommandParameter {
+    .init(name: "name", type: .historyName, description: description + " Nonempty once trimmed, at most 1,024 UTF-8 bytes.", required: true)
+}
 /// Argument builders shared by the descriptors below.
 nonisolated private enum Argument {
     typealias P = LensWorksCommandParameter
@@ -262,7 +276,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation, versionsAndHistory]
         return groups.flatMap { $0 }
     }()
 
@@ -448,6 +462,22 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .cameraRawScope, label: "Camera Raw Scope", menu: "Camera Raw Scope", titles: ["Histogram", "Vectorscope"], parameters: choice("mode", ["histogram", "vectorscope"])),
         .init(id: .selectProjectTab, label: "Show Project Tab", menu: "Project Tabs", titleMatch: .any, parameters: reference("tab", "A project tab id from get_state.")),
         .init(id: .canvasPreset, label: "New Canvas Preset Size", menu: "New Canvas/Size", titleMatch: .any, parameters: reference("preset", "A preset size in the New Canvas sheet's size menu, or Custom."))
+    ]
+    /// Independent named versions of a catalog photo, named checkpoints, and how much saved undo history a document
+    /// keeps. Deleting a version or a checkpoint cannot be undone, so each asks the person first.
+    private static let versionsAndHistory: [LensWorksCommandDescriptor] = [
+        .init(id: .duplicateVersion, label: "Duplicate Version…", menu: "File", menus: ["File", "Catalog Version"], parameters: reference("version", "A working version id from get_state: the open document's (its unsaved edits, checkpoints and undo history are copied) or another version of its photo, or one of the selected catalog photo's. The copy is independent of it.") + [historyName("The new version's name.")]),
+        .init(id: .renameVersion, label: "Rename Version…", menu: "File", menus: ["File", "Catalog Version"], parameters: reference("version", "A working version id from get_state. Only its name changes.") + [historyName("The version's new name.")]),
+        .init(id: .switchVersion, label: "Switch to Version", menu: "File/Switch to Version", titleMatch: .any, parameters: reference("version", "Another working version of the open document's photo (an id from get_state); it opens in its own tab.")),
+        .init(id: .deleteVersion, label: "Delete Version", menu: "File/Delete Version", titleMatch: .any, parameters: reference("version", "Another working version of the open document's photo, not open in a tab. The person is asked first; its file goes to the Trash."), agentConfirmation: .always),
+        .init(id: .createVersion, label: "Create Working Version", menu: "Catalog Version", parameters: reference("photo", "A photo id on the current catalog page, with its original online. A new working version of it is created in the working-versions folder the person chose and opened in a tab.")),
+        .init(id: .openVersion, label: "Open Version", menu: "Catalog Version", parameters: reference("version", "A working version id of the selected catalog photo (get_state); it opens in the editor.")),
+        .init(id: .deleteCatalogVersion, label: "Delete Version…", menu: "Catalog Version", parameters: reference("version", "A working version id of the selected catalog photo, not open in a tab. The person is asked first; its file goes to the Trash."), agentConfirmation: .always),
+        .init(id: .newCheckpoint, label: "New Checkpoint…", menu: "Edit", parameters: [historyName("The checkpoint's name.")]),
+        .init(id: .restoreCheckpoint, label: "Restore Checkpoint", menu: "Edit/Restore Checkpoint", titleMatch: .any, parameters: reference("checkpoint", "A checkpoint id of the open document (get_state). The document goes back to it as one undoable step."), undoable: true, historyOwner: .document),
+        .init(id: .renameCheckpoint, label: "Rename Checkpoint", menu: "Edit/Rename Checkpoint", titleMatch: .any, parameters: reference("checkpoint", "A checkpoint id of the open document (get_state).") + [historyName("The checkpoint's new name.")]),
+        .init(id: .deleteCheckpoint, label: "Delete Checkpoint", menu: "Edit/Delete Checkpoint", titleMatch: .any, parameters: reference("checkpoint", "A checkpoint id of the open document (get_state). The person is asked first."), agentConfirmation: .always),
+        .init(id: .historyStorage, label: "History Storage…", menu: "Edit")
     ]
     private static func rateBindingTitle(_ value: Int) -> String {
         switch value { case 0: "Rate Unrated"; case 1: "Rate 1 star"; default: "Rate \(value) stars" }

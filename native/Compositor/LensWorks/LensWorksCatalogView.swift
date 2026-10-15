@@ -176,6 +176,31 @@ struct LensWorksCatalogWorkspace: View {
     /// The selected original's observed availability, re-observed whenever the selection changes or
     /// a cached observation is forgotten (refresh, relink, volume mount/unmount/rename). Until an
     /// observation succeeds it reads as unknown and gated actions stay disabled; failures retry.
+    /// A working version's own commands: open it, copy it, name it, or (after a confirmation) delete it.
+    @ViewBuilder private func versionMenu(_ version: LensWorksWorkingVersion) -> some View {
+        let busy = catalog.isBusy ? "Finish the current catalog operation first." : nil
+        let open = LensWorksVersionActions.tab(for: version, in: workspace) != nil
+        LensWorksCommandButton(.openVersion, argument: version.id.uuidString, reason: busy ?? (workspace.canSwitch ? nil : "Finish the current edit first.")) {
+            Task { await catalog.openVersion(version, workspace: workspace) }
+        }
+        LensWorksCommandButton(.duplicateVersion, argument: version.id.uuidString, reason: busy) {
+            Task {
+                guard let name = await LWPrompts.askName(.init(title: "Duplicate Version", message: "The copy is independent: editing one version never changes another."
+                    + (open ? " Changes not yet saved in its open tab are not copied." : ""), initial: version.name + " copy", button: "Duplicate"), window: workspace.window, answer: nil) else { return }
+                await catalog.duplicateVersion(version, named: name, workspace: workspace)
+            }
+        }
+        LensWorksCommandButton(.renameVersion, argument: version.id.uuidString, reason: busy) {
+            Task {
+                guard let name = await LWPrompts.askName(.init(title: "Rename Version", message: "", initial: version.name, button: "Rename"), window: workspace.window, answer: nil) else { return }
+                await catalog.renameVersion(version, to: name, workspace: workspace)
+            }
+        }
+        Divider()
+        LensWorksCommandButton(.deleteCatalogVersion, argument: version.id.uuidString, reason: busy ?? (open ? "Close this version’s tab before deleting it." : nil), role: .destructive) {
+            Task { await catalog.deleteVersion(version, workspace: workspace) }
+        }
+    }
     private func originalAvailability(_ asset: LensWorksCatalogAsset) -> some View {
         let status = catalog.originalStatus(asset)
         let failure = catalog.originalObservationErrors[asset.photoID]
@@ -326,14 +351,20 @@ struct LensWorksCatalogWorkspace: View {
                             originalAvailability(asset)
                             Button("Large Preview") { largePhoto = asset }
                             let offline = catalog.selectedOriginalUnavailableReason
-                            Button("Create Working Version") { Task { await catalog.createWorkingVersion(workspace: workspace) } }
+                            Button("Create Working Version") {
+                                LensWorksCommandDispatcher.perform(.init(.createVersion), reason: offline) { Task { await catalog.createWorkingVersion(workspace: workspace) } }
+                            }
                                 .disabled(catalog.isBusy || !workspace.canSwitch || offline != nil)
                                 .help(offline ?? "Create an editable layered version of this photo")
                                 .accessibilityIdentifier("LensWorks.createWorkingVersion")
                             if let offline { Text("Create Working Version needs the full-resolution original. " + offline).font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("LensWorks.createWorkingVersionReason") }
                             ForEach(catalog.selectedVersions) { version in
-                                Button { Task { await catalog.openVersion(version, workspace: workspace) } } label: { Label(version.name, systemImage: "square.stack.3d.up").lineLimit(1) }
+                                Button {
+                                    LensWorksCommandDispatcher.perform(.init(.openVersion, version.id.uuidString)) { Task { await catalog.openVersion(version, workspace: workspace) } }
+                                } label: { Label(version.name, systemImage: "square.stack.3d.up").lineLimit(1) }
                                     .buttonStyle(.plain).disabled(catalog.isBusy || !workspace.canSwitch)
+                                    .accessibilityIdentifier("LensWorks.version." + version.id.uuidString)
+                                    .contextMenu { versionMenu(version) }
                             }
                             if let next = catalog.versionNext { Button("More Working Versions") { Task { await catalog.refreshVersions(after: next) } } }
                             if catalog.versionDiscoveryPending { Button("Continue Finding Versions") { Task { await catalog.refreshVersions() } } }

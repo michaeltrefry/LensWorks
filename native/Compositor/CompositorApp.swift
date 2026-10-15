@@ -81,6 +81,28 @@ struct CompositorApp: App {
                 CommandGroup(replacing: .saveItem) {
                     LensWorksCommandButton(.save, reason: reason(.save)) { Task { await applicationDelegate.projects.save() } }
                     LensWorksCommandButton(.saveAs, reason: reason(.saveAs)) { Task { await applicationDelegate.projects.save(asNew: true) } }
+                    // A catalog photo's independent named versions. Deleting one asks first.
+                    Group {
+                        Divider()
+                        LensWorksCommandButton(.duplicateVersion, reason: reason(.duplicateVersion)) { Task { await applicationDelegate.projects.duplicateVersion() } }
+                        LensWorksCommandButton(.renameVersion, reason: reason(.renameVersion)) { Task { await applicationDelegate.projects.renameVersion() } }
+                        Menu("Switch to Version") {
+                            ForEach(session.siblingVersions) { version in
+                                LensWorksCommandButton(.switchVersion, argument: version.id.uuidString, title: version.name, reason: reason(.switchVersion)) {
+                                    Task { await applicationDelegate.projects.switchVersion(version.id) }
+                                }
+                            }
+                        }
+                            .disabled(session.siblingVersions.isEmpty)
+                        Menu("Delete Version") {
+                            ForEach(session.siblingVersions) { version in
+                                LensWorksCommandButton(.deleteVersion, argument: version.id.uuidString, title: version.name, reason: reason(.deleteVersion)) {
+                                    Task { await applicationDelegate.projects.deleteVersion(version.id) }
+                                }
+                            }
+                        }
+                            .disabled(session.siblingVersions.isEmpty)
+                    }
                     Divider()
                     LensWorksCommandButton(.exportPNG, reason: reason(.exportPNG)) { Task { await applicationDelegate.projects.exportPNG() } }
                     LensWorksCommandButton(.exportJPEG, reason: reason(.exportJPEG)) { Task { await applicationDelegate.projects.exportJPEG() } }
@@ -167,6 +189,36 @@ struct CompositorApp: App {
                 }
                 CommandGroup(after: .pasteboard) {
                     Divider()
+                    // Named checkpoints: saved with the document, never pruned. Deleting one asks first.
+                    Group {
+                        LensWorksCommandButton(.newCheckpoint, reason: reason(.newCheckpoint)) { Task { await applicationDelegate.projects.newCheckpoint() } }
+                        Menu("Restore Checkpoint") {
+                            ForEach(session.history.checkpoints) { checkpoint in
+                                LensWorksCommandButton(.restoreCheckpoint, argument: checkpoint.id.uuidString, title: checkpoint.name, reason: reason(.restoreCheckpoint)) {
+                                    session.restoreCheckpoint(checkpoint.id)
+                                }
+                            }
+                        }
+                            .disabled(session.history.checkpoints.isEmpty)
+                        Menu("Rename Checkpoint") {
+                            ForEach(session.history.checkpoints) { checkpoint in
+                                LensWorksCommandButton(.renameCheckpoint, argument: checkpoint.id.uuidString, title: checkpoint.name, reason: reason(.renameCheckpoint)) {
+                                    Task { await applicationDelegate.projects.renameCheckpoint(checkpoint.id) }
+                                }
+                            }
+                        }
+                            .disabled(session.history.checkpoints.isEmpty)
+                        Menu("Delete Checkpoint") {
+                            ForEach(session.history.checkpoints) { checkpoint in
+                                LensWorksCommandButton(.deleteCheckpoint, argument: checkpoint.id.uuidString, title: checkpoint.name, reason: reason(.deleteCheckpoint)) {
+                                    Task { await applicationDelegate.projects.deleteCheckpoint(checkpoint.id) }
+                                }
+                            }
+                        }
+                            .disabled(session.history.checkpoints.isEmpty)
+                        LensWorksCommandButton(.historyStorage) { LWHistorySettingsCenter.shared.show(session: session) }
+                        Divider()
+                    }
                     LensWorksCommandButton(.keyboardShortcuts) { ShortcutSettings.shared.show() }
                     LensWorksCommandButton(.aiModels) { LWModelCenter.shared.show() }
                     // Photoshop's fill shortcuts; in a text field they keep their text meaning.
@@ -287,6 +339,6 @@ struct CompositorApp: App {
     }
     /// The reason a menu-bar command is unavailable: the one answer the menu item shows and an agent is refused with.
     private func reason(_ id: LensWorksCommandID, _ argument: String? = nil) -> String? {
-        session.menuReason(id, argument: argument, canStart: applicationDelegate.projects.canStart)
+        applicationDelegate.projects.versionReason(id) ?? session.menuReason(id, argument: argument, canStart: applicationDelegate.projects.canStart)
     }
 }

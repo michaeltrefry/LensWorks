@@ -189,7 +189,7 @@ extension EditorSession {
         guard commandInteraction == nil, command.id == .opacity || command.id == .visibility else { throw LensWorksCommandRefusal(reason: "This command cannot begin another layer interaction.") }
         let admission = try admitCommand(command)
         let admittedDocument=try document?.admittingMetadataMutation()
-        guard let token = history.beginInteraction(command.id == .visibility ? (command == .visibility(command.targets, false) ? "Hide Layer" : "Show Layer") : LensWorksCommandRegistry.descriptor(command.id).label, document:document,selection:activeLayerID,afterMetadataStorage:admittedDocument?.metadataStorage) else { throw LensWorksCommandRefusal(reason:"Finish the current history transaction first.") }
+        guard let token = history.beginInteraction(command.id == .visibility ? (command == .visibility(command.targets, false) ? "Hide Layer" : "Show Layer") : LensWorksCommandRegistry.descriptor(command.id).label, document:document,selection:activeLayerID,selected:selectedLayerIDs,afterMetadataStorage:admittedDocument?.metadataStorage) else { throw LensWorksCommandRefusal(reason:"Finish the current history transaction first.") }
         document=admittedDocument
         commandInteraction = .init(token: token, commandID: command.id, starting: admission, expected: admission.document)
         return token
@@ -198,7 +198,7 @@ extension EditorSession {
         guard let interaction = commandInteraction, interaction.token == token,
               interaction.expected == document, interaction.starting.document.id == document?.id,
               interaction.starting.selection == activeLayerID, interaction.starting.selected == selectedLayerIDs, interaction.starting.epoch == commandContextEpoch,
-              history.endInteraction(token, document: document, selection: activeLayerID) else { throw LensWorksCommandRefusal(reason: "The layer interaction no longer owns this document transaction.") }
+              history.endInteraction(token, document: document, selection: activeLayerID, selected: selectedLayerIDs) else { throw LensWorksCommandRefusal(reason: "The layer interaction no longer owns this document transaction.") }
         commandInteraction = nil; commandContextEpoch &+= 1
     }
     /// Retire the exact current transaction while its starting selection/epoch still owns it.

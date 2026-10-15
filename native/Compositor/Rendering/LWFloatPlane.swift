@@ -309,6 +309,25 @@ nonisolated struct LWFloatPlane: Sendable {
         try target.validateMembers(manifest.entries)
         return Self(manifest: manifest, workingSet: workingSet, backing: target, metadataLease: metadata)
     }
+    /// One stored tile's exact bytes, checked against its content hash: what persistent history keeps of a plane.
+    func tileBytes(_ entry: Entry) throws -> Data { try backing.read(entry) }
+    /// Rebuilds a plane, identity included, from tile bytes kept elsewhere (the History store). Each tile must be
+    /// the bytes its manifest entry hashes to.
+    static func restored(_ manifest: Manifest, workspace: LWFloatWorkspace, tile: (Entry) throws -> Data) throws -> Self {
+        try manifest.validate()
+        let target = try Backing.acquire(directory: workspace.makeScratchDirectory(), requireEmpty: true, workspace: workspace)
+        let metadata = try workspace.workingSet.reserve(manifest.entries.count * (MemoryLayout<Entry>.stride * 2 + 256))
+        for entry in manifest.entries {
+            try Task.checkCancellation()
+            let scratch = try workspace.workingSet.reserve(entry.bytes * 2)
+            defer { withExtendedLifetime(scratch) {} }
+            let data = try tile(entry)
+            guard data.count == entry.bytes, SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == entry.sha256 else { throw ProjectError.invalid }
+            try target.write(data, entry: entry)
+        }
+        try target.validateMembers(manifest.entries)
+        return Self(manifest: manifest, workingSet: workspace.workingSet, backing: target, metadataLease: metadata)
+    }
     /// Deterministic row-major tile order; each range retains its complete global origin.
     func forEachTile(_ body: (LWFloatRange) throws -> Void) throws {
         for entry in manifest.entries { try checkCancellation(); try body(entry.range); try checkCancellation() }

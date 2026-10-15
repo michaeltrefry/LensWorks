@@ -27,8 +27,12 @@ final class CompositorApplicationDelegate: NSObject, NSApplicationDelegate {
               !arguments[index + 1].isEmpty, let suite = UserDefaults(suiteName: arguments[index + 1]) else { return LensWorksUserState.defaults }
         return suite
     }
+    /// The app's delegate. SwiftUI installs its own object as `NSApp.delegate` and forwards to this one, so code
+    /// that needs the open document from outside a view (the command audit) reaches it here.
+    nonisolated(unsafe) static weak var current: CompositorApplicationDelegate?
     override init() {
         super.init()
+        Self.current = self
         LensWorksLaunchTrace.record("delegate.initialized")
     }
 

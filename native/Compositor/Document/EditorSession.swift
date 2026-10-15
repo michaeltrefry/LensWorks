@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.isVisible == rhs.isVisible && lhs.transform == rhs.transform
-            && lhs.liveSource == rhs.liveSource && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text && lhs.effects == rhs.effects
+            && lhs.liveSource == rhs.liveSource && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.bakedCoverage?.image === rhs.bakedCoverage?.image && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text && lhs.effects == rhs.effects
     }
     let id: UUID
     var asset: ImportedImage?
@@ -19,6 +19,11 @@ struct ImageLayer: Identifiable, Equatable {
     var blendMode: LayerBlendMode = .normal
     var maskSourceID: UUID?
     var mask: LayerMask?
+    /// Coverage baked into a live source layer, over the layer's own pixel grid: it multiplies the layer's alpha
+    /// wherever the layer is composited, beside `mask` (which the person may have switched off) and through every
+    /// development of the layer from its original. "Bake and Delete" puts a deleted clipping source's coverage
+    /// here when the layer's own mask is switched off and so cannot take it. Only a live source layer has one.
+    var bakedCoverage: ImportedImage?
     var adjustment: LayerAdjustment?
     /// Set on layers the Shape tool made; see `liveShape`.
     var shape: LayerShape?
@@ -41,7 +46,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.name = name
     }
 
-    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, effects: LayerEffects? = nil, text: LayerText? = nil, liveSource: LWLiveSourceNode? = nil) {
+    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, effects: LayerEffects? = nil, text: LayerText? = nil, liveSource: LWLiveSourceNode? = nil, bakedCoverage: ImportedImage? = nil) {
         self.id = id
         self.asset = asset
         self.name = name
@@ -58,6 +63,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.effects = effects
         self.text = text
         self.liveSource = liveSource
+        self.bakedCoverage = bakedCoverage
     }
 }
 
@@ -749,6 +755,22 @@ final class EditorSession {
     }
     var renamingLayerID: UUID? { didSet { if renamingLayerID == nil { commandRenameAdmission = nil }; resumeFileRequests() } }
     let history = DocumentHistory()
+    /// The pixels the open package's History store knows by name (see LWHistoryArchive).
+    @ObservationIgnored let historyAssets = LWHistoryAssets()
+    /// What the last save (or the open) said the saved history takes on disk.
+    var historyUsage: HistoryUsage?
+    /// Set when a save found checkpoints and the current state over the storage limit; the person is asked what to do.
+    var historyStorageWarning: HistoryStorageWarning?
+    /// Set when the last save removed undo steps to stay within the storage limit.
+    var historyPruneNotice: HistoryPruneNotice?
+    /// The schema of a History folder in the open package that a newer build wrote and this one cannot read. The
+    /// first save over that package would discard it, so that save asks first (see ProjectController).
+    var newerHistorySchema: Int?
+    /// A stored state being read back for Undo, Redo or Restore Checkpoint (see `readStoredState`).
+    @ObservationIgnored var historyRead: Task<Void, Never>?
+    /// The open working version's name and the photo's other versions, for the File menu (see ProjectController).
+    var versionName: String?
+    var siblingVersions: [LensWorksWorkingVersion] = []
     var isModified: Bool { history.isModified }
     var canUseHistory: Bool {
         _ = showsBusy
@@ -760,23 +782,32 @@ final class EditorSession {
     func undo() {
         // Like Photoshop, the first Undo discards a pending gradient.
         if gradientEdit != nil { cancelGradient(); return }
-        guard canUndo, let snapshot = history.undo() else { return }
+        guard canUndo else { return }
+        // A state the package holds and memory does not is read back first, off the main thread.
+        if readStoredState(for: .undo, then: { $0.undo() }) { return }
+        guard let snapshot = history.undo() else { commandRefusal = history.readFailure; return }
         restore(snapshot)
         commandContextEpoch &+= 1
     }
     func redo() {
-        guard canRedo, let snapshot = history.redo() else { return }
+        guard canRedo else { return }
+        if readStoredState(for: .redo, then: { $0.redo() }) { return }
+        guard let snapshot = history.redo() else { commandRefusal = history.readFailure; return }
         restore(snapshot)
         commandContextEpoch &+= 1
     }
 
-    private func restore(_ snapshot: DocumentHistory.Snapshot) {
+    func restore(_ snapshot: DocumentHistory.Snapshot) {
         cancelCrop()
         cancelGradient()
         let changedCanvas = document?.id != snapshot.document?.id
         let keepMaskTarget = isMaskSelected && activeLayerID == snapshot.activeLayerID
         document = snapshot.document
         activeLayerID = snapshot.activeLayerID
+        // The layers that were selected with the active one come back with it.
+        let layers = Set(document?.layers.map(\.id) ?? [])
+        let selected = snapshot.selectedLayerIDs.intersection(layers)
+        if let active = activeLayerID, selected.contains(active), selected.count > 1 { selectedLayerIDs = selected }
         isMaskSelected = keepMaskTarget && activeLayer?.mask != nil
         if changedCanvas, let document { viewport.fit(documentSize: document.size) }
     }
@@ -791,7 +822,7 @@ final class EditorSession {
                 emptyOwner=try LWSourceMetadataStorage(bytes:LWSourceMetadataStorage.sum(4096,
                     LWSourceMetadataStorage.collectionBytes(count:capacity,stride:MemoryLayout<ImageLayer>.stride)))
             } else { emptyOwner=nil }
-            history.begin(name,document:document,selection:activeLayerID,afterMetadataStorage:admitted?.metadataStorage ?? emptyOwner,origin:origin)
+            history.begin(name,document:document,selection:activeLayerID,selected:selectedLayerIDs,afterMetadataStorage:admitted?.metadataStorage ?? emptyOwner,origin:origin)
             document=admitted;return true
         } catch { brushError=error.localizedDescription;return false }
     }
@@ -799,7 +830,7 @@ final class EditorSession {
     func endEdit() {
         let revision = history.currentRevision
         if document?.metadataStorage == nil { document?.metadataStorage=history.pendingAfterMetadataStorage }
-        history.end(document: document, selection: activeLayerID)
+        history.end(document: document, selection: activeLayerID, selected: selectedLayerIDs)
         if history.currentRevision != revision { commandContextEpoch &+= 1 }
     }
     var activeLayer: ImageLayer? { document?.layers.first { $0.id == activeLayerID } }

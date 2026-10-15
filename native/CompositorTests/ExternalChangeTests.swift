@@ -221,4 +221,23 @@ struct ExternalChangeTests {
         #expect(session.document?.layers.first?.name == "Unsaved here")
         #expect(session.isModified)
     }
+
+    /// A save elsewhere that changes only the saved history (a checkpoint made, renamed or deleted, or undo steps)
+    /// rewrites nothing else in the package; the open project still sees it and follows, so its next save does not
+    /// overwrite that history unseen.
+    @Test func aChangeToOnlyTheSavedHistoryElsewhereIsSeen() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try await savedProject(in: root)
+        let controller = try await opened(url)
+        let digest = try ProjectDigest.compute(for: url), manifest = try Data(contentsOf: url.appendingPathComponent("manifest.json"))
+        let elsewhere = HistoryFixture.controller()
+        #expect(await elsewhere.open(url))
+        #expect(elsewhere.session.createCheckpoint(named: "Made Elsewhere") != nil)
+        #expect(await elsewhere.save(), "\(elsewhere.notices)")
+        #expect(try Data(contentsOf: url.appendingPathComponent("manifest.json")) == manifest, "only the saved history changed")
+        #expect(try ProjectDigest.compute(for: url) != digest, "the saved history is part of what the package holds")
+        #expect(await eventually { controller.externalChanges.reloadCount == 1 })
+        #expect(controller.session.history.checkpoints.map(\.name) == ["Made Elsewhere"] && !controller.session.isModified)
+    }
 }

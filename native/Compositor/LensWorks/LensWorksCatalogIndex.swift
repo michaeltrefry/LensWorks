@@ -151,6 +151,14 @@ actor LensWorksCatalogIndex {
         }
         return true
     }
+    /// Forgets a working version whose package is gone (deleted or moved to the Trash). The package is the
+    /// authority: this only stops the index listing it.
+    func remove(_ project: URL) throws {
+        let canonical = project.resolvingSymlinksInPath().standardizedFileURL.path
+        try statement("DELETE FROM versions WHERE path=? OR path=?", strings: [canonical, project.path]) { prepared in
+            guard sqlite3_step(prepared) == SQLITE_DONE else { throw failure() }
+        }
+    }
     /// The deprecated defaults array is admitted once, on this background actor. Failed records remain
     /// in defaults for explicit reconciliation; no path is truncated or silently discarded.
     func migrateLegacyDefaults(defaults: UserDefaults, retry: Bool = false) -> [String] {

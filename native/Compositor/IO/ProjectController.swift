@@ -18,6 +18,25 @@ final class ProjectController {
     /// Whether saving a catalog working version records it in the app's shared version index and as the last one
     /// opened (tests turn this off so a fixture never lands in the person's own).
     var sharesWorkingVersions = true
+    /// The history storage limits a save works to. Tests supply their own.
+    var historySettings: () -> LWHistorySettings = { LWHistorySettingsCenter.shared.settings }
+    /// Stands in for the process dying part-way through a history write (tests only).
+    var historyFault: (@Sendable (LWHistoryArchive.Stage) throws -> Void)?
+    /// Test seams: they answer a question that would otherwise go to the person in an alert, so no window appears.
+    /// They are read only under XCTest (`LensWorksUserState.isTesting`): in the app nothing answers a loss question
+    /// but the person's alert, so nothing in the product can make an `LWLossConfirmation` for itself.
+    var answerLoss: ((LWLossQuestion) async -> Bool)?
+    var answerName: ((LWNameQuestion) async -> String?)?
+    /// With this set, errors and notices are recorded in `notices` instead of raising an alert (tests set it).
+    var collectsNotices = false
+    private var warnedHistoryStorage: HistoryStorageWarning?
+    /// The storage limit the person has been told removes undo steps from this document at a save.
+    private var notifiedPruneLimit: Int64?
+    var notices: [String] = []
+    /// Where version commands look up and record a photo's working versions.
+    var versionIndex = LensWorksCatalogIndex.shared
+    /// How a deleted version's package leaves its folder: to the Trash, so the person can still take it back.
+    var removeVersionPackage: @Sendable (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
     private(set) var sourceCloseRequested = false
     private var standaloneCloseConfirmed = false
     /// Keeps the document in step with its package when something else writes it. See ProjectController+ExternalChanges.
@@ -46,7 +65,7 @@ final class ProjectController {
         // while the package is written in the background, as in Photoshop.
         session.isProjectBusy = false
         guard let prepared else { return false }
-        return await write(prepared.snapshot, to: prepared.destination, revision: prepared.revision, workingVersion: prepared.workingVersion)
+        return await write(prepared.snapshot, to: prepared.destination, revision: prepared.revision, workingVersion: prepared.workingVersion, history: prepared.history)
     }
 
     /// Points the open working version at its original's current (relinked) location. Identity,
@@ -60,6 +79,13 @@ final class ProjectController {
     /// The save still writing, if any. Close, quit and replacing the document wait for it.
     private var writing: Task<Bool, Never>?
     func finishWriting() async { if let writing { _ = await writing.value } }
+    /// Waits for a save under way to finish: one still capturing the document, then its write.
+    func finishSaving() async {
+        await session.waitForProjectAccess()
+        await finishWriting()
+    }
+    /// Whether a save is still writing the package.
+    var isWriting: Bool { writing != nil }
 
     func exportPNG() async {
         guard session.document != nil, begin() else { return }
@@ -238,13 +264,23 @@ final class ProjectController {
     private func saveCurrent(asNew: Bool = false) async -> Bool {
         guard session.document != nil else { return true }
         guard let prepared = await prepareSave(asNew: asNew) else { return false }
-        return await write(prepared.snapshot, to: prepared.destination, revision: prepared.revision, workingVersion: prepared.workingVersion)
+        return await write(prepared.snapshot, to: prepared.destination, revision: prepared.revision, workingVersion: prepared.workingVersion, history: prepared.history)
     }
 
     /// The document as it is now, and where it goes: asks with the Save panel when it has no file yet (or Save As).
-    private func prepareSave(asNew: Bool, suppliedDestination: URL? = nil) async -> (snapshot: ProjectSnapshot, destination: URL, revision: UUID, workingVersion: LensWorksWorkingVersion?)? {
-        let revision = session.history.currentRevision
+    private func prepareSave(asNew: Bool, suppliedDestination: URL? = nil) async -> (snapshot: ProjectSnapshot, destination: URL, revision: DocumentHistory.SaveToken, workingVersion: LensWorksWorkingVersion?, history: LWHistoryArchive.Capture)? {
+        let settings = historySettings()
+        session.history.entryLimit = settings.stepLimit
+        // The document as it is now is the state a save captures, under a name of its own when it was changed
+        // outside history since a checkpoint or step recorded the state at the cursor.
+        session.history.reconcileCursor(with: session.document)
+        let revision = session.history.saveToken
         guard let snapshot = session.projectSnapshot() else { return nil }
+        // History is captured with the document, in the same instant, so both describe one state.
+        var history: LWHistoryArchive.Capture
+        do { history = try session.historyCapture(limitBytes: settings.storageLimitBytes) }
+        catch { await showError("Couldn’t save the project", error: error); return nil }
+        history.fault = historyFault
         var destination = suppliedDestination ?? (asNew ? nil : session.projectURL)
         if destination == nil {
             let panel = NSSavePanel()
@@ -260,14 +296,22 @@ final class ProjectController {
             destination = url
         }
         guard let destination else { return nil }
+        // The package holds undo history and checkpoints a newer build wrote. This build cannot read them, and a
+        // save over the package would leave them out: that is only done once the person has said so.
+        if let schema = session.newerHistorySchema, let open = session.projectURL,
+           destination.resolvingSymlinksInPath().standardizedFileURL.path == open.resolvingSymlinksInPath().standardizedFileURL.path {
+            guard await confirmLoss(.init(title: "Save without this document’s saved history?",
+                message: "A newer version of LensWorks saved undo history and checkpoints in “\(open.lastPathComponent)” (history format \(schema)). This version cannot read them, and saving here removes them from the document for good. Use Save As to keep this file as it is.",
+                button: "Save and Remove History"), subject: session.document?.id ?? UUID()) != nil else { return nil }
+        }
         do {
             let version = try await LensWorksVersionStore.shared.versionForDestination(workingVersion, destination: destination)
-            return (snapshot, destination, revision, version)
+            return (snapshot, destination, revision, version, history)
         } catch { await showError("Destination protected", error: error); return nil }
     }
 
     /// Writes a captured document in the background. Only that captured version counts as saved.
-    private func write(_ snapshot: ProjectSnapshot, to destination: URL, revision: UUID, workingVersion savedVersion: LensWorksWorkingVersion?) async -> Bool {
+    private func write(_ snapshot: ProjectSnapshot, to destination: URL, revision: DocumentHistory.SaveToken, workingVersion savedVersion: LensWorksWorkingVersion?, history: LWHistoryArchive.Capture) async -> Bool {
         let task = Task { @MainActor [self] () -> Bool in
             let scoped = destination.startAccessingSecurityScopedResource()
             defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
@@ -276,7 +320,7 @@ final class ProjectController {
             defer { externalChanges.saving = false }
             do {
                 let quickLook = try await ImageExporter.shared.quickLookImages(snapshot)
-                try await ProjectStore.shared.save(snapshot, to: destination, quickLook: quickLook, workingVersion: savedVersion)
+                let commit = try await ProjectStore.shared.save(snapshot, to: destination, quickLook: quickLook, workingVersion: savedVersion, history: history)
                 if var version = savedVersion {
                     version.projectPath = destination.path
                     workingVersion = version
@@ -291,11 +335,32 @@ final class ProjectController {
                 }
                 session.projectURL = destination
                 session.history.markSaved(revision)
+                if let commit { session.applyHistorySave(commit, snapshot: snapshot) }
+                await refreshSiblingVersions()
+                // Asked once per change in what is protected, not on every save.
+                if let warning = session.historyStorageWarning {
+                    if warning.checkpoints != warnedHistoryStorage?.checkpoints || warning.limitBytes != warnedHistoryStorage?.limitBytes {
+                        warnedHistoryStorage = warning
+                        notifiedPruneLimit = warning.limitBytes
+                        await presentHistoryStorageWarning()
+                    }
+                } else {
+                    warnedHistoryStorage = nil
+                    // Undo steps left this session's Undo with the save: the person is told how many and why, once
+                    // for a limit (the History Storage panel keeps showing what the last save removed).
+                    if let notice = session.historyPruneNotice, notice.limitBytes != notifiedPruneLimit {
+                        notifiedPruneLimit = notice.limitBytes
+                        await showNotice("Saving removed undo steps to stay within the history storage limit", notice.message)
+                    }
+                }
                 saveGeneration += 1
                 if recordsRecentProjects { RecentProjects.shared.note(destination) }
                 await rememberProjectDigest(for: destination)
                 watchProject(at: destination)
                 if let registrationError { await showError("The project was saved; its catalog registration needs reconciliation", error: registrationError) }
+                if let commit, !commit.lost.isEmpty {
+                    await showNotice("Some saved history could not be kept", "Its saved state was no longer in the project: " + commit.lost.joined(separator: ", ") + ".")
+                }
                 return true
             } catch {
                 await showError("Couldn’t save the project", error: error)
@@ -348,8 +413,11 @@ final class ProjectController {
                 snapshot = try await ProjectStore.shared.load(from: source)
                 try agentRequest?.admit(snapshot)
             }
+            // Before the package's history is taken up: it is adopted within the step limit, newest steps first.
+            session.history.entryLimit = historySettings().stepLimit
             session.installProject(snapshot, from: source)
             workingVersion = snapshot.workingVersion
+            await refreshSiblingVersions()
             if recordsRecentProjects { RecentProjects.shared.note(source) }
             await rememberProjectDigest(for: source)
             watchProject(at: source)
@@ -432,8 +500,9 @@ final class ProjectController {
     /// Set on the one controller an agent's file command is driving, for as long as it runs: an error there goes back
     /// to the agent instead of into an alert. Every other project's errors still reach the person.
     var agentRequest: ProjectAgentRequest?
-    private func showError(_ title: String, error: Error) async {
+    func showError(_ title: String, error: Error) async {
         if let agentRequest { agentRequest.failure = agentRequest.failure ?? title + ": " + error.localizedDescription; return }
+        if collectsNotices { notices.append(title + ": " + error.localizedDescription); return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title
@@ -442,7 +511,7 @@ final class ProjectController {
         _ = await show(alert)
     }
 
-    private func show(_ alert: NSAlert) async -> NSApplication.ModalResponse {
+    func show(_ alert: NSAlert) async -> NSApplication.ModalResponse {
         if let window { return await alert.beginSheetModal(for: window) }
         return alert.runModal()
     }
