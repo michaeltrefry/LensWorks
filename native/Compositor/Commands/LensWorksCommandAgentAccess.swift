@@ -102,7 +102,8 @@ extension LensWorksCommandID {
              .addToVirtualFolder, .removeFromVirtualFolder, .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder,
              .showNestedKeywords, .addKeyword, .removeKeyword, .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword,
              .sortBy, .sortDirection, .ratePhotos, .flagPhotos, .labelPhotos, .moveCatalogSelection, .selectPhotos,
-             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters:
+             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters,
+             .mergeHDR, .cancelMergeHDR, .selectHDRSources:
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
         case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
@@ -154,10 +155,11 @@ extension LensWorksCommandID {
             // Running it again with the previous value restores what it changed. A located folder goes back with the
             // review's own Undo in Locate Originals; the person is still asked, because it re-points originals.
             (.inverse, [.renameVirtualFolder, .moveVirtualFolder, .rating, .closeProject, .locateFolder]),
-            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor]),
+            // A merge to HDR writes a new DNG under a name no file has (never replacing one) and adds it to the catalog.
+            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor, .mergeHDR]),
             (.transient, [.firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
                           .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
-                          .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors]),
+                          .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors, .cancelMergeHDR, .selectHDRSources]),
             // Document history, or the catalog's own recipe and organization history (a deleted keyword too: the
             // person is still asked, because its menu marks it destructive).
             (.history, [.visibility, .opacity, .rename, .importImages, .cut, .paste, .fillForeground, .fillBackground, .clearSelectionPixels,

@@ -518,6 +518,8 @@ struct LensWorksAgentCatalogCommands {
     /// Why `admission` cannot run on the catalog as it stands, or nil. Checked for every member before a batch runs.
     func availability(_ admission: LensWorksAgentAdmission) -> String? {
         guard catalog.catalogPath != nil else { return "Open a catalog first." }
+        // A running merge holds the catalog busy; cancelling it is what is available then.
+        if admission.id == .cancelMergeHDR { return catalog.hdrMergeCancelReason }
         guard !catalog.isBusy else { return "Finish the current catalog operation first." }
         do {
             try catalog.admitCatalogWork()
@@ -532,6 +534,8 @@ struct LensWorksAgentCatalogCommands {
             case .addKeyword, .removeKeyword, .renameKeyword, .addSynonym, .deleteKeyword: _ = try keyword(arguments)
             case .selectPhotos: _ = try photos(try arguments.strings("photos") ?? [])
             case .moveCatalogSelection: guard !catalog.assets.isEmpty else { throw refuse("There are no photos on the current catalog page.") }
+            case .mergeHDR: if let reason = catalog.hdrMergeAvailability() { throw refuse(reason) }
+            case .selectHDRSources: _ = try photos([try arguments.required("photo", try arguments.string("photo"))])
             default: break
             }
             switch admission.id {
@@ -584,10 +588,46 @@ struct LensWorksAgentCatalogCommands {
         case .filterLabel: let value = try choice("label"); try await catalog.setFilters(label: .some(value == "any" ? nil : value))
         case .filterAnyKeyword: try await catalog.setFilters(keyword: .some(nil))
         case .clearFilters: try await catalog.clearFilters()
+        case .mergeHDR: try await mergeHDR(arguments)
+        case .cancelMergeHDR: catalog.cancelHDRMerge()
+        case .selectHDRSources:
+            let asset = try photos([try choice("photo")])[0], folders = context.folders
+            // Rebuilding a lost link reads the merged DNG and its sources' originals: files no argument names, held to
+            // the granted folders like one that is named.
+            try await catalog.selectHDRMergeSources(of: asset) { file in
+                do { _ = try folders.admit(file.path) }
+                catch let refusal as LensWorksCommandRefusal { throw LensWorksCommandRefusal(reason: "A file the HDR merge link is read from: " + refusal.reason) }
+            }
         default: throw refuse("\(admission.id.rawValue) is not a catalog command.")
         }
         guard catalog.scopeIsCurrent(scope) else { throw refuse("The catalog changed while the command ran.") }
         if let failure = catalog.error { catalog.error = prior; throw refuse(failure) }
+    }
+}
+
+extension LensWorksAgentCatalogCommands {
+    /// Merge to HDR… on the current selection, as the sheet's Merge button runs it. The originals it reads and the
+    /// folder it writes the new DNG into are not named by an argument, so each is found and held to the granted folders
+    /// before anything is read or written, and the merge runs only while the selection still reaches those originals.
+    func mergeHDR(_ arguments: LensWorksAgentArguments) async throws {
+        let deghost = try arguments.bool("deghost") ?? true
+        let rows = try await catalog.index.selection(owner: catalog.selectionOwnerForCommands)
+        guard Int64(rows.count) == catalog.selectionCount else { throw LensWorksCommandRefusal(reason: "The selection changed while Merge to HDR was starting. Try again.") }
+        var originals: [String] = []
+        for row in rows {
+            let url: URL
+            do { url = try await catalog.service.originalLocation(row.key).localFileURL() }
+            catch { throw LensWorksCommandRefusal(reason: error.localizedDescription) }
+            do { _ = try context.folders.admit(url.path) }
+            catch let refusal as LensWorksCommandRefusal { throw LensWorksCommandRefusal(reason: "A source photo’s original: " + refusal.reason) }
+            originals.append(url.path)
+        }
+        guard let first = originals.first else { throw LensWorksCommandRefusal(reason: "Select two or more bracketed photos.") }
+        let folder = URL(fileURLWithPath: first).deletingLastPathComponent()
+        do { _ = try context.folders.admit(folder.path) }
+        catch let refusal as LensWorksCommandRefusal { throw LensWorksCommandRefusal(reason: "The folder the merged photo is written into: " + refusal.reason) }
+        do { _ = try await context.folders.withAccess(to: folder) { try await catalog.mergeSelectionToHDR(deghost: deghost, admitted: originals) } }
+        catch is CancellationError { throw LensWorksCommandRefusal(reason: "Merge to HDR was canceled: nothing was added to the catalog.") }
     }
 }
 

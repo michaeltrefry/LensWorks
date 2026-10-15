@@ -10,6 +10,11 @@ nonisolated struct LensWorksHDRMergeOutcome: Sendable {
     let result: LWHDRMergeResult
 }
 
+/// A file the caller's `admit` check refused while rebuilding a merge link: passed through, never read as offline.
+nonisolated struct LensWorksHDRSourceRefusal: Error {
+    let error: Error
+}
+
 extension LensWorksCatalog {
     var isMergingHDR: Bool { hdrMerge != nil }
     /// Why Merge to HDR… is unavailable now, or nil when the selection can be merged.
@@ -76,12 +81,13 @@ extension LensWorksCatalog {
     /// imports that one file into this catalog, records its sources against it and selects it.
     /// Sources are only read; their bytes are re-verified before the DNG is put in place.
     /// Cancelling (the Cancel command, the calling task, or the catalog scope ending) stops the
-    /// merge and leaves no file.
-    func mergeSelectionToHDR(deghost: Bool = true) async throws -> LensWorksHDRMergeOutcome {
+    /// merge and leaves no file. `admitted` is what an agent's request was checked against (each source original's
+    /// path, in selection order): with it, nothing is read or written unless the selection still reaches exactly those.
+    func mergeSelectionToHDR(deghost: Bool = true, admitted: [String]? = nil) async throws -> LensWorksHDRMergeOutcome {
         try admitCatalogWork()
         if let reason = hdrMergeAvailability() { throw LensWorksCatalogError.message(reason) }
         let scope = captureScope()
-        let task = Task { try await self.performHDRMerge(deghost: deghost, scope: scope) }
+        let task = Task { try await self.performHDRMerge(deghost: deghost, checked: admitted, scope: scope) }
         hdrMerge = task; hdrMergeAdmitting = false
         defer { hdrMerge = nil; hdrMergeAdmitting = false }
         do {
@@ -94,7 +100,7 @@ extension LensWorksCatalog {
         }
     }
 
-    private func performHDRMerge(deghost: Bool, scope: LensWorksCatalogScope) async throws -> LensWorksHDRMergeOutcome {
+    private func performHDRMerge(deghost: Bool, checked: [String]?, scope: LensWorksCatalogScope) async throws -> LensWorksHDRMergeOutcome {
         let owner = selectionOwnerForCommands
         let written: (url: URL, provenance: LWHDRMergeProvenance, result: LWHDRMergeResult, sources: [LensWorksDerivedSource])
         // The file this merge has created and the catalog has not admitted: removed on any failure.
@@ -115,6 +121,10 @@ extension LensWorksCatalog {
                     let native = try await service.originalLocation(row.key)
                     try checkScope(scope)
                     let url = try native.localFileURL()
+                    // Checked before the file is read.
+                    if let checked, checked.count != rows.count || checked[originals.count] != url.path {
+                        throw LensWorksCatalogError.message("The selection or its originals changed after the request was checked: nothing was merged.")
+                    }
                     guard (try? url.checkResourceIsReachable()) == true else {
                         throw LensWorksCatalogError.message("“\(url.lastPathComponent)” is offline. Reconnect its location before merging.")
                     }

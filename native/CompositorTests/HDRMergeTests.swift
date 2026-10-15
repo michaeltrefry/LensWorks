@@ -459,7 +459,8 @@ struct HDRMergeCatalogTests {
         let config = LWManagedSessionConfig(worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: worker)), decode_worker_executable: try LWCatalogNativePath(fileURL: URL(fileURLWithPath: decode)),
             cache_root: try LWCatalogNativePath(fileURL: fixture.root.appendingPathComponent("Cache")), original_roots: [try LWCatalogNativePath(fileURL: photos)],
             limits: LWApplicationLimits(queued: 128, request_bytes: 1048576, reply_bytes: 1048576, page_rows: 100, scan_rows: 512, page_bytes: 131072, tickets: 128, ttl_seconds: 60, binary_bytes: 16777216), preview_policy: nil, preview_limits: nil)
-        let defaults = try defaults ?? #require(UserDefaults(suiteName: "LWHDR-\(UUID())"))
+        // In-memory preferences of this fixture's own: nothing reaches a preferences file.
+        let defaults = defaults ?? LensWorksUserState.defaults(testing: true)
         return (LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false), defaults)
     }
     /// A catalog over the generated bracket's folder with its three photos imported.
@@ -572,6 +573,56 @@ struct HDRMergeCatalogTests {
             #expect(session.document?.layers.count == 2)
             #expect(session.document?.layers.contains { $0.liveSource != nil } == true)
             #expect(try fixture.hashes() == before)
+        }
+    }
+
+    /// An agent runs Merge to HDR… through the registry on the current selection. The originals it
+    /// reads and the folder it writes into are held to the granted folders, its deghost argument
+    /// reaches the merge, and Select HDR Source Photos follows the link it records.
+    @Test func anAgentMergesTheSelectionOnlyInsideAGrantedFolderAndFollowsTheLink() async throws {
+        let harness = try LensWorksAutomationTests.Harness(); defer { harness.cleanUp() }
+        try await withBracketCatalog { model, fixture, sources, _ in
+            harness.catalog = model
+            let tools = harness.automation.tools
+            func invoke(_ command: String, _ arguments: [String: Any] = [:]) async -> [String: Any] {
+                await tools.call("invoke_command", arguments: ["command": command, "arguments": arguments])
+            }
+            func text(_ result: [String: Any]) -> String { ((result["content"] as? [[String: Any]])?.compactMap { $0["text"] as? String } ?? []).joined(separator: "\n") }
+            let before = try fixture.hashes()
+            let idle = await invoke("catalog.hdr.cancel")
+            #expect(idle["isError"] as? Bool == true && text(idle) == "No merge to HDR is running.", "\(text(idle))")
+            await model.select(sources[0])
+            let single = await invoke("catalog.hdr.merge")
+            #expect(single["isError"] as? Bool == true && text(single) == "Select two or more bracketed photos.", "\(text(single))")
+            await selectAll(model, sources)
+            // Nothing is granted: refused before any original is read, and nothing is written.
+            let ungranted = await invoke("catalog.hdr.merge", ["deghost": false])
+            #expect(ungranted["isError"] as? Bool == true && text(ungranted).hasPrefix("A source photo’s original: No folders are granted to automation"), "\(text(ungranted))")
+            #expect(try leftovers(fixture).isEmpty && model.assets.count == 3 && !model.isMergingHDR)
+            // A granted folder that does not hold the originals admits nothing either.
+            let elsewhere = fixture.root.appendingPathComponent("Elsewhere")
+            try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: false)
+            try harness.automation.folders.grant(elsewhere)
+            let outside = await invoke("catalog.hdr.merge", ["deghost": false])
+            #expect(outside["isError"] as? Bool == true && text(outside).contains("outside every folder granted to automation"), "\(text(outside))")
+            #expect(try leftovers(fixture).isEmpty && model.assets.count == 3)
+
+            try harness.automation.folders.grant(fixture.root.appendingPathComponent("Photos"))
+            let merged = await invoke("catalog.hdr.merge", ["deghost": false])
+            #expect(merged["isError"] as? Bool == false, "\(text(merged))")
+            #expect(LensWorksCommandDispatcher.lastInvocation?.id == .mergeHDR && LensWorksCommandDispatcher.lastOrigin == .agent)
+            #expect(try fixture.hashes() == before && model.assets.count == 4 && !model.isMergingHDR)
+            let written = try leftovers(fixture)
+            #expect(written.count == 1 && written[0].hasSuffix("-HDR.dng"), "\(written)")
+            let photo = try #require(model.selectedAsset)
+            #expect(photo.filename == written.first && !sources.contains { $0.id == photo.id })
+            let original = try await model.service.originalLocation(try #require(photo.key)).localFileURL()
+            #expect(try !LWDNGInspection(Data(contentsOf: original)).provenance().deghost)
+
+            // The agent follows the link: the three sources become the selection.
+            let followed = await invoke("catalog.hdr.selectSources", ["photo": photo.id])
+            #expect(followed["isError"] as? Bool == false && model.selection == Set(sources.map(\.id)), "\(text(followed))")
+            #expect(LensWorksCommandDispatcher.lastInvocation?.id == .selectHDRSources && LensWorksCommandDispatcher.lastOrigin == .agent)
         }
     }
 
