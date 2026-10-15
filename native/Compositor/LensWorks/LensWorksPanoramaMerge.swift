@@ -95,7 +95,7 @@ struct LensWorksPanoramaMergeButton: View {
         LensWorksMergeButton(kind: .panorama, catalog: catalog, availability: catalog.panoramaMergeAvailability(), confirming: $confirming) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Merge \(catalog.selectionCount) Photos to a Panorama").font(.headline)
-                Text("Creates a new linear floating-point DNG beside the first photo and adds it to the catalog. The originals are not changed.")
+                Text("Creates a new linear floating-point DNG beside the first photo and adds it to the catalog. The originals are not changed. Fill Edges extends colour and brightness smoothly into the uncovered border and invents no detail.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Picker("Projection", selection: $projection) {
                     ForEach(LWPanoramaProjection.allCases, id: \.self) { Text($0.title).tag($0) }

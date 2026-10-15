@@ -54,10 +54,12 @@ nonisolated struct PanoramaFixture {
         for url in files(series) { result.append(try await LensWorksCatalog.developPanoramaFrame(original: try LWCatalogNativePath(fileURL: url), url: url, frames: 3)) }
         return result
     }
-    static func tolerance() throws -> Double {
-        struct Declared: Decodable { let seam_error_max_stops: Double }
-        return try JSONDecoder().decode(Declared.self, from: Data(contentsOf: S47Generator.repository.appendingPathComponent("PANORAMA_SEAM_TOLERANCE.json"))).seam_error_max_stops
+    private struct Declared: Decodable { let seam_error_max_stops: Double, projection_error_max_stops: Double }
+    private static func declared() throws -> Declared {
+        try JSONDecoder().decode(Declared.self, from: Data(contentsOf: S47Generator.repository.appendingPathComponent("PANORAMA_SEAM_TOLERANCE.json")))
     }
+    static func tolerance() throws -> Double { try declared().seam_error_max_stops }
+    static func projectionTolerance() throws -> Double { try declared().projection_error_max_stops }
 }
 
 /// A procedural scene on the sphere of directions and pinhole views of it with known rotation:
@@ -105,18 +107,39 @@ nonisolated enum PanoramaSyntheticScene {
         func turn(_ degrees: Double, _ axis: SIMD3<Double>) -> simd_double3x3 { simd_double3x3(simd_quatd(angle: degrees * .pi / 180, axis: axis)) }
         return turn(yaw, SIMD3(0, 1, 0)) * turn(pitch, SIMD3(1, 0, 0)) * turn(roll, SIMD3(0, 0, 1))
     }
-    static func view(seed: UInt32 = PanoramaFixture.seed, rotation: simd_double3x3, width: Int = 320, height: Int = 240, focal: Double = 300, gain: Double = 1) throws -> LWMergeFrame {
+    /// A pinhole view. `gain` is the frame's exposure per channel, `noise` the standard deviation of
+    /// seeded sensor noise as a share of the signal, and `clip` the level the sensor saturates at.
+    /// `radiance` replaces the scene (it is given the world direction of each pixel's ray).
+    static func view(seed: UInt32 = PanoramaFixture.seed, rotation: simd_double3x3, width: Int = 320, height: Int = 240, focal: Double = 300,
+                     gain: SIMD3<Double> = SIMD3(repeating: 1), noise: Double = 0, noiseSeed: UInt64 = 1, clip: Double? = nil,
+                     radiance custom: ((SIMD3<Double>) -> SIMD3<Double>)? = nil) throws -> LWMergeFrame {
         var samples = [Float16](repeating: 0, count: width * height * 3)
+        var state = (noiseSeed &* 0x9E3779B97F4A7C15) | 1
+        func uniform() -> Double { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return Double(state >> 11) / Double(1 << 53) }
+        func normal() -> Double { (-2 * log(max(uniform(), 1e-12))).squareRoot() * cos(2 * .pi * uniform()) }
         for y in 0..<height {
             for x in 0..<width {
                 let d = rotation * SIMD3((Double(x) - Double(width - 1) / 2) / focal, (Double(y) - Double(height - 1) / 2) / focal, 1)
-                let value = radiance(seed, d) * gain, o = (y * width + x) * 3
+                var value = (custom?(d) ?? radiance(seed, d)) * gain
+                if noise > 0 { value *= SIMD3(1 + noise * normal(), 1 + noise * normal(), 1 + noise * normal()) }
+                if let clip { value = simd_min(value, SIMD3(repeating: clip)) }
+                let o = (y * width + x) * 3
                 samples[o] = Float16(value.x); samples[o + 1] = Float16(value.y); samples[o + 2] = Float16(value.z)
             }
         }
         return try LWMergeFrame(width: width, height: height, samples: samples)
     }
     static func views(_ rotations: [simd_double3x3]) throws -> [LWMergeFrame] { try rotations.map { try view(rotation: $0) } }
+    static func latitude(_ d: SIMD3<Double>) -> Double { atan2(d.y, (d.x * d.x + d.z * d.z).squareRoot()) * 180 / .pi }
+    static func longitude(_ d: SIMD3<Double>) -> Double { atan2(d.x, d.z) * 180 / .pi }
+    /// The scene as a camera at `position` sees it along `d`, with `near` standing on the unit
+    /// sphere round the origin in front of the scene, which is infinitely far: a camera that
+    /// moves sees the near subjects shift against the scene.
+    static func parallax(from position: SIMD3<Double>, _ d: SIMD3<Double>, near: (_ longitude: Double, _ latitude: Double, _ behind: SIMD3<Double>) -> SIMD3<Double>) -> SIMD3<Double> {
+        let b = simd_dot(position, d) / simd_length_squared(d), c = (simd_length_squared(position) - 1) / simd_length_squared(d)
+        let point = position + d * (-b + (b * b - c).squareRoot())
+        return near(longitude(point), latitude(point), radiance(PanoramaFixture.seed, d))
+    }
     /// The angle, in degrees, between two rotations.
     static func angle(_ a: simd_double3x3, _ b: simd_double3x3) -> Double {
         let r = a.transpose * b
@@ -133,6 +156,61 @@ nonisolated enum PanoramaSyntheticScene {
         let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, nil)
         #expect(CGImageDestinationFinalize(destination))
+    }
+}
+
+/// Where a stitched picture's pixels look, by the projection formulas written out here and the
+/// cameras' true rotations: nothing of the stitcher's own geometry code is used.
+nonisolated enum PanoramaTruth {
+    /// The true world direction of a picture pixel. `truth` are the frames' true rotations.
+    static func direction(_ result: LWPanoramaResult, _ x: Int, _ y: Int, toTruth: simd_double3x3) -> SIMD3<Double> {
+        let geometry = result.geometry
+        let u = Double(x + result.offsetX + geometry.originX) / geometry.scale, v = Double(y + result.offsetY + geometry.originY) / geometry.scale
+        switch geometry.projection {
+        case .spherical: return toTruth * SIMD3(sin(u) * cos(v), sin(v), cos(u) * cos(v))
+        case .cylindrical: return toTruth * SIMD3(sin(u), v, cos(u))
+        case .perspective: return toTruth * SIMD3(u, v, 1)
+        }
+    }
+    /// Takes the picture's world to the true one, through the reference frame.
+    static func toTruth(_ result: LWPanoramaResult, _ truth: [simd_double3x3]) -> simd_double3x3 {
+        truth[result.alignment.reference] * result.alignment.rotations[result.alignment.reference].transpose
+    }
+    /// Mean |log2(picture / scene)| over every covered pixel and channel, in stops.
+    static func error(_ result: LWPanoramaResult, truth: [simd_double3x3], radiance: (SIMD3<Double>) -> SIMD3<Double> = { PanoramaSyntheticScene.radiance(PanoramaFixture.seed, $0) }) -> Double {
+        let turn = toTruth(result, truth)
+        var sum = 0.0, count = 0
+        for y in 0..<result.height {
+            for x in 0..<result.width where result.labels[y * result.width + x] != 255 {
+                let scene = radiance(direction(result, x, y, toTruth: turn)), picture = result.rgb(y * result.width + x)
+                for channel in 0..<3 { sum += abs(log2(Double(max(picture[channel], 1e-4)) / scene[channel])) }
+                count += 3
+            }
+        }
+        return sum / Double(max(1, count))
+    }
+    /// Each row's runs of one frame's pixels, in order; in a full circle (`cyclic`) a run that
+    /// crosses the cut is one run.
+    static func runs(_ result: LWPanoramaResult, row: Int, cyclic: Bool) -> [(frame: UInt8, length: Int)] {
+        var runs: [(frame: UInt8, length: Int)] = []
+        for x in 0..<result.width {
+            let label = result.labels[row * result.width + x]
+            if let last = runs.last, last.frame == label { runs[runs.count - 1].length += 1 } else { runs.append((label, 1)) }
+        }
+        if cyclic, runs.count > 1, runs[0].frame == runs[runs.count - 1].frame { runs[0].length += runs.removeLast().length }
+        return runs
+    }
+    /// Mean step, in stops of luminance, between a full circle's last column and its first beyond the scene's own step there.
+    static func stepAcrossTheCut(_ result: LWPanoramaResult, truth: [simd_double3x3]) -> Double {
+        let turn = toTruth(result, truth), last = result.width - 1
+        func stops(_ v: SIMD3<Double>) -> Double { log2(0.2126 * v.x + 0.7152 * v.y + 0.0722 * v.z + 1e-4) }
+        var sum = 0.0
+        for y in 0..<result.height {
+            let picture = abs(stops(SIMD3<Double>(result.rgb(y * result.width))) - stops(SIMD3<Double>(result.rgb(y * result.width + last))))
+            let scene = abs(stops(PanoramaSyntheticScene.radiance(PanoramaFixture.seed, direction(result, 0, y, toTruth: turn))) - stops(PanoramaSyntheticScene.radiance(PanoramaFixture.seed, direction(result, last, y, toTruth: turn))))
+            sum += max(0, picture - scene)
+        }
+        return sum / Double(result.height)
     }
 }
 
@@ -281,52 +359,341 @@ struct PanoramaMergeTests {
         #expect(try LWPanoramaStitcher.largestCoveredRectangle([UInt8](repeating: 1, count: 12), width: 4, height: 3) == LWPanoramaStitcher.Region(x0: 0, y0: 0, x1: 4, y1: 3))
     }
 
-    /// Two frames, five in a row and a two-row grid: the global alignment is not tied to three frames or to one row.
-    @Test func twoFramesFiveFramesAndATwoRowGridStitch() throws {
+    /// Two frames, five in a row, a two-row grid and portrait frames; the five with sensor noise
+    /// and in shuffled order: the global alignment is not tied to three frames, to one row, to
+    /// the order the photos are given in, to landscape frames or to clean ones.
+    @Test func twoFramesFiveFramesAGridPortraitShuffledAndNoisyFramesStitch() throws {
         let tolerance = try PanoramaFixture.tolerance()
-        let layouts: [(String, [simd_double3x3], Int)] = [
-            ("two", [Scene.rotation(yaw: -12), Scene.rotation(yaw: 13, pitch: 1)], 1),
-            ("five", (0..<5).map { Scene.rotation(yaw: Double($0) * 25 - 50, pitch: Double($0 % 2), roll: Double($0) * 0.4 - 0.8) }, 4),
-            ("grid", [Scene.rotation(yaw: -13, pitch: -10), Scene.rotation(yaw: 13, pitch: -11), Scene.rotation(yaw: -12, pitch: 11), Scene.rotation(yaw: 14, pitch: 10)], 4),
+        let five = (0..<5).map { Scene.rotation(yaw: Double($0) * 25 - 50, pitch: Double($0 % 2), roll: Double($0) * 0.4 - 0.8) }
+        let shuffled = [3, 0, 4, 1, 2].map { five[$0] }
+        let portrait = (0..<4).map { Scene.rotation(yaw: Double($0) * 19 - 28, pitch: Double($0 % 2) - 0.5, roll: 0.5 - Double($0) * 0.3) }
+        // Noise with a standard deviation of 1 % of the signal, different in every frame.
+        func noisy(_ rotations: [simd_double3x3]) throws -> [LWMergeFrame] { try rotations.enumerated().map { try Scene.view(rotation: $1, noise: 0.01, noiseSeed: UInt64($0 + 1)) } }
+        let layouts: [(String, [simd_double3x3], Int, [LWMergeFrame])] = [
+            ("two", [Scene.rotation(yaw: -12), Scene.rotation(yaw: 13, pitch: 1)], 1, []),
+            ("five", five, 4, []),
+            ("grid", [Scene.rotation(yaw: -13, pitch: -10), Scene.rotation(yaw: 13, pitch: -11), Scene.rotation(yaw: -12, pitch: 11), Scene.rotation(yaw: 14, pitch: 10)], 4, []),
+            ("five with noise", five, 4, try noisy(five)),
+            ("five shuffled", shuffled, 4, []),
+            ("five shuffled with noise", shuffled, 4, try noisy(shuffled)),
+            ("portrait", portrait, 3, try portrait.map { try Scene.view(rotation: $0, width: 240, height: 320) }),
         ]
-        for (name, rotations, pairs) in layouts {
-            let frames = try Scene.views(rotations)
+        for (name, rotations, pairs, given) in layouts {
+            let frames = try given.isEmpty ? Scene.views(rotations) : given
             let result = try LWPanoramaStitcher.stitch(frames)
             let alignment = result.alignment
             #expect(abs(alignment.focal - 300) / 300 < 0.02, "\(name) focal \(alignment.focal)")
             #expect(alignment.pairs.count >= pairs, "\(name): \(alignment.pairs)")
+            var worst = 0.0
             for index in rotations.indices.dropFirst() {
                 let solved = alignment.rotations[0].transpose * alignment.rotations[index], expected = rotations[0].transpose * rotations[index]
+                worst = max(worst, Scene.angle(solved, expected))
                 #expect(Scene.angle(solved, expected) < 0.5, "\(name) frame \(index): \(Scene.angle(solved, expected))°")
             }
             let seam = LWPanoramaSeamMetric.measure(result, frames: frames)
-            print("S44 \(name): \(result.width) × \(result.height), focal \(alignment.focal), rms \(alignment.rms) px, seam error \(seam.value)")
+            print("S44 \(name): \(result.width) × \(result.height), focal \(alignment.focal), rms \(alignment.rms) px, worst rotation error \(worst)°, seam error \(seam.value)")
             #expect(seam.value < tolerance, "\(name): \(seam.value)")
             #expect(result.uncoveredPixels == 0 && Set(result.labels).count == rotations.count)
             // A grid is taller than one frame: both rows are in the picture.
             if name == "grid" { #expect(result.height > 280 && result.width > 380, "\(result.width) × \(result.height)") }
+            if name == "portrait" { #expect(result.height > 240 && frames.allSatisfy { $0.width == 240 && $0.height == 320 }, "\(result.width) × \(result.height)") }
         }
     }
 
-    /// Twelve frames around the horizon: the canvas is the whole circle, and the frame that
-    /// straddles the ±180° cut lands on both ends of it.
-    @Test func aFullCircleStitchesAcrossTheCut() throws {
-        let tolerance = try PanoramaFixture.tolerance()
-        let frames = try Scene.views((0..<12).map { Scene.rotation(yaw: Double($0) * 30, pitch: Double($0 % 3) - 1) })
+    /// AC1 against ground truth. The seam metric resamples the frames through the stitcher's own
+    /// geometry, so it cannot tell a wrong projection from a right one. Here every covered pixel
+    /// is compared with the scene in the direction the projection's formula gives for it
+    /// (`PanoramaTruth.direction`, written out in this file) under the cameras' true rotations.
+    @Test func everyProjectionShowsTheSceneWhereItsFormulaPutsIt() throws {
+        let bound = try PanoramaFixture.projectionTolerance()
+        #expect(bound == 0.09)
+        let truth = [Scene.rotation(yaw: -13, pitch: -10), Scene.rotation(yaw: 13, pitch: -11), Scene.rotation(yaw: -12, pitch: 11), Scene.rotation(yaw: 14, pitch: 10)]
+        let frames = try Scene.views(truth)
         let (alignment, works) = try LWPanoramaStitcher.align(frames)
-        #expect(alignment.pairs.count >= 12 && abs(alignment.focal - 300) / 300 < 0.02, "\(alignment.pairs.count) pairs, focal \(alignment.focal)")
-        for projection in [LWPanoramaProjection.spherical, .cylindrical] {
-            let result = try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: projection, boundary: .autoCrop))
-            #expect(result.geometry.fullCircle && result.width == result.geometry.width)
-            #expect(abs(Double(result.width) - 2 * .pi * alignment.focal) < 2, "\(result.width)")
-            #expect(result.uncoveredPixels == 0 && Set(result.labels).count == 12)
-            // One frame owns pixels in both the first and the last column.
-            let first = Set((0..<result.height).map { result.labels[$0 * result.width] }), last = Set((0..<result.height).map { result.labels[$0 * result.width + result.width - 1] })
-            #expect(!first.intersection(last).isEmpty, "\(first) \(last)")
-            let seam = LWPanoramaSeamMetric.measure(result, frames: frames)
-            #expect(seam.value < tolerance, "\(projection): \(seam.value)")
+        for projection in LWPanoramaProjection.allCases {
+            let result = try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: projection))
+            let error = PanoramaTruth.error(result, truth: truth)
+            print("S44 ground-truth projection error, \(projection.rawValue): \(error) stops over \(result.width) × \(result.height); bound \(bound)")
+            #expect(error < bound, "\(projection): \(error)")
+            #expect(result.geometry.projection == projection && result.height > 280 && result.uncoveredPixels == 0)
         }
-        #expect(throws: LWPanoramaError.self) { try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: .perspective)) }
+    }
+
+    /// A white-balance difference between frames is a different gain in each channel. Each
+    /// channel's gain is recovered, and each channel agrees at the seams, not only luminance.
+    @Test func aWhiteBalanceDifferenceBetweenFramesIsRemovedInEveryChannel() throws {
+        let tolerance = try PanoramaFixture.tolerance()
+        let rotations = [Scene.rotation(yaw: -27, pitch: 1, roll: -0.5), Scene.rotation(yaw: 0), Scene.rotation(yaw: 28, pitch: -1, roll: 0.6)]
+        let gains = [SIMD3(1.25, 1.0, 0.8), SIMD3(1.0, 1.0, 1.0), SIMD3(0.75, 0.9, 1.2)]
+        let frames = try zip(rotations, gains).map { try Scene.view(rotation: $0, gain: $1) }
+        let result = try LWPanoramaStitcher.stitch(frames)
+        for channel in 0..<3 {
+            for frame in [0, 2] {
+                let solved = Double(log2(result.alignment.gains[frame][channel] / result.alignment.gains[1][channel])), expected = log2(gains[frame][channel] / gains[1][channel])
+                #expect(abs(solved - expected) < 0.06, "channel \(channel), frame \(frame): \(solved) stops for \(expected)")
+            }
+        }
+        var worst = 0.0
+        for (name, weights) in [("R", SIMD3<Float>(1, 0, 0)), ("G", SIMD3<Float>(0, 1, 0)), ("B", SIMD3<Float>(0, 0, 1))] {
+            let seam = LWPanoramaSeamMetric.measure(result, frames: frames, weights: weights)
+            print("S44 white balance, channel \(name): seam error \(seam.value) (A \(seam.agreement), D \(seam.step))")
+            #expect(seam.bandPixels > 2000 && seam.seamPairs > 200)
+            worst = max(worst, seam.value)
+        }
+        #expect(worst < tolerance, "\(worst)")
+        // The picture is the scene's colour, to within the set's mean gain in each channel.
+        let turn = PanoramaTruth.toTruth(result, rotations)
+        for channel in 0..<3 {
+            let mean = pow(gains[0][channel] * gains[1][channel] * gains[2][channel], 1.0 / 3)
+            var sum = 0.0, count = 0
+            for y in stride(from: 0, to: result.height, by: 3) {
+                for x in stride(from: 0, to: result.width, by: 3) {
+                    let scene = Scene.radiance(PanoramaFixture.seed, PanoramaTruth.direction(result, x, y, toTruth: turn))[channel] * mean
+                    sum += log2(Double(max(result.rgb(y * result.width + x)[channel], 1e-4)) / scene); count += 1
+                }
+            }
+            #expect(abs(sum / Double(count)) < 0.06, "channel \(channel) is \(sum / Double(count)) stops from the scene")
+        }
+    }
+
+    /// A solve that asks for an absurd exposure is held: a frame's exposure within 4 stops of the
+    /// set's mean, each channel within 1 stop of the frame's exposure.
+    @Test func anAbsurdExposureSolveIsHeldWithinLimits() {
+        func stops(_ gain: SIMD3<Float>) -> [Double] { [Double(log2(gain.x)), Double(log2(gain.y)), Double(log2(gain.z))] }
+        func close(_ a: [Double], _ b: [Double]) -> Bool { zip(a, b).allSatisfy { abs($0 - $1) < 1e-5 } }
+        #expect(LWPanoramaStitcher.exposureLimitStops == 4 && LWPanoramaStitcher.channelLimitStops == 1)
+        // Ordinary values pass through.
+        #expect(close(stops(LWPanoramaStitcher.gain(luminanceStops: 0.5, channelStops: SIMD3(0.7, 0.5, 0.2))), [0.7, 0.5, 0.2]))
+        #expect(close(stops(LWPanoramaStitcher.gain(luminanceStops: -3.9, channelStops: SIMD3(-4.8, -3.9, -3))), [-4.8, -3.9, -3]))
+        // An exposure of ±30 stops is ±4; channels 10 stops either side of it are 1 stop either side.
+        #expect(close(stops(LWPanoramaStitcher.gain(luminanceStops: 30, channelStops: SIMD3(40, 20, 30))), [5, 3, 4]))
+        #expect(close(stops(LWPanoramaStitcher.gain(luminanceStops: -30, channelStops: SIMD3(-40, -20, -30))), [-5, -3, -4]))
+        #expect(close(stops(LWPanoramaStitcher.gain(luminanceStops: 0, channelStops: SIMD3(8, -8, 0.4))), [1, -1, 0.4]))
+        // Nothing that is not a number gets through.
+        #expect(close(stops(LWPanoramaStitcher.gain(luminanceStops: .nan, channelStops: SIMD3(.nan, .infinity, -.infinity))), [0, 1, -1]))
+    }
+
+    /// A sky blown in two frames of different exposure and white balance records no level and no
+    /// colour in either. In the picture it is one neutral level, the same from both frames.
+    @Test func aRegionBlownInTwoFramesIsNeutralAndLevelAcrossTheSeam() throws {
+        let tolerance = try PanoramaFixture.tolerance()
+        let rotations = [Scene.rotation(yaw: -13, pitch: 0.5), Scene.rotation(yaw: 13, pitch: -0.5)]
+        // Exposures 0.7 stop apart, and a different white balance.
+        let gains = [SIMD3(0.8, 0.8, 0.8), SIMD3(1.15, 1.0, 0.9) * 1.3]
+        // Above 6° of elevation the scene is a sky five times brighter than anything else in it.
+        func scene(_ d: SIMD3<Double>) -> SIMD3<Double> { Scene.latitude(d) < -6 ? SIMD3(3.0, 2.8, 2.5) : Scene.radiance(PanoramaFixture.seed, d) }
+        let frames = try zip(rotations, gains).map { try Scene.view(rotation: $0, gain: $1, clip: 1, radiance: scene) }
+        // The sky is at the sensor's limit in every channel of both frames.
+        for frame in frames { #expect(frame.rgb(10 * 320 + 160) == SIMD3(1, 1, 1) && frame.clipLevel == SIMD3(repeating: 0.98)) }
+        let result = try LWPanoramaStitcher.stitch(frames)
+        // The exposures are still solved, from what is not blown.
+        for channel in 0..<3 {
+            let solved = Double(log2(result.alignment.gains[1][channel] / result.alignment.gains[0][channel]))
+            #expect(abs(solved - log2(gains[1][channel] / gains[0][channel])) < 0.06, "channel \(channel): \(solved)")
+        }
+        let turn = PanoramaTruth.toTruth(result, rotations)
+        var lowest = Float.infinity, highest: Float = 0, tint: Float = 0, pixels = 0, seamPairs = 0, step: Float = 0
+        for y in 0..<result.height {
+            for x in 0..<result.width {
+                // Sky, clear of its edge, that both frames see clear of their own edges.
+                let d = PanoramaTruth.direction(result, x, y, toTruth: turn)
+                guard Scene.latitude(d) < -9, rotations.allSatisfy({ rotation in
+                    let c = rotation.transpose * d
+                    guard c.z > 0 else { return false }
+                    let px = 300 * c.x / c.z + 159.5, py = 300 * c.y / c.z + 119.5
+                    return px >= 4 && py >= 4 && px <= 315 && py <= 235
+                }) else { continue }
+                let p = y * result.width + x, value = result.rgb(p)
+                lowest = min(lowest, value.min()); highest = max(highest, value.max()); tint = max(tint, (value.max() - value.min()) / value.max()); pixels += 1
+                if x + 1 < result.width, result.labels[p] != result.labels[p + 1] {
+                    seamPairs += 1
+                    step = max(step, abs(log2(LWPanoramaSeamMetric.luminance(value) / LWPanoramaSeamMetric.luminance(result.rgb(p + 1)))))
+                }
+            }
+        }
+        print("S44 blown sky: \(pixels) pixels blown in both frames, levels \(lowest) to \(highest), worst tint \(tint), \(seamPairs) seam pairs with a worst step of \(step) stops")
+        #expect(pixels > 3000 && seamPairs > 20, "\(pixels) pixels, \(seamPairs) seam pairs")
+        #expect(tint < 0.02, "R, G and B differ by \(tint) of the level")
+        #expect(step < Float(tolerance) && log2(highest / lowest) < Float(tolerance), "step \(step), levels \(lowest) to \(highest)")
+        // It is the level of the frame with the least headroom, and nothing in the picture is brighter.
+        let ceiling = LWPanoramaStitcher.ceiling(result.alignment, clips: frames.map(\.clipLevel))
+        #expect(abs(highest - ceiling) < 0.002 && result.peak <= ceiling + 0.002 && ceiling == (0.98 / result.alignment.gains[1]).min(), "\(highest) \(ceiling) \(result.peak)")
+        #expect(LWPanoramaSeamMetric.measure(result, frames: frames).value < tolerance)
+    }
+
+    /// Twelve frames around the horizon: the canvas is the whole circle, and the frame that
+    /// straddles the ±180° cut lands on both ends of it. With the frames turned 15° the cut falls
+    /// in the overlap of two frames instead.
+    @Test func aFullCircleStitchesAcrossTheCut() throws {
+        let tolerance = try PanoramaFixture.tolerance(), projectionBound = try PanoramaFixture.projectionTolerance()
+        for (offset, projections) in [(0.0, [LWPanoramaProjection.spherical, .cylindrical]), (15.0, [.spherical])] {
+            let truth = (0..<12).map { Scene.rotation(yaw: Double($0) * 30 + offset, pitch: Double($0 % 3) - 1) }
+            let frames = try Scene.views(truth)
+            let (alignment, works) = try LWPanoramaStitcher.align(frames)
+            #expect(alignment.pairs.count >= 12 && abs(alignment.focal - 300) / 300 < 0.02, "\(alignment.pairs.count) pairs, focal \(alignment.focal)")
+            for projection in projections {
+                let result = try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: projection, boundary: .autoCrop))
+                #expect(result.geometry.fullCircle && result.width == result.geometry.width)
+                // The circle is a whole number of pixels at every pyramid level, at the nearest scale to the focal length.
+                #expect(result.width % 32 == 0 && abs(Double(result.width) - 2 * .pi * alignment.focal) <= 16 && abs(result.geometry.scale * 2 * .pi - Double(result.width)) < 1e-6, "\(result.width)")
+                #expect(result.uncoveredPixels == 0 && Set(result.labels).count == 12)
+                if offset == 0 {
+                    // One frame owns pixels in both the first and the last column.
+                    let first = Set((0..<result.height).map { result.labels[$0 * result.width] }), last = Set((0..<result.height).map { result.labels[$0 * result.width + result.width - 1] })
+                    #expect(!first.intersection(last).isEmpty, "\(first) \(last)")
+                }
+                // Round every row there is one seam between each frame and the next: no more than
+                // twelve changes of frame, and no sliver of one frame inside another's pixels.
+                var changes = 0, sliver = Int.max
+                for row in 0..<result.height {
+                    let runs = PanoramaTruth.runs(result, row: row, cyclic: true)
+                    // Round a circle a row of n runs changes frame n times.
+                    changes = max(changes, runs.count > 1 ? runs.count : 0)
+                    // A run between two runs of the same frame is a sliver of one frame inside another's pixels.
+                    for index in runs.indices where runs.count >= 3 && runs[(index + runs.count - 1) % runs.count].frame == runs[(index + 1) % runs.count].frame {
+                        sliver = min(sliver, runs[index].length)
+                    }
+                }
+                #expect(changes <= 12 && changes >= 10, "\(projection) at \(offset)°: \(changes) changes of frame in one row")
+                #expect(sliver >= 4, "\(projection) at \(offset)°: a run of \(sliver) pixels")
+                // The seam metric counts the last column and the first as neighbours.
+                let seam = LWPanoramaSeamMetric.measure(result, frames: frames)
+                #expect(seam.value < tolerance, "\(projection): \(seam.value)")
+                // The two ends meet: across the cut the picture steps by no more than the scene does, and it is the scene.
+                let cut = PanoramaTruth.stepAcrossTheCut(result, truth: truth), error = PanoramaTruth.error(result, truth: truth)
+                print("S44 full circle at \(offset)°, \(projection.rawValue): \(result.width) × \(result.height), seam error \(seam.value), step across the cut \(cut), \(changes) changes of frame per row, ground-truth error \(error)")
+                #expect(cut < tolerance, "\(projection) at \(offset)°: \(cut) stops across the cut")
+                #expect(error < projectionBound, "\(error)")
+                // Fill Edges runs round the circle too.
+                if projection == .spherical {
+                    let filled = try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: projection, boundary: .fill))
+                    #expect(filled.uncoveredPixels > 0 && filled.width == result.width)
+                    var worst: Float = 0
+                    for y in 0..<filled.height where filled.labels[y * filled.width] == 255 && filled.labels[y * filled.width + filled.width - 1] == 255 {
+                        worst = max(worst, simd_reduce_max(abs(filled.rgb(y * filled.width) - filled.rgb(y * filled.width + filled.width - 1))))
+                    }
+                    #expect(worst < 0.02, "the fill steps by \(worst) across the cut")
+                }
+            }
+            if offset == 0 {
+                #expect(throws: LWPanoramaError.self) { try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: .perspective)) }
+            }
+        }
+    }
+
+    /// A wide sweep that is not a full circle, with its photos unevenly spaced: the canvas is cut
+    /// in the stretch the photos leave out, not through the photos.
+    @Test func anUnevenPartialSweepIsCutInItsGapAndKeepsEveryFrame() throws {
+        let tolerance = try PanoramaFixture.tolerance()
+        // 0° to 270°: nine photos 15° apart, then five 30° apart. Their mean direction is far from the middle of what they cover.
+        let yaws: [Double] = [0, 15, 30, 45, 60, 75, 90, 105, 120, 150, 180, 210, 240, 270]
+        let truth = yaws.map { Scene.rotation(yaw: $0, pitch: Double(Int($0) % 2)) }
+        let frames = try Scene.views(truth)
+        let (alignment, works) = try LWPanoramaStitcher.align(frames)
+        // As aligned, the last frame points past ±180° from the mean direction.
+        let spans = LWPanoramaStitcher.spans(alignment)
+        #expect(spans.map(\.centre).max()! - spans.map(\.centre).min()! > 300 * .pi / 180, "\(spans.map { $0.centre * 180 / .pi })")
+        let gap = try #require(LWPanoramaStitcher.widestGap(spans, least: 2 / alignment.focal))
+        #expect(abs(gap.width * 180 / .pi - (360 - 270 - 2 * atan(159.5 / 300) * 180 / .pi)) < 2, "\(gap.width * 180 / .pi)°")
+        for projection in [LWPanoramaProjection.spherical, .cylindrical] {
+            let result = try LWPanoramaStitcher.compose(frames, alignment: alignment, works: works, options: LWPanoramaOptions(projection: projection))
+            #expect(!result.geometry.fullCircle)
+            #expect(Set(result.labels) == Set(0..<14), "\(Set(result.labels).sorted())")
+            // The canvas is as wide as what the photos cover: 270° and one field of view.
+            let covered = (270 * .pi / 180 + 2 * atan(159.5 / 300)) * alignment.focal
+            // The crop trades a little width for height where the frames' pitch alternates; a
+            // frame dropped from an end would cost at least its 30° (157 pixels) of its own.
+            #expect(abs(Double(result.geometry.width) - covered) < 12 && result.width > Int(covered) - 120, "\(result.geometry.width) for \(covered), crop \(result.width)")
+            #expect(result.uncoveredPixels == 0)
+            let seam = LWPanoramaSeamMetric.measure(result, frames: frames)
+            print("S44 uneven 326° sweep, \(projection.rawValue): \(result.width) × \(result.height) of a \(result.geometry.width)-wide canvas, seam error \(seam.value)")
+            #expect(seam.value < tolerance, "\(seam.value)")
+        }
+        // The widest stretch no frame sees, on frames whose stretches pass 0° and overlap.
+        func span(_ from: Double, _ to: Double) -> LWPanoramaStitcher.Span { LWPanoramaStitcher.Span(centre: (from + to) / 2 * .pi / 180, low: (from - to) / 2 * .pi / 180, high: (to - from) / 2 * .pi / 180) }
+        let found = try #require(LWPanoramaStitcher.widestGap([span(300, 400), span(10, 20), span(60, 70), span(-170, -150)], least: 0.01))
+        #expect(abs(found.middle * 180 / .pi - 130) < 1e-6 && abs(found.width * 180 / .pi - 120) < 1e-6, "\(found)")
+        #expect(LWPanoramaStitcher.widestGap([span(0, 130), span(120, 250), span(240, 361)], least: 0.01) == nil)
+        var pole = span(0, 10); pole.whole = true
+        #expect(LWPanoramaStitcher.widestGap([pole], least: 0.01) == nil)
+    }
+
+    /// Handheld sets. Each either stitches within the tolerance or is refused with a reason that
+    /// says what to do: none is written as a picture that is quietly wrong.
+    @Test func handheldSetsStitchWithinTheToleranceOrAreRefusedWithTheReason() throws {
+        let tolerance = try PanoramaFixture.tolerance()
+        let rotations = [-25.0, 0, 25].map { Scene.rotation(yaw: $0, pitch: 0.5) }
+        func worstRotationError(_ result: LWPanoramaResult, _ truth: [simd_double3x3]) -> Double {
+            truth.indices.map { Scene.angle(result.alignment.rotations[0].transpose * result.alignment.rotations[$0], truth[0].transpose * truth[$0]) }.max()!
+        }
+        // Slight parallax: the camera turns about a point behind its lens, so near posts (at
+        // distance 1) shift against the far scene by `arm` × 0.43 radians from one frame to the next.
+        func posts(_ longitude: Double, _ latitude: Double, _ behind: SIMD3<Double>) -> SIMD3<Double> {
+            let (post, noise) = Scene.shape(777, longitude, latitude, cell: 9)
+            let a = Double(noise & 0xFF) / 255, b = Double((noise >> 8) & 0xFF) / 255
+            return behind + (SIMD3(0.1 + 0.4 * a, 0.1 + 0.4 * b, 0.5 - 0.4 * a) - behind) * post
+        }
+        // A near wall over the lower half of every frame.
+        func wall(_ longitude: Double, _ latitude: Double, _ behind: SIMD3<Double>) -> SIMD3<Double> {
+            guard latitude > 2 else { return behind }
+            let lon = longitude * .pi / 180, lat = latitude * .pi / 180
+            return Scene.radiance(9191, SIMD3(sin(lon) * cos(lat), sin(lat), cos(lon) * cos(lat)))
+        }
+        func handheld(arm: Double, near: @escaping (Double, Double, SIMD3<Double>) -> SIMD3<Double>) throws -> [LWMergeFrame] {
+            try rotations.map { rotation in try Scene.view(rotation: rotation, radiance: { Scene.parallax(from: rotation[2] * arm, $0, near: near) }) }
+        }
+        // 1 pixel of parallax on the posts: stitched, within the tolerance, to the true rotations.
+        let slight = try handheld(arm: 0.008, near: posts)
+        let stitched = try LWPanoramaStitcher.stitch(slight)
+        let seam = LWPanoramaSeamMetric.measure(stitched, frames: slight)
+        print("S44 slight parallax (1.0 px on near posts): seam error \(seam.value) (A \(seam.agreement), D \(seam.step)), worst rotation error \(worstRotationError(stitched, rotations))°")
+        #expect(seam.value < tolerance && worstRotationError(stitched, rotations) < 0.5, "\(seam.value)")
+        // 8 pixels of parallax on a near wall that fills half of every frame: two alignments fit, one for the wall and one for the scene.
+        #expect(throws: LWPanoramaError.ambiguous(frame: 0, other: 1)) { try LWPanoramaStitcher.stitch(try handheld(arm: 0.06, near: wall)) }
+
+        // A scene that repeats every 8° of longitude: any whole number of repeats joins two photos equally well.
+        func repeating(_ unrepeated: Double) -> (SIMD3<Double>) -> SIMD3<Double> {
+            { d in
+                let longitude = Scene.longitude(d), latitude = Scene.latitude(d) * .pi / 180
+                let folded = (longitude - (longitude / 8).rounded(.down) * 8 - 4) * .pi / 180
+                let pattern = Scene.radiance(PanoramaFixture.seed, SIMD3(sin(folded) * cos(latitude), sin(latitude), cos(folded) * cos(latitude)))
+                return pattern + (Scene.radiance(4242, d) - pattern) * unrepeated
+            }
+        }
+        let sweep = [Scene.rotation(yaw: -13, pitch: 0.5), Scene.rotation(yaw: 13, pitch: -0.5), Scene.rotation(yaw: 37, pitch: 0.3)]
+        #expect(throws: LWPanoramaError.ambiguous(frame: 0, other: 1)) { try LWPanoramaStitcher.stitch(try sweep.map { try Scene.view(rotation: $0, radiance: repeating(0)) }) }
+        // With detail that does not repeat mixed in, the same sweep is joined the one right way.
+        let mixed = try sweep.map { try Scene.view(rotation: $0, radiance: repeating(0.4)) }
+        let joined = try LWPanoramaStitcher.stitch(mixed)
+        let projectionBound = try PanoramaFixture.projectionTolerance()
+        let mixedSeam = LWPanoramaSeamMetric.measure(joined, frames: mixed), mixedTruth = PanoramaTruth.error(joined, truth: sweep, radiance: repeating(0.4))
+        print("S44 repeating pattern with 40 % unrepeated detail: seam error \(mixedSeam.value), worst rotation error \(worstRotationError(joined, sweep))°, ground-truth error \(mixedTruth)")
+        #expect(mixedSeam.value < tolerance && worstRotationError(joined, sweep) < 0.5 && mixedTruth < projectionBound, "\(mixedSeam.value) \(mixedTruth)")
+        #expect(joined.alignment.pairs.allSatisfy { $0.rival < 12 }, "\(joined.alignment.pairs)")
+
+        // A flat subject photographed from two positions: the two photos match point for point (a
+        // homography joins them), but no turn of one camera does.
+        let flat = try Scene.view(rotation: Scene.rotation(yaw: 0))
+        let homography = simd_double3x3(rows: [SIMD3(1.12, 0.05, 60), SIMD3(0.03, 0.92, 5), SIMD3(2e-4, -1e-4, 1)]).inverse
+        var samples = [Float16](repeating: 0, count: 320 * 240 * 3)
+        for y in 0..<240 {
+            for x in 0..<320 {
+                let p = homography * SIMD3(Double(x) - 159.5, Double(y) - 119.5, 1)
+                let value = Scene.radiance(PanoramaFixture.seed, SIMD3(p.x / p.z / 300, p.y / p.z / 300, 1)), o = (y * 320 + x) * 3
+                samples[o] = Float16(value.x); samples[o + 1] = Float16(value.y); samples[o + 2] = Float16(value.z)
+            }
+        }
+        do { _ = try LWPanoramaStitcher.stitch([flat, try LWMergeFrame(width: 320, height: 240, samples: samples)]); Issue.record("Photos from two positions were stitched.") }
+        catch let error as LWPanoramaError {
+            guard case .notOnePanorama(let rms) = error else { Issue.record("\(error)"); return }
+            #expect(rms > 4.5 && rms < 30, "\(rms)")
+            #expect(error.message() == String(format: "These photos match each other but do not fit together as one panorama (they disagree by %.0f pixels). They may have been taken from different positions.", rms))
+        }
+        let names = ["left.dng", "right.dng"]
+        #expect(LWPanoramaError.ambiguous(frame: 0, other: 1).message(names: names) == "“left.dng” and “right.dng” can be joined in two different ways. Either the scene repeats (a fence, bricks, rows of windows), or near and far subjects line up differently because the camera changed position. Reshoot turning the camera about its lens, with something that does not repeat in the overlap, or leave one of the two out.")
+        // No figure when no alignment was found at all.
+        #expect(LWPanoramaError.notOnePanorama(rmsPixels: .infinity).message() == "These photos match each other but do not fit together as one panorama. They may have been taken from different positions.")
+        #expect(LWPanoramaError.notOnePanorama(rmsPixels: .nan).message() == LWPanoramaError.notOnePanorama(rmsPixels: .infinity).message())
     }
 
     /// The reasons a person can act on, with the photos named.
@@ -412,7 +779,10 @@ struct PanoramaMergeTests {
         let fixture = try PanoramaFixture.make(); defer { try? FileManager.default.removeItem(at: fixture.root) }
         let frames = try await fixture.developed("exposure"), truth = fixture.frames("exposure")
         let result = try LWPanoramaStitcher.stitch(frames, options: LWPanoramaOptions(projection: .cylindrical))
+        // The brightest sample is found when the picture is composed; the DNG's normalization reads it.
+        #expect(result.peak == Float(result.samples.max()!) && result.peak > 0.3)
         let scale = LWPanoramaDNGWriter.normalization(result)
+        #expect(scale == 1 / result.peak)
         let provenance = LWPanoramaProvenance(documentID: UUID().uuidString, projection: .cylindrical, boundary: .autoCrop, focalPixels: result.alignment.focal,
             baselineExposure: Double(-log2(scale)), sources: truth.indices.map { i in
                 .init(record: LWDerivedSourceRecord(catalogImageID: "image-\(i)", assetID: "asset-\(i)", variantID: "master", fileName: i == 0 ? "a & <b>.png" : fixture.file(truth[i]).lastPathComponent, sha256: truth[i].sha256),

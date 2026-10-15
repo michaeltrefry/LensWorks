@@ -53,11 +53,9 @@ nonisolated struct LWPanoramaProvenance: Equatable, Sendable {
 
 /// Writes a stitched panorama through the shared linear float DNG writer (LinearDNG.swift).
 nonisolated enum LWPanoramaDNGWriter {
-    static func normalization(_ result: LWPanoramaResult) -> Float {
-        var peak: Float = 0
-        result.samples.withUnsafeBufferPointer { samples in for value in samples { peak = max(peak, Float(value)) } }
-        return LWLinearDNGWriter.normalization(peak: peak)
-    }
+    /// What the samples are multiplied by so the brightest is 1.0. The peak was found when the
+    /// picture was composed, so this reads nothing.
+    static func normalization(_ result: LWPanoramaResult) -> Float { LWLinearDNGWriter.normalization(peak: result.peak) }
     private static func header(_ result: LWPanoramaResult, _ provenance: LWPanoramaProvenance, _ reference: [String: String]) -> LWLinearDNGWriter.Header {
         LWLinearDNGWriter.Header(width: result.width, height: result.height, software: "LensWorks Merge to Panorama", model: "LensWorks Panorama Merge",
             xmp: provenance.xmp(reference: reference), baselineExposure: provenance.baselineExposure)

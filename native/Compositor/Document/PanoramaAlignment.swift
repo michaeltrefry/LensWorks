@@ -31,6 +31,9 @@ nonisolated enum LWPanoramaError: Error, Equatable {
     case unmatched(frame: Int)
     /// Two photos that show the same detail, but in too thin a strip to join them reliably.
     case insufficientOverlap(frame: Int, other: Int)
+    /// Two photos that can be joined in two different ways: a second alignment explains a good
+    /// part of the detail the first leaves out.
+    case ambiguous(frame: Int, other: Int)
     /// The photos match pairwise but not as views from one position.
     case notOnePanorama(rmsPixels: Double)
     case tooWideForPerspective(degrees: Int)
@@ -51,8 +54,12 @@ nonisolated enum LWPanoramaError: Error, Equatable {
             return "\(name(frame)) does not match any of the other photos. Remove it from the selection, or add a photo that overlaps it."
         case .insufficientOverlap(let frame, let other):
             return "\(name(frame)) and \(name(other)) overlap too little to be joined. Add a photo taken between them, or reshoot with about a third of each photo overlapping the next."
+        case .ambiguous(let frame, let other):
+            return "\(name(frame)) and \(name(other)) can be joined in two different ways. Either the scene repeats (a fence, bricks, rows of windows), or near and far subjects line up differently because the camera changed position. Reshoot turning the camera about its lens, with something that does not repeat in the overlap, or leave one of the two out."
         case .notOnePanorama(let rms):
-            return String(format: "These photos match each other but do not fit together as one panorama (they disagree by %.0f pixels). They may have been taken from different positions.", rms)
+            // No figure when no alignment was found at all.
+            let figure = rms.isFinite ? String(format: " (they disagree by %.0f pixels)", rms) : ""
+            return "These photos match each other but do not fit together as one panorama\(figure). They may have been taken from different positions."
         case .tooWideForPerspective(let degrees):
             return "These photos span about \(degrees)°, which is too wide for the Perspective projection. Choose Cylindrical or Spherical."
         case .tooLarge(let frames, let width, let height, let outputWidth, let outputHeight, let needed, let budget):
@@ -75,6 +82,8 @@ nonisolated struct LWPanoramaPair: Codable, Equatable, Sendable {
     let first: Int, second: Int
     /// Descriptor matches found, and how many of them one homography explains.
     let matches: Int, inliers: Int
+    /// How many of the rest a second, different homography explains.
+    var rival = 0
 }
 
 /// Where each frame's camera pointed, and how each frame's exposure relates to the others.
@@ -482,23 +491,32 @@ nonisolated enum LWPanoramaStitcher {
         /// Matched points the homography explains, in centred full-resolution pixels.
         var from: [SIMD2<Double>], to: [SIMD2<Double>]
         let matches: Int
+        /// Matched points that the homography does not explain and a second, different one does.
+        var rival = 0
         var inliers: Int { from.count }
         /// Brown and Lowe's test that the matches are a real overlap and not chance agreement.
         var accepted: Bool { inliers >= 12 && Double(inliers) > 8 + 0.3 * Double(matches) }
+        /// A second alignment has enough support to be a join of its own (12 matches, the least
+        /// that joins two frames) and at least an eighth of the first's: the scene repeats, or
+        /// near and far subjects moved against each other. Neither join can be trusted.
+        var ambiguous: Bool { accepted && rival >= 12 && rival * 8 >= inliers }
     }
 
-    /// RANSAC over four-point homographies, refitted on its inliers.
+    /// RANSAC over four-point homographies, refitted on its inliers. The matches the homography
+    /// leaves out are then searched for a second one (`rival`).
     static func register(first: Int, second: Int, from: [SIMD2<Double>], to: [SIMD2<Double>], unit: Double, tolerance: Double) throws -> Registration {
-        let count = from.count
-        var best: [Int] = [], bestModel = matrix_identity_double3x3
         let a = from.map { $0 / unit }, b = to.map { $0 / unit }, limit = (tolerance / unit) * (tolerance / unit)
-        func inliers(_ h: simd_double3x3) -> [Int] { agreeing(h, a, b, limit) }
-        if count >= 4 {
-            var state: UInt64 = 0x9E3779B97F4A7C15 ^ UInt64(first * 1000 + second)
-            func next(_ bound: Int) -> Int {
-                state ^= state << 13; state ^= state >> 7; state ^= state << 17
-                return Int(state % UInt64(bound))
-            }
+        var state: UInt64 = 0x9E3779B97F4A7C15 ^ UInt64(first * 1000 + second)
+        func next(_ bound: Int) -> Int {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17
+            return Int(state % UInt64(bound))
+        }
+        /// The largest set of `among` that one homography explains, as positions in `among`.
+        func consensus(_ among: [Int]) throws -> (inliers: [Int], model: simd_double3x3) {
+            let count = among.count
+            var best: [Int] = [], bestModel = matrix_identity_double3x3
+            guard count >= 4 else { return (best, bestModel) }
+            let pa = among.map { a[$0] }, pb = among.map { b[$0] }
             // As many draws as it takes to be 99.9 % sure of one all-inlier sample at the best
             // inlier share seen so far: 1000 at most, 60 at least.
             var needed = 1000, iteration = 0
@@ -507,21 +525,29 @@ nonisolated enum LWPanoramaStitcher {
                 iteration += 1
                 var picks: [Int] = []
                 while picks.count < 4 { let i = next(count); if !picks.contains(i) { picks.append(i) } }
-                guard let h = homography(picks.map { a[$0] }, picks.map { b[$0] }) else { continue }
-                let found = inliers(h)
+                guard let h = homography(picks.map { pa[$0] }, picks.map { pb[$0] }) else { continue }
+                let found = agreeing(h, pa, pb, limit)
                 guard found.count > best.count else { continue }
                 best = found; bestModel = h
                 let share = Double(best.count) / Double(count), miss = 1 - share * share * share * share
                 needed = miss <= 1e-9 ? 60 : min(1000, max(60, Int((log(0.001) / log(miss)).rounded(.up))))
             }
             for _ in 0..<3 where best.count >= 4 {
-                guard let h = homography(best.map { a[$0] }, best.map { b[$0] }) else { break }
-                let found = inliers(h)
+                guard let h = homography(best.map { pa[$0] }, best.map { pb[$0] }) else { break }
+                let found = agreeing(h, pa, pb, limit)
                 guard found.count >= best.count else { break }
                 best = found; bestModel = h
             }
+            return (best, bestModel)
         }
-        return Registration(first: first, second: second, homography: bestModel, from: best.map { from[$0] }, to: best.map { to[$0] }, matches: count)
+        let all = Array(from.indices)
+        let best = try consensus(all)
+        var rival = 0
+        if best.inliers.count >= 12 {
+            let taken = Set(best.inliers), rest = all.filter { !taken.contains($0) }
+            if rest.count >= 12 { rival = try consensus(rest).inliers.count }
+        }
+        return Registration(first: first, second: second, homography: best.model, from: best.inliers.map { from[$0] }, to: best.inliers.map { to[$0] }, matches: from.count, rival: rival)
     }
 
     /// Focal length of both cameras from a rotation homography (Szeliski and Shum 1997), in the homography's unit.
@@ -868,12 +894,31 @@ nonisolated enum LWPanoramaStitcher {
         guard let base = luminance.map({ Array($0[0..<count]) }) else { return (unity, .zero) }
         let mean = base.reduce(0, +) / Double(count)
         let centred = base.map { $0 - mean }
-        var gains = unity
+        var stops = [SIMD3<Double>](repeating: .zero, count: count)
         for channel in 0..<3 {
             let solved = fit({ $0.ratio[channel] - vignetting.x * $0.r2 - vignetting.y * $0.r4 }, falloff: false, prior: centred) ?? centred
-            for i in 0..<count { gains[i][channel] = Float(exp2(max(-8, min(8, solved[i])))) }
+            for i in 0..<count { stops[i][channel] = solved[i] }
         }
-        return (gains, vignetting)
+        return ((0..<count).map { gain(luminanceStops: centred[$0], channelStops: stops[$0]) }, vignetting)
+    }
+    /// The most a frame's exposure is taken to differ from the set's mean, and the most one of its
+    /// channels from its exposure (a white-balance difference), in stops. A solve that asks for
+    /// more has gone wrong, and is held here rather than crush or blow the frame.
+    static let exposureLimitStops = 4.0, channelLimitStops = 1.0
+    /// A frame's linear gain per channel from its solved exposure and per-channel exposures, in
+    /// stops. The exposure is held within `exposureLimitStops` of the set's mean; each channel
+    /// keeps its own offset from the solved exposure (its white balance), held within
+    /// `channelLimitStops`, on top of the held exposure.
+    static func gain(luminanceStops: Double, channelStops: SIMD3<Double>) -> SIMD3<Float> {
+        let solved = luminanceStops.isFinite ? luminanceStops : 0
+        let exposure = max(-exposureLimitStops, min(exposureLimitStops, solved))
+        var gain = SIMD3<Float>(repeating: 1)
+        for channel in 0..<3 {
+            var offset = channelStops[channel] - solved
+            if offset.isNaN { offset = 0 }
+            gain[channel] = Float(exp2(exposure + max(-channelLimitStops, min(channelLimitStops, offset))))
+        }
+        return gain
     }
 
     // MARK: Alignment
@@ -902,6 +947,7 @@ nonisolated enum LWPanoramaStitcher {
                 if registration.accepted { registrations.append(registration) } else { weak.append(registration) }
             }
         }
+        if let pair = registrations.first(where: \.ambiguous) { throw LWPanoramaError.ambiguous(frame: pair.first, other: pair.second) }
         // Every frame must be joined to the others, directly or through other frames.
         var group = Array(0..<count)
         func root(_ i: Int) -> Int { var i = i; while group[i] != i { i = group[i] }; return i }
@@ -953,7 +999,7 @@ nonisolated enum LWPanoramaStitcher {
         var alignment = LWPanoramaAlignment(width: width, height: height, focal: best.focal,
             rotations: straighten(best.rotations, reference: reference, levelPitch: true),
             gains: [SIMD3<Float>](repeating: SIMD3(repeating: 1), count: count), vignetting: .zero,
-            pairs: registrations.map { LWPanoramaPair(first: $0.first, second: $0.second, matches: $0.matches, inliers: $0.inliers) },
+            pairs: registrations.map { LWPanoramaPair(first: $0.first, second: $0.second, matches: $0.matches, inliers: $0.inliers, rival: $0.rival) },
             rms: best.rms, reference: reference)
         if compensateExposure {
             let exposure = try exposures(works, frames: frames, alignment: alignment)
