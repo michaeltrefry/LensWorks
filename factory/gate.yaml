@@ -1,0 +1,57 @@
+# Dark Factory merge gate policy (version 4), read by the gate from the PR's base branch on every evaluation.
+# Every path a PR's diff touches (both sides of a rename, deleted files too) is in the first of sealed, protected,
+# free whose patterns match it, else normal. Patterns are anchored at the repository root; sealed and protected
+# patterns match case-insensitively, free patterns case-sensitively. '*' matches within a path segment, '**' any
+# number of segments, and a trailing '/' everything under that directory. A change needs the checks of every tier
+# it touches. Anything invalid or missing blocks every merge.
+version: 4
+tiers:
+  # Always escalates to the owner: the gate's own policy (and any factory prompts), CI workflows and the scripts
+  # they run, and CODEOWNERS wherever GitHub reads it.
+  sealed:
+    paths: [factory/, .github/, scripts/ci/, CODEOWNERS, docs/CODEOWNERS]
+    checks: [ci-green, review-pass, security-review]
+  # Built and reviewed (with the security review), then escalated instead of merged: what decides how the app is
+  # built, signed and sandboxed, and what it links — the Xcode project and scheme, entitlements, Info.plist, build
+  # settings, Swift package pins, the Rust toolchain and manifests, the native dependency pins, the frozen vendored
+  # baseline, and the build scripts.
+  protected:
+    paths:
+      - "**/*.xcodeproj/"
+      - "**/*.xcworkspace/"
+      - "**/*.xcscheme"
+      - "**/*.xctestplan"
+      - "**/*.xcconfig"
+      - "**/*.entitlements"
+      - "**/Info.plist"
+      - native/Config/
+      - "**/Package.swift"
+      - "**/Package.resolved"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/build.rs"
+      - "**/rust-toolchain.toml"
+      - "**/.cargo/"
+      - "**/vcpkg.json"
+      - DEPENDENCIES.json
+      - .gitmodules
+      - vendor/
+      - scripts/
+      - "**/scripts/"
+    checks: [ci-green, review-pass, security-review, risk-threshold, new-tests-fail-on-base]
+  # Every other path (Swift, Rust, tests, contracts, docs/ JSON and ledgers that scripts and tests read).
+  normal:
+    checks: [ci-green, review-pass, risk-threshold, new-tests-fail-on-base]
+  # Prose nothing builds, tests or audits.
+  free:
+    paths: [README.md, CODEGRAPH.md, docs/design/]
+    checks: [ci-green, review-pass]
+# A change over any limit (in a tier that lists risk-threshold) escalates instead of merging.
+risk:
+  max_changed_lines: 400
+  max_changed_files: 20
+  max_fix_rounds: 3
+  max_blast_radius: high
+  max_hotspot: "off"
+  max_changeset_lines: 3000
+  max_changeset_files: 120

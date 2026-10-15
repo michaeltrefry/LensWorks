@@ -1,0 +1,74 @@
+name: Native unit tests (GitHub-hosted)
+# Builds the app and runs the CompositorTests unit-test bundle on a GitHub-hosted Apple-silicon runner, so every
+# pull request — including Dark Factory's story pull requests into its factory/changeset-* branches, hence no
+# branch filter — gets a unit-test result without the self-hosted runner. Native libraries come from Homebrew at
+# whatever versions the image's Homebrew offers, not the exact DEPENDENCIES.json pins (verify-dependencies.py is not
+# run here: the self-hosted jobs keep that acceptance check).
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions: {contents: read}
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  compositor-tests:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 4
+      MACOSX_DEPLOYMENT_TARGET: "26.2"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.build/rust-catalog
+      PHOTOCATALOG_DNG_SDK: ${{ github.workspace }}/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1
+    steps:
+      - uses: actions/checkout@v4
+        # The Xcode project compiles only native/; vendor/Compositor is the frozen baseline reference.
+        with: {submodules: false}
+      - name: Select Xcode 26.5
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s /Applications/Xcode_26.5.app
+          xcodebuild -version
+      - name: Install the native libraries the app links
+        run: |
+          brew install libraw libavif webp jpeg-xl jpeg-turbo little-cms2 libomp pkg-config
+          for lib in libraw libavif libwebp libjxl libjpeg lcms2; do echo "$lib $(pkg-config --modversion $lib)"; done
+      - name: Cache the DNG SDK and the Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/deps
+            .build/rust-catalog
+          key: unit-tests-rust-${{ hashFiles('rust-toolchain.toml', 'adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock', 'adapters/mcp/Cargo.lock') }}
+          restore-keys: unit-tests-rust-
+      - name: Build the Rust catalog library and test helpers
+        run: |
+          python3 engines/catalog/scripts/fetch_dng_sdk.py --destination .build/deps
+          cargo --version
+          cargo build --manifest-path adapters/catalog/Cargo.toml --locked --release
+          cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin photocatalog --bin organization_probe
+          cargo build --manifest-path adapters/mcp/Cargo.toml --locked --release
+      - name: Build for testing
+        run: |
+          xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' \
+            -configuration Debug -derivedDataPath .build/xcode-unit -onlyUsePackageVersionsFromResolvedFile CODE_SIGN_IDENTITY=-
+      - name: Run the CompositorTests unit tests
+        timeout-minutes: 60
+        env:
+          TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
+          TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
+          TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE: ${{ github.workspace }}/.build/rust-catalog/release/organization_probe
+          TEST_RUNNER_LW_MCP_BRIDGE: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-mcp
+          # Tests that skip themselves when an optional input (real weights, a licensed RAW matrix) is absent may skip.
+          XCODEBUILD_TEST_ALLOW_SKIPPED: CompositorTests
+        run: |
+          ./scripts/ci/xcodebuild_test.sh UnitTests.xcresult -project native/Compositor.xcodeproj -scheme Compositor \
+            -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-unit -parallel-testing-enabled NO \
+            -only-testing:CompositorTests
+      - name: Upload unit test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: unit-tests, path: UnitTests.xcresult, if-no-files-found: ignore, retention-days: 7}
