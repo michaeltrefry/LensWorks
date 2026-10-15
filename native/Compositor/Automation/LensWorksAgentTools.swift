@@ -156,6 +156,12 @@ final class LensWorksAgentTools {
         case .mergeHDR:
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             return catalog.hdrMergeAvailability()
+        case .cancelMergePanorama:
+            guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
+            return catalog.panoramaMergeCancelReason
+        case .mergePanorama:
+            guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
+            return catalog.panoramaMergeAvailability()
         case _ where Self.controlCommands.contains(id):
             guard let catalog = catalog(), catalog.catalogPath != nil else { return "Open a catalog first." }
             guard let current = catalog.currentCatalogVariant else { return "Select a catalog photo first." }

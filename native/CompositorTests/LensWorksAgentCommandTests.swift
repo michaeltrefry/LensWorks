@@ -138,7 +138,7 @@ struct LensWorksAgentCommandTests {
             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .sortBy, .sortDirection,
             .addToVirtualFolder, .removeFromVirtualFolder, .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder,
             .openProject, .openRecent, .importImages, .save, .saveAs, .exportPNG, .exportJPEG, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .undo, .redo,
-            .locateFolder, .openInEditor, .mergeHDR, .cancelMergeHDR, .selectHDRSources
+            .locateFolder, .openInEditor, .mergeHDR, .cancelMergeHDR, .selectHDRSources, .mergePanorama, .cancelMergePanorama, .selectPanoramaSources
         ]
         #expect(mustRun.filter { !$0.agentAccess.isRunnable }.isEmpty)
         // A command that enters document or catalog history is never left out.

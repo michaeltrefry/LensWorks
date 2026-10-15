@@ -1,6 +1,6 @@
 # Frozen capability inventory
 
-28987 source-surface rows across 746 audited source files; 11833 declared controls/services have fixtures (239 passing with recorded native test evidence, 11594 planned); 17154 support declarations are provenance-only; 2501 baseline test cases indexed. Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.
+28987 source-surface rows across 746 audited source files; 11833 declared controls/services have fixtures (239 passing with recorded native test evidence, 11594 planned); 17154 support declarations are provenance-only; 2502 baseline test cases indexed. Rows marked passing name the native tests that exercise them in `execution_evidence`; integrated acceptance remains with `sc-24691`, and no other row is native acceptance evidence.
 
 This ledger is deliberately finer than a feature checklist: each enum case, configuration field, command/control, exposed service operation and format route gets its own source anchor, story and fixture. Implementation-support declarations remain separately labeled; the row count is not a user-visible feature count.
 
@@ -26,7 +26,7 @@ See `DEPENDENCIES.json` and `THIRD_PARTY_NOTICES.md`; individual retained licens
 - Conditional Rust test modules embedded in product files are conservatively retained as support rows; baseline_test_cases identifies test evidence separately.
 - PhotoCatalog itself has no root license file at this pin; application ownership/licensing needs owner disposition while third-party notices are retained.
 
-10715 rows reference baseline test bodies. These are discovery pointers only: tests have not been executed by this inventory task, and token mention does not establish assertion coverage.
+10721 rows reference baseline test bodies. These are discovery pointers only: tests have not been executed by this inventory task, and token mention does not establish assertion coverage.
 
 ## Story coverage
 
@@ -8934,10 +8934,10 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-36cc5b8efc78db2d | `engines/catalog/src/media/full.rs:111` | `RenderProvenance.notes` | setting_or_field | sc-24663 | raw-develop | 1 |
 | cap-1747c333971672a9 | `engines/catalog/src/media/full.rs:116` | `RenderProvenance.neutral_clip` | setting_or_field | sc-24663 | raw-develop | 2 |
 | cap-80eaedec9459e2be | `engines/catalog/src/media/full.rs:121` | `RenderedImage.metadata` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-acfd0709dd06d542 | `engines/catalog/src/media/full.rs:122` | `RenderedImage.width` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-9a77be71db9a8e40 | `engines/catalog/src/media/full.rs:123` | `RenderedImage.height` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-9a7f4f5d93c8fe84 | `engines/catalog/src/media/full.rs:124` | `RenderedImage.pixels` | setting_or_field | sc-24663 | raw-develop | 0 |
-| cap-e14ada300e89f48f | `engines/catalog/src/media/full.rs:125` | `RenderedImage.provenance` | setting_or_field | sc-24663 | raw-develop | 0 |
+| cap-acfd0709dd06d542 | `engines/catalog/src/media/full.rs:122` | `RenderedImage.width` | setting_or_field | sc-24663 | raw-develop | 1 |
+| cap-9a77be71db9a8e40 | `engines/catalog/src/media/full.rs:123` | `RenderedImage.height` | setting_or_field | sc-24663 | raw-develop | 1 |
+| cap-9a7f4f5d93c8fe84 | `engines/catalog/src/media/full.rs:124` | `RenderedImage.pixels` | setting_or_field | sc-24663 | raw-develop | 1 |
+| cap-e14ada300e89f48f | `engines/catalog/src/media/full.rs:125` | `RenderedImage.provenance` | setting_or_field | sc-24663 | raw-develop | 1 |
 | cap-33bf355d4d4a6fdf | `engines/catalog/src/media/full.rs:130` | `RenderedPlane.metadata` | setting_or_field | sc-24663 | raw-develop | 0 |
 | cap-c8b394d7f213317d | `engines/catalog/src/media/full.rs:131` | `RenderedPlane.width` | setting_or_field | sc-24663 | raw-develop | 0 |
 | cap-e0c953f40b63ac4a | `engines/catalog/src/media/full.rs:132` | `RenderedPlane.height` | setting_or_field | sc-24663 | raw-develop | 0 |
@@ -8948,7 +8948,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | cap-5193553460d5c01d | `engines/catalog/src/media/full.rs:251` | `linear_to_srgb` | rust_api | sc-24663 | raw-develop | 0 |
 | cap-19247f7ceb0647e6 | `engines/catalog/src/media/full.rs:258` | `srgb_to_linear` | rust_api | sc-24663 | raw-develop | 0 |
 | cap-3778ee43bd3fb36c | `engines/catalog/src/media/full.rs:328` | `decoder_versions` | rust_api | sc-24663 | raw-develop | 0 |
-| cap-430ffac65b3f55e1 | `engines/catalog/src/media/full.rs:340` | `decode_full` | rust_api | sc-24663 | raw-develop | 24 |
+| cap-430ffac65b3f55e1 | `engines/catalog/src/media/full.rs:340` | `decode_full` | rust_api | sc-24663 | raw-develop | 25 |
 | cap-659e1de8b2ca91eb | `engines/catalog/src/media/full.rs:344` | `decode_full_limited` | rust_api | sc-24663 | raw-develop | 6 |
 | cap-fb15884ff771acb1 | `engines/catalog/src/media/full.rs:350` | `decode_with_white_point` | rust_api | sc-24663 | raw-develop | 0 |
 | cap-0efc4d4c4e24c39d | `engines/catalog/src/media/full.rs:356` | `decode_with_white_point_rows` | rust_api | sc-24663 | raw-develop | 0 |
@@ -13322,7 +13322,7 @@ Fixture IDs are `lensworks/<story>/<capability ID>`; each JSON row carries its c
 | `engines/catalog/src/main.rs` | baseline_product_source | sc-24658 | 248 | `17e14cab2f32ea5eda9ce29b66704335896721af8d48b1c23c52ef776097ff66` |
 | `engines/catalog/src/media/full.rs` | baseline_product_source | sc-24663 | 196 | `2a664bc5577567e6e2706752cc49979d7a4d33b9993cc9cfaedc2ec7a4bf5d8a` |
 | `engines/catalog/src/media/psd.rs` | baseline_product_source | sc-24663 | 13 | `c53560502572983fd9435170bbfba1b5de1a3a25d7ddfa4352422fa68b38ff59` |
-| `engines/catalog/src/media/raw_highlight_tests.rs` | baseline_test_source | sc-24663 | 8 | `0ca63be9de7a1e89355a8cf6c855cf3336799ad0bf17a624135f516919ebf9f6` |
+| `engines/catalog/src/media/raw_highlight_tests.rs` | baseline_test_source | sc-24663 | 11 | `59ac04c00a0163b5a75a72400542342f43ec8e6435fa77303e51a0af82a7f8dd` |
 | `engines/catalog/src/media.rs` | baseline_product_source | sc-24658 | 25 | `f317bb186ff611a7c4c0063bdb0e381b38b4ab4c5bc6138f948c7ead2bb86313` |
 | `engines/catalog/src/metadata_export/photo_phases.rs` | baseline_product_source | sc-24660 | 67 | `0a6d3b9987a3b4d3ed1b3ecc517069e3f80c368fcb8f7cd974a79cc23e15392f` |
 | `engines/catalog/src/metadata_export/wire.rs` | baseline_product_source | sc-24660 | 55 | `e4e30f20a41ea27121f18656d060684119cb6349cd6c416a612b90ef5f1d7459` |

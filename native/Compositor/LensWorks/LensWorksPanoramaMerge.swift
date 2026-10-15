@@ -47,11 +47,12 @@ extension LensWorksCatalog {
     /// imports that one file into this catalog, records its sources against it and selects it.
     /// Sources are only read; their bytes are re-verified before the DNG is put in place.
     /// Cancelling (the Cancel command, the calling task, or the catalog scope ending) stops the
-    /// merge and leaves no file.
-    func mergeSelectionToPanorama(projection: LWPanoramaProjection = .spherical, boundary: LWPanoramaBoundary = .autoCrop) async throws -> LensWorksPanoramaOutcome {
+    /// merge and leaves no file. `admitted` is what an agent's request was checked against (each source original's
+    /// path, in selection order): with it, nothing is read or written unless the selection still reaches exactly those.
+    func mergeSelectionToPanorama(projection: LWPanoramaProjection = .spherical, boundary: LWPanoramaBoundary = .autoCrop, admitted: [String]? = nil) async throws -> LensWorksPanoramaOutcome {
         try await runMerge(.panorama, availability: panoramaMergeAvailability()) { scope in
             let options = LWPanoramaOptions(projection: projection, boundary: boundary)
-            let output = try await self.performMerge(.panorama, scope: scope, frames: 2...LWPanoramaStitcher.maximumFrames, tooFew: Self.panoramaTooFew, tooMany: Self.panoramaTooMany) { originals in
+            let output = try await self.performMerge(.panorama, scope: scope, frames: 2...LWPanoramaStitcher.maximumFrames, tooFew: Self.panoramaTooFew, tooMany: Self.panoramaTooMany, checked: admitted) { originals in
                 let count = originals.count, names = originals.map(\.url.lastPathComponent)
                 do {
                     var frames = try await self.developMergeFrames(originals, kind: .panorama, scope: scope) { width, height in

@@ -945,6 +945,54 @@ struct PanoramaMergeCatalogTests {
         }
     }
 
+    /// An agent runs Merge to Panorama… through the registry on the current selection, as it runs
+    /// Merge to HDR…: the originals it reads and the folder it writes into are held to the granted
+    /// folders, its typed projection and edges reach the merge, and Select Panorama Source Photos
+    /// follows the link it records.
+    @Test func anAgentMergesAPanoramaOnlyInsideAGrantedFolderAndFollowsTheLink() async throws {
+        let harness = try LensWorksAutomationTests.Harness(); defer { harness.cleanUp() }
+        try await withPanoramaCatalog { model, fixture, sources, _ in
+            harness.catalog = model
+            let tools = harness.automation.tools
+            func invoke(_ command: String, _ arguments: [String: Any] = [:]) async -> [String: Any] {
+                await tools.call("invoke_command", arguments: ["command": command, "arguments": arguments])
+            }
+            func text(_ result: [String: Any]) -> String { ((result["content"] as? [[String: Any]])?.compactMap { $0["text"] as? String } ?? []).joined(separator: "\n") }
+            let files = fixture.files("plain"), before = try files.map { try LensWorksCatalog.sha256($0) }
+            let idle = await invoke("catalog.panorama.cancel")
+            #expect(idle["isError"] as? Bool == true && text(idle) == "No merge to panorama is running.", "\(text(idle))")
+            await model.select(sources[0])
+            let single = await invoke("catalog.panorama.merge")
+            #expect(single["isError"] as? Bool == true && text(single) == "Select two or more overlapping photos.", "\(text(single))")
+            await MergeCatalogHarness.selectAll(model, sources)
+            // A projection outside the typed set is refused before anything runs.
+            let unknown = await invoke("catalog.panorama.merge", ["projection": "fisheye"])
+            #expect(unknown["isError"] as? Bool == true && text(unknown).contains("fisheye") == false && text(unknown).contains("spherical"), "\(text(unknown))")
+            // Nothing is granted: refused before any original is read, and nothing is written.
+            let ungranted = await invoke("catalog.panorama.merge", ["projection": "cylindrical", "edges": "fill"])
+            #expect(ungranted["isError"] as? Bool == true && text(ungranted).hasPrefix("A source photo’s original: No folders are granted to automation"), "\(text(ungranted))")
+            #expect(try leftovers(fixture).isEmpty && model.assets.count == 3 && !model.isMergingPanorama)
+
+            try harness.automation.folders.grant(fixture.root.appendingPathComponent("Photos"))
+            let merged = await invoke("catalog.panorama.merge", ["projection": "cylindrical", "edges": "fill"])
+            #expect(merged["isError"] as? Bool == false, "\(text(merged))")
+            #expect(LensWorksCommandDispatcher.lastInvocation?.id == .mergePanorama && LensWorksCommandDispatcher.lastOrigin == .agent)
+            #expect(try files.map { try LensWorksCatalog.sha256($0) } == before && model.assets.count == 4 && !model.isMergingPanorama)
+            let written = try leftovers(fixture)
+            #expect(written.count == 1 && written[0].hasSuffix("-Pano.dng"), "\(written)")
+            let photo = try #require(model.selectedAsset)
+            #expect(photo.filename == written.first && !sources.contains { $0.id == photo.id })
+            let original = try await model.service.originalLocation(try #require(photo.key)).localFileURL()
+            let record = try LWDNGInspection(Data(contentsOf: original)).panoramaProvenance()
+            #expect(record.projection == .cylindrical && record.boundary == .fill, "\(record.projection) \(record.boundary)")
+
+            // The agent follows the link: the three sources become the selection.
+            let followed = await invoke("catalog.panorama.selectSources", ["photo": photo.id])
+            #expect(followed["isError"] as? Bool == false && model.selection == Set(sources.map(\.id)), "\(text(followed))")
+            #expect(LensWorksCommandDispatcher.lastInvocation?.id == .selectPanoramaSources && LensWorksCommandDispatcher.lastOrigin == .agent)
+        }
+    }
+
     @Test func aCancelledOrFailedPanoramaLeavesNoFileAndNoCatalogItem() async throws {
         try await withPanoramaCatalog(series: "exposure") { model, fixture, sources, _ in
             let files = fixture.files("exposure"), before = try files.map { try LensWorksCatalog.sha256($0) }

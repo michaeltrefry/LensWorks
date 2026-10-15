@@ -11,7 +11,7 @@
       "name": "PhotoCatalog",
       "revision": "f4f8d3f12acc77fe5632720702c52a7cfefb5b58",
       "source": "engines/catalog",
-      "source_digest": "807ec374bd01ce53c36b964dc5c263a2880ee13e4395d12a09df507e486f7254"
+      "source_digest": "b1c1c1834b3432bfa5dc7a499d753e7fbf5d610a212520416a383a575e02235f"
     }
   ],
   "provenance_files": [
@@ -4813,10 +4813,10 @@
     },
     {
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "sha256": "0ca63be9de7a1e89355a8cf6c855cf3336799ad0bf17a624135f516919ebf9f6",
+      "sha256": "59ac04c00a0163b5a75a72400542342f43ec8e6435fa77303e51a0af82a7f8dd",
       "role": "baseline_test_source",
       "story_id": "sc-24663",
-      "declaration_count": 8
+      "declaration_count": 11
     },
     {
       "file": "engines/catalog/src/media.rs",
@@ -47312,7 +47312,7 @@
         "test-fb67cc517677b664",
         "test-71c017d1e50a8668",
         "test-e1ff2cd288e2f6b3",
-        "test-7d38076010168ca1",
+        "test-2a69577cea0b7db0",
         "test-47bfe69affddb6c0",
         "test-911a22cb8dfc233b",
         "test-6391fb5ecec57a3e",
@@ -47379,7 +47379,7 @@
           "test-fb67cc517677b664",
           "test-71c017d1e50a8668",
           "test-e1ff2cd288e2f6b3",
-          "test-7d38076010168ca1",
+          "test-2a69577cea0b7db0",
           "test-47bfe69affddb6c0",
           "test-911a22cb8dfc233b",
           "test-6391fb5ecec57a3e",
@@ -55657,7 +55657,7 @@
         "test-1395116d0f6a87fb",
         "test-b5889b0d47a1b90e",
         "test-29c35504abae7967",
-        "test-cad64d2f1671d7fe",
+        "test-49f9d9d8357453be",
         "test-8ef503c0126f07d0",
         "test-ece611594c5d90e7",
         "test-8f573d2b1066a378",
@@ -55854,7 +55854,7 @@
           "test-1395116d0f6a87fb",
           "test-b5889b0d47a1b90e",
           "test-29c35504abae7967",
-          "test-cad64d2f1671d7fe",
+          "test-49f9d9d8357453be",
           "test-8ef503c0126f07d0",
           "test-ece611594c5d90e7",
           "test-8f573d2b1066a378",
@@ -58109,10 +58109,10 @@
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
         "test-885ab3e55b4e11e6",
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1",
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0",
         "test-de98eae5cd8b9a3d",
         "test-ddc1f9c1f630b7c5",
         "test-fc8d521550e8595a",
@@ -58149,10 +58149,10 @@
           "test-0e93e9a0adb9bed7",
           "test-97c86e6697352369",
           "test-885ab3e55b4e11e6",
-          "test-cad64d2f1671d7fe",
-          "test-c440fa1099b68ed4",
-          "test-5d2cd7d14ac74fa4",
-          "test-7d38076010168ca1",
+          "test-49f9d9d8357453be",
+          "test-ce035644c5568580",
+          "test-3cc6ee968be3a783",
+          "test-2a69577cea0b7db0",
           "test-de98eae5cd8b9a3d",
           "test-ddc1f9c1f630b7c5",
           "test-fc8d521550e8595a",
@@ -69078,8 +69078,8 @@
         "test-ec4e0607bc884514",
         "test-81b292f0bb92d350",
         "test-713229a0375c788b",
-        "test-cad64d2f1671d7fe",
-        "test-7d38076010168ca1",
+        "test-49f9d9d8357453be",
+        "test-2a69577cea0b7db0",
         "test-ece611594c5d90e7",
         "test-e86751f225967d4d",
         "test-9d39dc43c3d1b3bf",
@@ -71213,7 +71213,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -86200,7 +86200,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -111355,7 +111356,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -111695,7 +111697,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -113109,7 +113112,7 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-7d38076010168ca1"
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -113199,7 +113202,7 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-7d38076010168ca1"
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -115825,7 +115828,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -163567,10 +163571,10 @@
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
         "test-885ab3e55b4e11e6",
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1",
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0",
         "test-de98eae5cd8b9a3d",
         "test-ddc1f9c1f630b7c5",
         "test-fc8d521550e8595a",
@@ -163673,7 +163677,7 @@
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
         "test-885ab3e55b4e11e6",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-0387ed182d5f7d4b",
         "test-be9fe4bc2eac52fe",
         "test-dc232bf76147ac22",
@@ -163704,7 +163708,7 @@
           "test-0e93e9a0adb9bed7",
           "test-97c86e6697352369",
           "test-885ab3e55b4e11e6",
-          "test-c440fa1099b68ed4",
+          "test-ce035644c5568580",
           "test-0387ed182d5f7d4b",
           "test-be9fe4bc2eac52fe",
           "test-dc232bf76147ac22",
@@ -179552,7 +179556,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -237734,7 +237738,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -249537,7 +249541,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -250594,7 +250598,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -294607,7 +294611,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -310769,7 +310773,7 @@
         "test-2bca379f805c01ea",
         "test-86a82065baecbb15",
         "test-5a41d5592f511cdc",
-        "test-7d38076010168ca1",
+        "test-2a69577cea0b7db0",
         "test-2cb0f41d36aba18a",
         "test-5c188d60a2064d80",
         "test-256cb417d4035c7d",
@@ -311184,7 +311188,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -323030,7 +323034,8 @@
         "test-76b76b789ae41881",
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-8a4ad055f84b5baa",
         "test-8dd772dd8b705f0e",
         "test-ddc1f9c1f630b7c5",
@@ -341280,7 +341285,7 @@
         "test-6ac14548e4024e9c",
         "test-7e71a2373dd81859",
         "test-57a9e6a295ec911a",
-        "test-7d38076010168ca1",
+        "test-2a69577cea0b7db0",
         "test-04346cb3a5851403",
         "test-f0eb6143ff530d4c",
         "test-e75b94dc11cc77be",
@@ -359405,7 +359410,7 @@
         "test-1395116d0f6a87fb",
         "test-b5889b0d47a1b90e",
         "test-29c35504abae7967",
-        "test-cad64d2f1671d7fe",
+        "test-49f9d9d8357453be",
         "test-8ef503c0126f07d0",
         "test-ece611594c5d90e7",
         "test-8f573d2b1066a378",
@@ -360302,7 +360307,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -363588,7 +363594,7 @@
         "test-6ac14548e4024e9c",
         "test-7e71a2373dd81859",
         "test-57a9e6a295ec911a",
-        "test-7d38076010168ca1",
+        "test-2a69577cea0b7db0",
         "test-04346cb3a5851403",
         "test-f0eb6143ff530d4c",
         "test-e75b94dc11cc77be",
@@ -376557,7 +376563,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -381689,7 +381695,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -419902,7 +419908,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -465334,7 +465341,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -468365,7 +468372,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -468512,7 +468519,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -508622,7 +508629,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -510610,7 +510617,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -516825,7 +516832,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -542530,7 +542537,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -560146,7 +560153,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -569046,7 +569053,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -581864,7 +581871,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -582517,7 +582524,8 @@
         "test-cdddf3674cbc7663",
         "test-e1ff2cd288e2f6b3",
         "test-dfa71a38580ad01e",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-de98eae5cd8b9a3d",
         "test-68139e0bd3124bfb",
         "test-21062e46cd86bbfc",
@@ -590072,7 +590080,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -650875,7 +650883,7 @@
         "test-1395116d0f6a87fb",
         "test-b5889b0d47a1b90e",
         "test-29c35504abae7967",
-        "test-cad64d2f1671d7fe",
+        "test-49f9d9d8357453be",
         "test-8ef503c0126f07d0",
         "test-ece611594c5d90e7",
         "test-8f573d2b1066a378",
@@ -667237,10 +667245,10 @@
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
         "test-885ab3e55b4e11e6",
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1",
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0",
         "test-de98eae5cd8b9a3d",
         "test-ddc1f9c1f630b7c5",
         "test-fc8d521550e8595a",
@@ -667343,7 +667351,7 @@
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
         "test-885ab3e55b4e11e6",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-0387ed182d5f7d4b",
         "test-be9fe4bc2eac52fe",
         "test-dc232bf76147ac22",
@@ -667374,7 +667382,7 @@
           "test-0e93e9a0adb9bed7",
           "test-97c86e6697352369",
           "test-885ab3e55b4e11e6",
-          "test-c440fa1099b68ed4",
+          "test-ce035644c5568580",
           "test-0387ed182d5f7d4b",
           "test-be9fe4bc2eac52fe",
           "test-dc232bf76147ac22",
@@ -667555,7 +667563,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -667612,10 +667620,10 @@
         "test-0e93e9a0adb9bed7",
         "test-97c86e6697352369",
         "test-885ab3e55b4e11e6",
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1",
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0",
         "test-de98eae5cd8b9a3d",
         "test-ddc1f9c1f630b7c5",
         "test-fc8d521550e8595a",
@@ -668257,7 +668265,7 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
         "test-ddc1f9c1f630b7c5"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
@@ -668579,7 +668587,7 @@
       "surface": "declared_control_or_service",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
         "test-ddc1f9c1f630b7c5"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
@@ -668595,7 +668603,7 @@
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
         "baseline_regression_case_ids": [
-          "test-e765ce74138352a7",
+          "test-6887e720234d8392",
           "test-ddc1f9c1f630b7c5"
         ],
         "execution_evidence": null
@@ -668613,7 +668621,9 @@
       "terminal_story_id": "sc-24691",
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
-      "baseline_test_references": [],
+      "baseline_test_references": [
+        "test-33b7f335fce318ed"
+      ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "source-provenance/cap-491be7e2a20692b2",
@@ -668664,7 +668674,9 @@
       "terminal_story_id": "sc-24691",
       "surface": "declared_control_or_service",
       "baseline_status": "source_present_not_qualified_in_lensworks",
-      "baseline_test_references": [],
+      "baseline_test_references": [
+        "test-33b7f335fce318ed"
+      ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24663/cap-acfd0709dd06d542",
@@ -668677,7 +668689,9 @@
           "exercise_value": 4,
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
-        "baseline_regression_case_ids": [],
+        "baseline_regression_case_ids": [
+          "test-33b7f335fce318ed"
+        ],
         "execution_evidence": null
       }
     },
@@ -668693,7 +668707,9 @@
       "terminal_story_id": "sc-24691",
       "surface": "declared_control_or_service",
       "baseline_status": "source_present_not_qualified_in_lensworks",
-      "baseline_test_references": [],
+      "baseline_test_references": [
+        "test-33b7f335fce318ed"
+      ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24663/cap-9a77be71db9a8e40",
@@ -668706,7 +668722,9 @@
           "exercise_value": 4,
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
-        "baseline_regression_case_ids": [],
+        "baseline_regression_case_ids": [
+          "test-33b7f335fce318ed"
+        ],
         "execution_evidence": null
       }
     },
@@ -668722,7 +668740,9 @@
       "terminal_story_id": "sc-24691",
       "surface": "declared_control_or_service",
       "baseline_status": "source_present_not_qualified_in_lensworks",
-      "baseline_test_references": [],
+      "baseline_test_references": [
+        "test-33b7f335fce318ed"
+      ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24663/cap-9a7f4f5d93c8fe84",
@@ -668735,7 +668755,9 @@
           "exercise_value": "value supplied by the named fixture profile / exact public DTO",
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
-        "baseline_regression_case_ids": [],
+        "baseline_regression_case_ids": [
+          "test-33b7f335fce318ed"
+        ],
         "execution_evidence": null
       }
     },
@@ -668751,7 +668773,9 @@
       "terminal_story_id": "sc-24691",
       "surface": "declared_control_or_service",
       "baseline_status": "source_present_not_qualified_in_lensworks",
-      "baseline_test_references": [],
+      "baseline_test_references": [
+        "test-33b7f335fce318ed"
+      ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "lensworks/sc-24663/cap-e14ada300e89f48f",
@@ -668764,7 +668788,9 @@
           "exercise_value": "value supplied by the named fixture profile / exact public DTO",
           "additional_case": "retained source rejection/default case from the referenced baseline test, plus save/reopen where serialized"
         },
-        "baseline_regression_case_ids": [],
+        "baseline_regression_case_ids": [
+          "test-33b7f335fce318ed"
+        ],
         "execution_evidence": null
       }
     },
@@ -669397,7 +669423,9 @@
       "terminal_story_id": "sc-24691",
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
-      "baseline_test_references": [],
+      "baseline_test_references": [
+        "test-33b7f335fce318ed"
+      ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
         "id": "source-provenance/cap-3d9b5afce6858498",
@@ -669528,10 +669556,10 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669555,10 +669583,10 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669626,9 +669654,9 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669652,9 +669680,9 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669722,8 +669750,8 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669747,8 +669775,8 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669838,8 +669866,8 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669863,8 +669891,8 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669910,7 +669938,7 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-5d2cd7d14ac74fa4"
+        "test-3cc6ee968be3a783"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669956,10 +669984,10 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -669983,10 +670011,10 @@
       "surface": "implementation_support",
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
-        "test-cad64d2f1671d7fe",
-        "test-c440fa1099b68ed4",
-        "test-5d2cd7d14ac74fa4",
-        "test-7d38076010168ca1"
+        "test-49f9d9d8357453be",
+        "test-ce035644c5568580",
+        "test-3cc6ee968be3a783",
+        "test-2a69577cea0b7db0"
       ],
       "test_evidence_semantics": "leaf symbol and declaring type tokens occur in baseline test body (or a free-function token at least 8 characters); IDs resolve in baseline_test_cases. Reference only, not assertion coverage or passing evidence.",
       "acceptance_fixture": {
@@ -670339,7 +670367,8 @@
       "baseline_status": "source_present_not_qualified_in_lensworks",
       "baseline_test_references": [
         "test-0baec8553a6078ec",
-        "test-e765ce74138352a7",
+        "test-6887e720234d8392",
+        "test-33b7f335fce318ed",
         "test-8a4ad055f84b5baa",
         "test-e1e94197ba95935c",
         "test-eaa6b1bcf10ee892",
@@ -670375,7 +670404,8 @@
         },
         "baseline_regression_case_ids": [
           "test-0baec8553a6078ec",
-          "test-e765ce74138352a7",
+          "test-6887e720234d8392",
+          "test-33b7f335fce318ed",
           "test-8a4ad055f84b5baa",
           "test-e1e94197ba95935c",
           "test-eaa6b1bcf10ee892",
@@ -688943,7 +688973,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -693479,7 +693509,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -705415,7 +705445,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -706231,7 +706261,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -721957,7 +721987,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -738758,7 +738788,7 @@
         "test-6ac14548e4024e9c",
         "test-7e71a2373dd81859",
         "test-57a9e6a295ec911a",
-        "test-7d38076010168ca1",
+        "test-2a69577cea0b7db0",
         "test-04346cb3a5851403",
         "test-f0eb6143ff530d4c",
         "test-e75b94dc11cc77be",
@@ -739202,7 +739232,7 @@
         "test-0baec8553a6078ec",
         "test-add757ea1759b3d4",
         "test-0d670dddce58041f",
-        "test-c440fa1099b68ed4",
+        "test-ce035644c5568580",
         "test-665296ccbdf18494",
         "test-04346cb3a5851403",
         "test-fc8d521550e8595a",
@@ -745375,7 +745405,7 @@
         "test-2a5bef66c9ebde53",
         "test-f83885e13ecec5fa",
         "test-66551ed946273b5d",
-        "test-7d38076010168ca1",
+        "test-2a69577cea0b7db0",
         "test-04ba28debf608034",
         "test-b817b996081cacaa",
         "test-e3baaf6b32638b84",
@@ -913995,38 +914025,45 @@
       "status": "source_present_not_run"
     },
     {
-      "id": "test-cad64d2f1671d7fe",
+      "id": "test-49f9d9d8357453be",
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "line": 125,
+      "line": 161,
       "symbol": "raw_clipped_neutral_and_real_colors_preserve_linear_headroom",
       "status": "source_present_not_run"
     },
     {
-      "id": "test-c440fa1099b68ed4",
+      "id": "test-ce035644c5568580",
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "line": 208,
+      "line": 244,
       "symbol": "raw_sensor_admission_precedes_unpack",
       "status": "source_present_not_run"
     },
     {
-      "id": "test-5d2cd7d14ac74fa4",
+      "id": "test-3cc6ee968be3a783",
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "line": 246,
+      "line": 282,
       "symbol": "custom_raw_white_uses_camera_response_before_development",
       "status": "source_present_not_run"
     },
     {
-      "id": "test-7d38076010168ca1",
+      "id": "test-2a69577cea0b7db0",
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "line": 291,
+      "line": 327,
       "symbol": "requested_dng_white_maps_independent_camera_neutrals_to_gray",
       "status": "source_present_not_run"
     },
     {
-      "id": "test-e765ce74138352a7",
+      "id": "test-6887e720234d8392",
       "file": "engines/catalog/src/media/raw_highlight_tests.rs",
-      "line": 382,
+      "line": 418,
       "symbol": "integer_raw_provenance_carries_the_neutral_clip_level",
+      "status": "source_present_not_run"
+    },
+    {
+      "id": "test-33b7f335fce318ed",
+      "file": "engines/catalog/src/media/raw_highlight_tests.rs",
+      "line": 437,
+      "symbol": "integer_gain_mapped_dng_reports_no_neutral_clip_level",
       "status": "source_present_not_run"
     },
     {
