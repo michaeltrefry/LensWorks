@@ -78,7 +78,7 @@ extension EditorSession {
                     var record = record; record.parentID = layer.parentID; record.maskSourceID = layer.maskSourceID; return record
                 }
                 let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
-                let full = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks), workspace: workspace)
+                let full = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, coverages: snapshot.coverages), workspace: workspace)
                 var placed = canvas, plane = full
                 if let bounds = try LWFloatFilter.alphaBounds(full, workspace: workspace) {
                     plane = try LWFloatFilter.cropped(full, range: bounds, workspace: workspace)

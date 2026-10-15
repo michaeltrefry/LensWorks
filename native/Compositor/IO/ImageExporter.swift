@@ -34,7 +34,7 @@ actor ImageExporter {
                 guard made.surface.width == made.map.developedWidth,made.surface.height == made.map.developedHeight else { throw ProjectError.invalid }
                 images[layer.id] = try ImportedImage(plane: made.surface,name: layer.name)
             }
-            let output = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: snapshot.manifest,images: images,masks: snapshot.masks),workspace: workspace)
+            let output = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: snapshot.manifest,images: images,masks: snapshot.masks,coverages: snapshot.coverages),workspace: workspace)
             try workspace.cancellation.check(); try Task.checkCancellation(); return output
         } onCancel: { workspace.cancellation.cancel() }
     }

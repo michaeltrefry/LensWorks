@@ -641,7 +641,7 @@ nonisolated struct LWSourceSampleComposite: Codable, Equatable, Sendable {
         var records=snapshot.manifest.layers,images:[UUID:Data]=[:],masks:[UUID:Data]=[:]
         guard records.contains(where:{$0.id==sourceLayer && $0.liveSource?.id==node.id}) else { throw ProjectError.invalid }
         for i in records.indices {
-            records[i].liveSource=nil;records[i].liveSourceFile=nil
+            records[i].liveSource=nil;records[i].liveSourceFile=nil;records[i].coverageFile=nil;records[i].coveragePlaneArchiveReference=nil
             if records[i].id != sourceLayer,let asset=snapshot.images[records[i].id] {
                 let surface=try asset.linear ?? LWLinearSurface.read(asset.image,maximumBytes:LWSourceDeveloper.maximumResultBytes)
                 images[records[i].id]=try surface.packageData(maximumFileBytes:LWSourceDeveloper.maximumResultBytes)
@@ -1109,8 +1109,18 @@ nonisolated extension LWSourceSampleComposite {
         for i in records.indices {
             try Task.checkCancellation()
             records[i].liveSource = nil; records[i].liveSourceFile = nil
+            // A layer's baked coverage belongs to a live source layer, and the captured records are no longer live:
+            // another layer's is multiplied into its captured pixels, so the sample shows it as the document does.
+            // (The source layer's own pixels are the pre-operation input, substituted when the stroke replays.)
+            let coverage = records[i].id == sourceLayer ? nil : snapshot.bakedCoverage(for: records[i])
+            records[i].coverageFile = nil; records[i].coveragePlaneArchiveReference = nil
             if records[i].id != sourceLayer, let asset = snapshot.images[records[i].id] {
-                let plane = try asset.linearPlane ?? LWFloatCompositor.from(asset.image, workspace: workspace)
+                var plane = try asset.linearPlane ?? LWFloatCompositor.from(asset.image, workspace: workspace)
+                if let coverage {
+                    let sampler = try LWSourceMaskReconcile.coveragePlane(LayerMask(asset: coverage), over: records[i].transform,
+                        width: plane.width, height: plane.height, workspace: workspace).sampler()
+                    plane = try LWFloatCompositor.map(plane, workspace: workspace) { p, x, y in SIMD4(p.x, p.y, p.z, p.w * (try sampler.pixel(x: x, y: y).w)) }
+                }
                 let id = UUID(); assets[id] = try LWSourcePlaneAsset(plane); images[records[i].id] = id
                 try asset.validatePlaneRead()
             }

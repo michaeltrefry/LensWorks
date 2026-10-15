@@ -77,17 +77,24 @@ nonisolated enum LiveMaskBaker {
     /// its mask; any other layer takes it into its own pixels.
     enum Baked: @unchecked Sendable {
         case pixels(ImportedImage), mask(LayerMask)
+        /// A live source layer whose own mask is switched off: that mask shows nothing now, so the coverage cannot
+        /// be multiplied into it, and replacing it would lose it. The coverage goes into the layer's own baked
+        /// coverage (`ImageLayer.bakedCoverage`), which every composite multiplies in beside the mask; the mask
+        /// stays exactly as it was, switched off, and no layer is added.
+        case coverage(ImportedImage)
+        /// Applies the bake to `layer` (whose live link is already gone).
         func apply(to layer: inout ImageLayer) {
             switch self {
             case .pixels(let asset): layer.asset = asset
             case .mask(let mask): layer.mask = mask
+            case .coverage(let coverage): layer.bakedCoverage = coverage
             }
         }
     }
     static func bake(_ snapshot: ProjectSnapshot, target: UUID) throws -> Baked? {
         guard let record = snapshot.manifest.layers.first(where: { $0.id == target }), let original = snapshot.images[target] else { return nil }
         let w = original.image.width, h = original.image.height
-        if record.liveSource != nil { return try bakeLiveSource(snapshot, record: record, original: original).map { .mask($0) } }
+        if record.liveSource != nil { return try bakeLiveSource(snapshot, record: record, original: original) }
         if original.linear != nil || original.linearPlane != nil { return .pixels(try bakeFloat(snapshot, record: record, original: original)) }
         let context = try BrushRaster.context(width: w, height: h, mask: false)
         let inverse = BrushRaster.pixelToDocument(record.transform, width: w, height: h).inverted()
@@ -135,7 +142,7 @@ nonisolated extension LiveMaskBaker {
             manifest.layers[i].maskPlacement = manifest.layers[i].maskPlacement.map(shifted)
         }
         manifest.width = Int(box.width); manifest.height = Int(box.height)
-        let coverage = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks), workspace: workspace)
+        let coverage = try LWFloatCompositor.renderPlane(ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, coverages: snapshot.coverages), workspace: workspace)
         let toLocal = toDocument.concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY)).inverted()
         if toLocal.isIdentity, coverage.width == width, coverage.height == height { return coverage }
         return try LWFloatCompositor.project(coverage, mapping: toLocal, width: width, height: height,
@@ -153,18 +160,29 @@ nonisolated extension LiveMaskBaker {
         return try ImportedImage(plane: baked, name: original.name)
     }
     /// A live source layer: the coverage multiplied into the layer's own mask, in the layer's grid (one is made
-    /// when it has none, and a mask that was switched off is replaced, since it showed nothing). Its developed
-    /// pixels and its source node are untouched, so export and every later development keep the baked look.
-    fileprivate static func bakeLiveSource(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, original: ImportedImage) throws -> LayerMask? {
+    /// when it has none). Its developed pixels and its source node are untouched, so export and every later
+    /// development keep the baked look. A mask that is switched off is left as it is, still switched off: the
+    /// coverage then goes into the layer's baked coverage (see `Baked.coverage`), multiplied into whatever an
+    /// earlier bake left there.
+    fileprivate static func bakeLiveSource(_ snapshot: ProjectSnapshot, record: ProjectLayerRecord, original: ImportedImage) throws -> Baked? {
         let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
         let width = original.image.width, height = original.image.height
         guard let lent = try lentCoverage(snapshot, record: record, width: width, height: height, workspace: workspace) else { return nil }
         let existing = snapshot.mask(for: record)
-        let own = try existing.flatMap { $0.isEnabled ? try LWSourceMaskReconcile.coveragePlane($0, over: record.transform, width: width, height: height, workspace: workspace).sampler() : nil }
+        if let existing, !existing.isEnabled {
+            let earlier = try snapshot.bakedCoverage(for: record).map {
+                try LWSourceMaskReconcile.coveragePlane(LayerMask(asset: $0), over: record.transform, width: width, height: height, workspace: workspace).sampler()
+            }
+            let made = try LWFloatCompositor.map(lent, workspace: workspace) { pixel, x, y in
+                SIMD4(repeating: min(1, max(0, pixel.w * (try earlier?.pixel(x: x, y: y).w ?? 1))))
+            }
+            return .coverage(try ImportedImage(maskPlane: made, name: "Baked Coverage"))
+        }
+        let own = try existing.map { try LWSourceMaskReconcile.coveragePlane($0, over: record.transform, width: width, height: height, workspace: workspace).sampler() }
         let made = try LWFloatCompositor.map(lent, workspace: workspace) { pixel, x, y in
             SIMD4(repeating: min(1, max(0, pixel.w * (try own?.pixel(x: x, y: y).w ?? 1))))
         }
-        return LayerMask(asset: try ImportedImage(maskPlane: made, name: existing?.asset.name ?? "Layer Mask"), isLinked: existing?.isLinked ?? true)
+        return .mask(LayerMask(asset: try ImportedImage(maskPlane: made, name: existing?.asset.name ?? "Layer Mask"), isLinked: existing?.isLinked ?? true))
     }
 }
 

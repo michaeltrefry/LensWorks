@@ -173,7 +173,7 @@ import UniformTypeIdentifiers
         let file=root.appendingPathComponent("Live.comp")
         try await ProjectStore.shared.save(snapshot,to:file)
         let reopened=try await ProjectStore.shared.load(from:file)
-        #expect(reopened.manifest.version == ProjectManifest.current)
+        #expect(reopened.manifest.version == ProjectManifest.floatContent, "live RAW content is written as format 13, the lowest that can hold it")
         #expect(reopened.manifest.workingSpace == "extended-linear-sRGB")
         #expect(reopened.manifest.workingSample == "float32-straight-RGBA")
         #expect(reopened.manifest.layers[0].liveSource == source)
@@ -2513,5 +2513,43 @@ extension LiveRawSourceTests {
         #expect(throws:ProjectError.self) { _=try working.reserve(working.limit) }
         escaped=nil
         let full=try working.reserve(working.limit);withExtendedLifetime(full) {}
+    }
+}
+
+extension LiveRawSourceTests {
+    /// S17: another layer's baked coverage is not a live record any more once captured, so a sample-all capture
+    /// multiplies it into that layer's captured pixels and the sample shows the layer as the document does.
+    @Test func sampleAllCaptureFoldsAnotherLayersBakedCoverageIntoItsPixels() throws {
+        let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
+        var source=try node(original:URL(fileURLWithPath:"/mathematical-reference.dng"),width:2,height:1)
+        let beforeValues=[SIMD4<Float>(2,-1,0.5,1),SIMD4(0,2,3,1)],otherValues=[SIMD4<Float>(0.25,0.5,0.75,0.5),SIMD4(1,0,0,0.25)]
+        let before=try tiledFixture(beforeValues,width:2,workspace:workspace)
+        let other=try tiledFixture(otherValues,width:2,workspace:workspace)
+        // The other layer's baked coverage hides its first pixel and keeps its second.
+        let coverage=try ImportedImage(maskPlane:try tiledFixture([SIMD4<Float>(repeating:0),SIMD4(repeating:1)],width:2,workspace:workspace),name:"Baked Coverage")
+        let a=try ImportedImage(plane:before,name:"Source"),b=try ImportedImage(plane:other,name:"Other layer")
+        let sourceLayer=UUID(),otherLayer=UUID(),transform=LayerTransform(origin:.zero,size:CGSize(width:2,height:1))
+        var otherRecord=ProjectLayerRecord(id:otherLayer,name:b.name,isVisible:true,transform:transform,imageFile:"\(otherLayer.uuidString).plane",
+            planeArchiveReference:b.planeArchiveReference)
+        otherRecord.coverageFile="\(otherLayer.uuidString).coverage.plane";otherRecord.coveragePlaneArchiveReference=coverage.planeArchiveReference
+        let manifest=ProjectManifest(workingSpace:"extended-linear-sRGB",workingSample:"float32-straight-RGBA",documentID:UUID(),
+            width:2,height:1,activeLayerID:sourceLayer,layers:[
+                ProjectLayerRecord(id:sourceLayer,name:a.name,isVisible:true,transform:transform,imageFile:"\(sourceLayer.uuidString).plane",
+                    liveSource:source,planeArchiveReference:a.planeArchiveReference),otherRecord])
+        let captured=try LWSourceSampleComposite.capturePlane(ProjectSnapshot(manifest:manifest,images:[sourceLayer:a,otherLayer:b],coverages:[otherLayer:coverage]),
+            sourceLayer:sourceLayer,node:source,workspace:workspace)
+        source.sampleComposites=[captured.composite];source.planeAssets=captured.assets
+        let stroke=LWSourceRetouchStroke(sourceID:source.id,upstreamRevision:source.revision,captureFrame:try source.capturedFrame(transform:transform),
+            kind:.clone,seed:7,healMode:.contentAware,sampleAllLayers:true,aligned:true,sampleAllLayersCompositeRevision:captured.composite.revision,
+            blurRadius:0,radius:1,hardness:1,opacity:1,points:[CGPoint(x:0.5,y:0.5)],sourceOffset:.zero,color:[0,0,0,1],pointsAreDabs:true)
+        try source.appendRetouch(stroke)
+        let admission=try source.retouchAdmission(plane:before,workspace:workspace,operationScratchBytes:0)
+        let made=try source.sampleAllCompositePlane(for:stroke,before:before,admission:admission,workspace:workspace)
+        let values=try made.read(made.globalExtent).surface.pixels
+        // Pixel 0: the coverage hides the other layer, so the sample is the source alone. Pixel 1: unchanged.
+        let expected=[beforeValues[0],Self.encodedSourceOver(otherValues[1],over:beforeValues[1])]
+        for (index,actual) in values.enumerated() {
+            for channel in 0..<4 { #expect(abs(actual[channel]-expected[index][channel]) < 2e-4,"\(index) \(actual) \(expected[index])") }
+        }
     }
 }

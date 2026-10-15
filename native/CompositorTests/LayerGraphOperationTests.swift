@@ -611,8 +611,9 @@ import CoreGraphics
         s.undo()
         #expect(s.document == before, "undo restores the graph")
         #expect(Self.shape(try #require(s.document).layers) == Self.shape(before.layers))
-        // History keeps the active layer: undo puts it back (a selection of several comes back as that layer).
-        #expect(s.activeLayerID == activeBefore && s.selectedLayerIDs == [activeBefore], "undo restores the active layer")
+        // History keeps the selection the step was made with: undo puts back the active layer and every layer
+        // that was selected with it.
+        #expect(s.activeLayerID == activeBefore && s.selectedLayerIDs == selected, "undo restores the whole selection")
         s.redo()
         #expect(s.document == after)
         #expect(s.activeLayerID == merged.id && s.selectedLayerIDs == [merged.id], "redo selects the merged layer again")
@@ -887,12 +888,12 @@ import CoreGraphics
 
     /// A private physical directory with a procedural RAW in it, imported the way the product imports one: a live
     /// source layer developed in float.
-    private func liveRawSession(_ session: EditorSession = EditorSession()) async throws -> (session: EditorSession, root: URL) {
+    private func liveRawSession(_ session: EditorSession = EditorSession(), width: Int = 64, height: Int = 48) async throws -> (session: EditorSession, root: URL) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("LayerGraphLive-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         let root = try #require(folder.physicalFileURL)
         let original = root.appendingPathComponent("layer.dng")
-        try ProceduralDNG.write(to: original, width: 64, height: 48)
+        try ProceduralDNG.write(to: original, width: width, height: height)
         await session.importImages([original])
         #expect(session.importError == nil, "\(session.importError ?? "")")
         let layer = try #require(session.activeLayer)
@@ -960,6 +961,219 @@ import CoreGraphics
         #expect(zip(after, baked).contains { $0.w > 0.05 && abs($0.x - $1.x) > 0.01 }, "the recipe change shows in the export")
         s.undo(); s.undo()
         #expect(s.document == before && s.history.undoCount == 0)
+        try await LWSourceDeveloper.shared.drainRetainedSessions()
+    }
+
+    /// "Bake and Delete" when the live source layer's own mask is switched off: that mask is the person's work and
+    /// shows nothing right now, so it comes through untouched and still switched off, and no layer is added. The
+    /// coverage goes into the layer's baked coverage, which every composite multiplies in beside the mask: the look
+    /// is kept, switching the mask back on combines the two as before the deletion, a recipe change keeps it, undo
+    /// takes it away, a save and reopen keep it (format 15), and every copy of the layer carries it.
+    @Test func bakingALiveSourceLayerKeepsAMaskThatIsSwitchedOff() async throws {
+        let workspace = ProjectWorkspace()
+        let (s, root) = try await liveRawSession(workspace.current.session); defer { try? FileManager.default.removeItem(at: root) }
+        let live = try #require(s.activeLayer)
+        var soft = ImageLayer(id: UUID(), asset: F.asset(F.pattern(40, 30, seed: 5), "Soft"), name: "Soft", isVisible: false,
+            transform: LayerTransform(origin: CGPoint(x: 10, y: 8), size: CGSize(width: 40, height: 30)), opacity: 0.8)
+        soft.transform.sampling = .nearest
+        s.document?.layers.append(soft)
+        let liveIndex = try #require(s.document?.layers.firstIndex { $0.id == live.id })
+        s.document?.layers[liveIndex].maskSourceID = soft.id
+        let grid = try #require(live.asset?.image)
+        let ownMask = LayerMask(asset: try F.mask(grid.width, grid.height) { x, _ in 90 + x * 2 }, isEnabled: false)
+        s.document?.layers[liveIndex].mask = ownMask
+        s.selectLayer(live.id)
+        s.history.reset()
+        let before = try #require(s.document)
+        let look = try await exported(s)
+        // What the document looks like with the mask switched on, before anything is deleted.
+        s.document?.layers[liveIndex].mask?.isEnabled = true
+        let lookWithMask = try await exported(s)
+        s.document = before
+        #expect(zip(look, lookWithMask).contains { $0.w - $1.w > 0.05 }, "the mask would show if it were on")
+
+        #expect(s.deleteWithLiveMaskChoice([soft.id]) { _ in .bake })
+        try await Self.idle(s)
+        #expect(s.brushError == nil, "\(s.brushError ?? "")")
+        let kept = try #require(s.document?.layers.first { $0.id == live.id })
+        #expect(kept.mask == ownMask, "the switched-off mask is the same mask, still switched off: same pixels, same state")
+        #expect(kept.mask?.asset.image === ownMask.asset.image && kept.mask?.isEnabled == false)
+        #expect(kept.liveSource == live.liveSource && kept.asset?.image === live.asset?.image && s.history.undoCount == 1)
+        // No layer is added: the coverage is the layer's own, in its own grid.
+        #expect(s.document?.layers.map(\.id) == [live.id] && kept.maskSourceID == nil, "\(s.document?.layers.map(\.name) ?? [])")
+        let coverage = try #require(kept.bakedCoverage, "the coverage went into the layer's baked coverage")
+        #expect(coverage.image.width == grid.width && coverage.image.height == grid.height && coverage.linearPlane != nil)
+        let baked = try await exported(s)
+        #expect(F.worstRelative(baked, look) <= 1e-4, "the look after the bake differs from the look before it by \(F.worstRelative(baked, look))")
+        // Switched back on, the mask combines with the baked coverage exactly as it did with the live one.
+        let keptIndex = try #require(s.document?.layers.firstIndex { $0.id == live.id })
+        s.beginEdit("Enable Layer Mask"); s.document?.layers[keptIndex].mask?.isEnabled = true; s.endEdit()
+        let enabled = try await exported(s)
+        #expect(F.worstRelative(enabled, lookWithMask) <= 1e-4, "with the mask on the look differs by \(F.worstRelative(enabled, lookWithMask))")
+        s.beginEdit("Disable Layer Mask"); s.document?.layers[keptIndex].mask?.isEnabled = false; s.endEdit()
+        // A recipe change develops the layer again from its original: the coverage is still there, and still the look's.
+        try await develop(s) { $0.exposure = 1 }
+        let developed = try #require(s.document?.layers.first { $0.id == live.id })
+        #expect(developed.liveSource?.revision != live.liveSource?.revision && developed.bakedCoverage != nil)
+        let afterRecipe = try await exported(s)
+        let alphaError = zip(afterRecipe, look).map { abs($0.w - $1.w) }.max() ?? 1
+        #expect(alphaError <= 1e-4, "the coverage after a recipe change differs by \(alphaError)")
+        #expect(zip(afterRecipe, baked).contains { $0.w > 0.05 && abs($0.x - $1.x) > 0.01 }, "the recipe change shows in the export")
+
+        // Saved and reopened: the slot is in the package (format 15) and the look is the same.
+        let url = root.appendingPathComponent("Baked.comp")
+        let controller = HistoryFixture.controller(s, settings: LWHistorySettings(storageLimitBytes: 0))
+        #expect(await controller.save(to: url), "\(controller.notices)")
+        let manifest = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url.appendingPathComponent("manifest.json"))) as? [String: Any])
+        #expect(manifest["version"] as? Int == ProjectManifest.current && ProjectManifest.current == 15)
+        let record = try #require((manifest["layers"] as? [[String: Any]])?.first)
+        #expect(record["coverageFile"] as? String == live.id.uuidString + ".coverage.plane" && record["coveragePlaneArchiveReference"] != nil)
+        let reopened = try await HistoryFixture.open(url)
+        let other = reopened.session
+        let reopenedLayer = try #require(other.document?.layers.first)
+        #expect(try HistoryFixture.pixels(try #require(reopenedLayer.bakedCoverage), mask: true) == HistoryFixture.pixels(try #require(developed.bakedCoverage), mask: true))
+        #expect(reopenedLayer.mask?.isEnabled == false && reopenedLayer.maskSourceID == nil && other.document?.layers.count == 1)
+        #expect(F.worstRelative(try await exported(other), afterRecipe) <= 1e-6, "the reopened document looks as it was saved")
+        // Undone after the reopen, step by step, back to before the deletion: the slot goes with the step that made it.
+        await other.undoNow(); await other.undoNow(); await other.undoNow(); await other.undoNow()
+        #expect(other.commandRefusal == nil, "\(other.commandRefusal ?? "")")
+        #expect(other.document?.layers.count == 2 && other.document?.layers.first?.bakedCoverage == nil && other.document?.layers.first?.maskSourceID == soft.id)
+        #expect(F.worstRelative(try await exported(other), look) <= 1e-4, "undo after reopening restores the live clipping")
+        // In this session too.
+        s.undo(); s.undo(); s.undo(); s.undo()
+        #expect(s.document == before && s.history.undoCount == 0)
+        s.redo(); s.redo(); s.redo(); s.redo()
+        #expect(s.document?.layers.first?.bakedCoverage != nil)
+
+        // Image Size takes the baked coverage into the layer's new grid with its pixels: at twice the size with
+        // nearest sampling, every pixel's coverage is the one it was enlarged from.
+        let unsized = try await exported(s)
+        let (oldWidth, oldHeight) = (try #require(s.document?.width), try #require(s.document?.height))
+        let sized = try await ImageResizer.shared.resize(try #require(s.projectSnapshot()),
+            to: ImageSizeOptions(width: oldWidth * 2, height: oldHeight * 2, resolution: 144, sampling: .nearest))
+        s.applyImageSize(sized)
+        let sizedLayer = try #require(s.document?.layers.first { $0.id == live.id })
+        let sizedCoverage = try #require(sizedLayer.bakedCoverage, "Image Size keeps the slot")
+        #expect(sizedCoverage.image.width == sizedLayer.asset?.image.width && sizedCoverage.image.height == sizedLayer.asset?.image.height
+            && sizedCoverage.image.width == grid.width * 2, "the coverage is in the layer's new grid")
+        let enlarged = try await exported(s)
+        #expect(enlarged.count == unsized.count * 4)
+        var sizeError: Float = 0
+        for i in enlarged.indices {
+            let row = i / (oldWidth * 2) / 2, column = (i % (oldWidth * 2)) / 2
+            sizeError = max(sizeError, abs(enlarged[i].w - unsized[row * oldWidth + column].w))
+        }
+        #expect(sizeError <= 1e-4, "after Image Size the coverage differs by \(sizeError)")
+        s.undo()
+        #expect(s.document?.width == oldWidth && s.document?.layers.first?.bakedCoverage != nil)
+
+        // Every copy of the layer carries the slot: Duplicate Layer, Paste, and a copy into another document.
+        s.selectLayer(live.id)
+        s.duplicateActiveLayer()
+        #expect(s.activeLayer?.id != live.id && s.activeLayer?.bakedCoverage?.image === s.document?.layers.first?.bakedCoverage?.image, "Duplicate Layer carries the slot")
+        s.undo()
+        s.selectLayer(live.id); s.copySelection()
+        #expect(workspace.pasteCopiedLayer() && s.activeLayer?.id != live.id && s.activeLayer?.bakedCoverage != nil, "Paste carries the slot")
+        s.undo()
+        let second = workspace.addTab(reuseEmpty: false)
+        second.session.createDocument(width: grid.width, height: grid.height)
+        await workspace.copyLayers([live.id], into: second.id)
+        let crossed = try #require(second.session.document?.layers.first { $0.liveSource != nil })
+        #expect(crossed.bakedCoverage?.image === s.document?.layers.first?.bakedCoverage?.image && crossed.mask?.isEnabled == false, "a copy into another document carries the slot")
+        // Merged with another layer, the coverage is in the merged pixels.
+        let mergedLook = try await exported(s)
+        s.addBlankLayer(); s.selectLayers(Set(s.document?.layers.map(\.id) ?? []), primary: live.id)
+        s.mergeLayers()
+        try await Self.idle(s)
+        #expect(s.brushError == nil && s.document?.layers.count == 1 && s.document?.layers.first?.liveSource == nil, "\(s.brushError ?? "")")
+        #expect(F.worstRelative(try await exported(s), mergedLook) <= 1e-4, "the merged layer keeps the coverage's look")
+        try await reopened.releaseConfirmedSourceProject(deadline: ContinuousClock.now.advanced(by: .seconds(30)))
+        try await controller.releaseConfirmedSourceProject(deadline: ContinuousClock.now.advanced(by: .seconds(30)))
+        try await LWSourceDeveloper.shared.drainRetainedSessions()
+    }
+
+    /// Persistent history of a live source layer: each recipe change is an undo step that survives close and
+    /// reopen with its source node, its developed float pixels and its recorded source files, and undoing after the
+    /// reopen develops from the same original as before.
+    @Test func aLiveSourceLayersHistorySurvivesCloseAndReopen() async throws {
+        let (s, root) = try await liveRawSession(); defer { try? FileManager.default.removeItem(at: root) }
+        let live = try #require(s.activeLayer)
+        let imported = try await exported(s)
+        try await develop(s) { $0.exposure = 1 }
+        let brighter = try await exported(s), brighterNode = try #require(s.activeLayer?.liveSource)
+        #expect(s.createCheckpoint(named: "Exposure +1") != nil)
+        try await develop(s) { $0.exposure = -1 }
+        let darker = try await exported(s), darkerNode = try #require(s.activeLayer?.liveSource)
+        #expect(brighterNode.revision != darkerNode.revision && live.liveSource?.revision != brighterNode.revision)
+        let controller = HistoryFixture.controller(s, settings: LWHistorySettings(storageLimitBytes: 0))
+        let url = root.appendingPathComponent("Live.comp")
+        #expect(await controller.save(to: url), "\(controller.notices)")
+        let steps = s.history.undoCount
+
+        let reopened = try await HistoryFixture.open(url)
+        let other = reopened.session
+        #expect(other.history.undoCount == steps && other.history.checkpoints.map(\.name) == ["Exposure +1"])
+        #expect(other.activeLayer?.liveSource == darkerNode, "the reopened layer is the same source node")
+        #expect(F.worstRelative(try await exported(other), darker) <= 1e-6)
+        await other.undoNow()
+        #expect(other.commandRefusal == nil, "\(other.commandRefusal ?? "")")
+        #expect(other.activeLayer?.liveSource == brighterNode && other.activeLayer?.asset?.linearPlane != nil, "undo restores the earlier recipe, still live and float")
+        #expect(F.worstRelative(try await exported(other), brighter) <= 1e-6, "the earlier development's pixels are exact")
+        await other.undoNow()
+        #expect(other.activeLayer?.liveSource == live.liveSource)
+        #expect(F.worstRelative(try await exported(other), imported) <= 1e-6)
+        // The restored layer is still developable from its original: a new recipe change works on it.
+        try await develop(other) { $0.exposure = 0.5 }
+        #expect(other.brushError == nil && other.activeLayer?.liveSource?.revision != live.liveSource?.revision)
+        #expect(await other.restoreCheckpointNow(try #require(other.history.checkpoints.first?.id)))
+        #expect(other.activeLayer?.liveSource == brighterNode)
+        #expect(F.worstRelative(try await exported(other), brighter) <= 1e-6)
+        try await reopened.releaseConfirmedSourceProject(deadline: ContinuousClock.now.advanced(by: .seconds(30)))
+        try await controller.releaseConfirmedSourceProject(deadline: ContinuousClock.now.advanced(by: .seconds(30)))
+        try await LWSourceDeveloper.shared.drainRetainedSessions()
+    }
+
+    /// A recipe change on a live source layer is a step whose layer is developed from its original: the saved step
+    /// keeps the recipe (the source node), not a whole developed float frame, so at the default storage limit every
+    /// step is kept. Over a limit the oldest go, and the person is told how many and why.
+    @Test func aRecipeChangeOnALiveSourceLayerStoresItsRecipeNotItsDevelopedPixels() async throws {
+        let (s, root) = try await liveRawSession(width: 512, height: 384); defer { try? FileManager.default.removeItem(at: root) }
+        final class Limit: @unchecked Sendable { var value = LWHistorySettings() }
+        let limit = Limit()
+        let controller = HistoryFixture.controller(s)
+        controller.historySettings = { limit.value }
+        let url = root.appendingPathComponent("Recipe.comp")
+        #expect(await controller.save(to: url), "\(controller.notices)")
+        var sizes = [HistoryFixture.historyBytes(url)]
+        for step in 1...6 {
+            try await develop(s) { $0.exposure = Double(step) * 0.25 }
+            #expect(await controller.save(), "\(controller.notices)")
+            sizes.append(HistoryFixture.historyBytes(url))
+        }
+        let costs = zip(sizes.dropFirst(), sizes).map { $0 - $1 }
+        let frame = Int64(512 * 384 * 16)
+        print("LIVE_RAW_STEP_COST frame \(frame) sizes \(sizes) costs \(costs)")
+        #expect(costs.dropFirst().allSatisfy { $0 < frame / 16 }, "a recipe step costs its recipe, not a developed frame of \(frame) bytes: \(costs)")
+        // At the default limit (1 GB) every step is kept and nothing is said.
+        #expect(LWHistorySettings().storageLimitBytes == 1024 * 1024 * 1024 && s.history.undoCount == 7)
+        #expect(s.historyPruneNotice == nil && controller.notices.isEmpty)
+        // Under a limit the history no longer fits, the oldest steps go and the person is told how many and the limit.
+        let total = try #require(s.historyUsage).bytes
+        limit.value = LWHistorySettings(storageLimitBytes: total - 1)
+        try await develop(s) { $0.exposure = 2 }
+        #expect(await controller.save(), "\(controller.notices)")
+        let notice = try #require(s.historyPruneNotice, "a save that removed steps says so")
+        let left = s.history.undoCount
+        #expect(left > 0 && left < 8 && notice.removedSteps == 8 - left && notice.limitBytes == total - 1, "\(left) steps left, \(notice)")
+        #expect(notice.message.contains(HistoryPruneNotice.steps(notice.removedSteps)) && notice.message.contains("can no longer be undone"))
+        #expect(controller.notices.count == 1 && controller.notices[0].hasPrefix("Saving removed undo steps"), "\(controller.notices)")
+        let reopened = try await HistoryFixture.open(url)
+        #expect(reopened.session.history.undoCount == left, "the steps left in Undo are the steps saved")
+        // Undoing a saved recipe step develops the layer from its original again.
+        await reopened.session.undoNow()
+        #expect(reopened.session.commandRefusal == nil && reopened.session.activeLayer?.liveSource?.settings.exposure == 1.5, "\(reopened.session.commandRefusal ?? "")")
+        try await reopened.releaseConfirmedSourceProject(deadline: ContinuousClock.now.advanced(by: .seconds(30)))
+        try await controller.releaseConfirmedSourceProject(deadline: ContinuousClock.now.advanced(by: .seconds(30)))
         try await LWSourceDeveloper.shared.drainRetainedSessions()
     }
 

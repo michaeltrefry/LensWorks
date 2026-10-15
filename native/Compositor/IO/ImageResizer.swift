@@ -28,7 +28,7 @@ actor ImageResizer {
         manifest.width = options.width; manifest.height = options.height; manifest.resolution = options.resolution; manifest.layers = []
         if old.width == options.width && old.height == options.height {
             manifest.layers = old.layers
-            return ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, workingVersion:snapshot.workingVersion)
+            return ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, coverages: snapshot.coverages, workingVersion:snapshot.workingVersion)
         }
         guard options.width * options.height <= DocumentLimits.maxSurfacePixels else { throw ProjectError.tooLarge }
         let sx = CGFloat(options.width) / CGFloat(old.width)
@@ -36,7 +36,8 @@ actor ImageResizer {
         manifest.guides = old.guides?.map { $0.scaled(x: sx, y: sy) }
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
-        var usedPixels = 0, usedMaskPixels = 0
+        var coverages: [UUID: ImportedImage] = [:]
+        var usedPixels = 0, usedMaskPixels = 0, usedCoveragePixels = 0
         for layer in old.layers {
             try Task.checkCancellation()
             // Rasterize each transformed layer independently. Nonuniform scaling of a
@@ -90,6 +91,21 @@ actor ImageResizer {
                         masks[layer.id] = owned;changed.maskPlaneArchiveReference = owned.planeArchiveReference
                         changed.maskFile = "\(layer.id.uuidString).mask.plane"
                     }
+                }
+                // A baked coverage lies over the layer's own grid: it is taken into the new grid exactly as the
+                // layer's pixels are.
+                if layer.coverageFile != nil {
+                    guard let coverage = snapshot.coverages[layer.id] else { throw ProjectError.missingImage }
+                    try coverage.validatePlaneRead()
+                    guard width * height <= DocumentLimits.documentPixelBudget - usedCoveragePixels else { throw ProjectError.tooLarge }
+                    usedCoveragePixels += width * height
+                    let coverageMapping = BrushRaster.pixelToDocument(layer.transform,width:coverage.image.width,height:coverage.image.height)
+                        .concatenating(CGAffineTransform(scaleX:sx,y:sy)).concatenating(CGAffineTransform(translationX:-left,y:-top))
+                    let resizedCoverage = try LWSourceMaskReconcile.projectCoverage(try LWSourceMaskReconcile.plane(coverage,workspace:workspace),
+                        mapping:coverageMapping,width:width,height:height,sampling:options.sampling,workspace:workspace)
+                    let owned = try ImportedImage(maskPlane:resizedCoverage,name:coverage.name)
+                    try coverage.validatePlaneRead()
+                    coverages[layer.id] = owned;changed.coveragePlaneArchiveReference = owned.planeArchiveReference
                 }
                 manifest.layers.append(changed); continue
             }
@@ -162,7 +178,7 @@ actor ImageResizer {
             resized.maskPlacement = layer.maskPlacement.map { $0.placing($0.unitToDocument.concatenating(CGAffineTransform(scaleX:sx,y:sy))) }
             manifest.layers.append(resized)
         }
-        return ProjectSnapshot(manifest: manifest, images: images, masks: masks, workingVersion:snapshot.workingVersion)
+        return ProjectSnapshot(manifest: manifest, images: images, masks: masks, coverages: coverages, workingVersion:snapshot.workingVersion)
     }
 }
 
@@ -206,7 +222,7 @@ extension EditorSession {
             layers: m.layers.map { ImageLayer(id: $0.id, asset: snapshot.images[$0.id], name: $0.name,
                 isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: snapshot.mask(for: $0), maskSourceID: $0.maskSourceID, adjustment: $0.adjustment,
                 shape: LayerShape.loaded($0.shape,image:snapshot.images[$0.id]?.image),effects:$0.effects,
-                text: LayerText.loaded($0.text,image:snapshot.images[$0.id]?.image),liveSource:$0.liveSource) }, resolution: m.resolution ?? 72, guides: m.guides ?? [])
+                text: LayerText.loaded($0.text,image:snapshot.images[$0.id]?.image),liveSource:$0.liveSource,bakedCoverage:snapshot.bakedCoverage(for:$0)) }, resolution: m.resolution ?? 72, guides: m.guides ?? [])
         endEdit()
         viewport.fit(documentSize: document!.size)
     }

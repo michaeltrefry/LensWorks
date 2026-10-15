@@ -1,0 +1,432 @@
+{
+  "activeLayerID" : "00000000-0000-4000-8000-000000000002",
+  "colorSpace" : "sRGB",
+  "documentID" : "00000000-0000-4000-8000-000000000100",
+  "format" : "com.compositor.project",
+  "guides" : [
+    {
+      "axis" : "vertical",
+      "id" : "00000000-0000-4000-8000-000000000020",
+      "position" : 10.5
+    },
+    {
+      "axis" : "horizontal",
+      "id" : "00000000-0000-4000-8000-000000000021",
+      "position" : 7
+    }
+  ],
+  "height" : 32,
+  "layers" : [
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000001",
+      "imageFile" : "00000000-0000-4000-8000-000000000001.png",
+      "isVisible" : true,
+      "name" : "Base",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Multiply",
+      "id" : "00000000-0000-4000-8000-000000000002",
+      "imageFile" : "00000000-0000-4000-8000-000000000002.png",
+      "isVisible" : false,
+      "maskEnabled" : false,
+      "maskFile" : "00000000-0000-4000-8000-000000000002.mask.png",
+      "maskLinked" : false,
+      "maskPlacement" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          6,
+          5
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          20,
+          12
+        ]
+      },
+      "name" : "Top",
+      "opacity" : 0.75,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          5,
+          4
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          20,
+          12
+        ]
+      }
+    },
+    {
+      "id" : "00000000-0000-4000-8000-000000000003",
+      "isGroup" : true,
+      "isVisible" : true,
+      "maskFile" : "00000000-0000-4000-8000-000000000003.mask.png",
+      "name" : "Folder",
+      "opacity" : 0.6,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000004",
+      "imageFile" : "00000000-0000-4000-8000-000000000004.png",
+      "isVisible" : true,
+      "maskSourceID" : "00000000-0000-4000-8000-000000000001",
+      "name" : "Inside",
+      "opacity" : 1,
+      "parentID" : "00000000-0000-4000-8000-000000000003",
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          30,
+          20
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          16,
+          10
+        ]
+      }
+    },
+    {
+      "adjustment" : {
+        "colorize" : false,
+        "curves" : {
+          "channel" : "RGB",
+          "channels" : [
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ],
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ],
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ],
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ]
+          ]
+        },
+        "hue" : 20,
+        "kind" : "Hue\/Saturation",
+        "levels" : {
+          "channel" : "RGB",
+          "ranges" : [
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            },
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            },
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            },
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            }
+          ]
+        },
+        "lightness" : 0,
+        "saturation" : 0
+      },
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000005",
+      "isVisible" : true,
+      "name" : "Hue",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Normal",
+      "effects" : {
+        "stroke" : {
+          "blue" : 0,
+          "green" : 0.5,
+          "inside" : false,
+          "opacity" : 0.8,
+          "red" : 1,
+          "size" : 3
+        }
+      },
+      "id" : "00000000-0000-4000-8000-000000000006",
+      "imageFile" : "00000000-0000-4000-8000-000000000006.png",
+      "isVisible" : true,
+      "name" : "Shape",
+      "opacity" : 1,
+      "shape" : {
+        "blue" : 0.6,
+        "cornerRadius" : 2,
+        "green" : 0.4,
+        "kind" : "Rectangle",
+        "red" : 0.2
+      },
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          2,
+          22
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          12,
+          8
+        ]
+      }
+    },
+    {
+      "adjustment" : {
+        "blurRadius" : 1.5,
+        "colorize" : false,
+        "curves" : {
+          "channel" : "RGB",
+          "channels" : [
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ],
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ],
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ],
+            [
+              {
+                "x" : 0,
+                "y" : 0
+              },
+              {
+                "x" : 255,
+                "y" : 255
+              }
+            ]
+          ]
+        },
+        "hue" : 0,
+        "kind" : "Gaussian Blur",
+        "levels" : {
+          "channel" : "RGB",
+          "ranges" : [
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            },
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            },
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            },
+            {
+              "black" : 0,
+              "gamma" : 1,
+              "outputBlack" : 0,
+              "outputWhite" : 255,
+              "white" : 255
+            }
+          ]
+        },
+        "lightness" : 0,
+        "saturation" : 0
+      },
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000007",
+      "isVisible" : true,
+      "name" : "Blur",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000008",
+      "imageFile" : "00000000-0000-4000-8000-000000000008.png",
+      "isVisible" : true,
+      "name" : "Text",
+      "opacity" : 1,
+      "text" : {
+        "alignment" : "Left",
+        "blue" : 0,
+        "colorRuns" : [
+          {
+            "blue" : 0,
+            "green" : 0,
+            "length" : 3,
+            "location" : 0,
+            "red" : 1
+          }
+        ],
+        "content" : "S17 text",
+        "fontName" : "Helvetica",
+        "fontRuns" : [
+          {
+            "fontName" : "Courier",
+            "length" : 4,
+            "location" : 4
+          }
+        ],
+        "fontSize" : 9,
+        "green" : 0,
+        "leading" : 0,
+        "red" : 0,
+        "tracking" : 0
+      },
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          20,
+          2
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          24,
+          10
+        ]
+      }
+    }
+  ],
+  "resolution" : 300,
+  "version" : 12,
+  "width" : 48
+}

@@ -1,0 +1,56 @@
+{
+  "activeLayerID" : "E6C5E0F0-B460-47F6-9C35-A5CAE56366FC",
+  "colorSpace" : "sRGB",
+  "documentID" : "2C7FD7FC-E270-4270-8551-60D1E138EBF0",
+  "format" : "com.compositor.project",
+  "height" : 32,
+  "layers" : [
+    {
+      "blendMode" : "Normal",
+      "coverageFile" : "E6C5E0F0-B460-47F6-9C35-A5CAE56366FC.coverage.plane",
+      "coveragePlaneArchiveReference" : {
+        "height" : 32,
+        "manifestSHA256" : "e993eaa603a5bd43cb3e4eb6a54809caf9189b389f8c5766cfc4fcd763874f2e",
+        "planeID" : "09EA9320-0D10-4A16-ADF0-1B8ADC46C1C4",
+        "schema" : 1,
+        "width" : 48
+      },
+      "id" : "E6C5E0F0-B460-47F6-9C35-A5CAE56366FC",
+      "imageFile" : "E6C5E0F0-B460-47F6-9C35-A5CAE56366FC.plane",
+      "isGroup" : false,
+      "isVisible" : true,
+      "liveSourceFile" : "e51df5b97c54eab9bc8cdb11ce6d1743a1d794f641e10a07a8bcace27042c758.json",
+      "maskEnabled" : false,
+      "maskFile" : "E6C5E0F0-B460-47F6-9C35-A5CAE56366FC.mask.png",
+      "maskLinked" : true,
+      "name" : "v15",
+      "opacity" : 1,
+      "planeArchiveReference" : {
+        "height" : 32,
+        "manifestSHA256" : "2b20b20b9a77c08a205c276dc174cbe444d085526032d6f37e5f0e80b41f0f77",
+        "planeID" : "454EFA64-9631-435E-AE5B-4121E8080524",
+        "schema" : 1,
+        "width" : 48
+      },
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "High quality",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    }
+  ],
+  "resolution" : 72,
+  "version" : 15,
+  "width" : 48,
+  "workingSample" : "float32-straight-RGBA",
+  "workingSpace" : "extended-linear-sRGB"
+}

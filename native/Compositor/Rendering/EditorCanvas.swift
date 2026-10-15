@@ -2816,7 +2816,7 @@ extension CanvasView {
                 manifest.layers[i].transform=edit.preparedTransform ?? edit.grownTransform ?? edit.transform
             }
         }
-        return (ProjectSnapshot(manifest: manifest, images: images, masks: original.masks), projected)
+        return (ProjectSnapshot(manifest: manifest, images: images, masks: original.masks, coverages: original.coverages), projected)
     }
 
     private func gpuLayers(_ document: CanvasDocument, placement: GPUPlacement, visible: CGRect) -> CIImage? {

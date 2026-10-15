@@ -1,0 +1,118 @@
+{
+  "activeLayerID" : "00000000-0000-4000-8000-000000000002",
+  "colorSpace" : "sRGB",
+  "documentID" : "00000000-0000-4000-8000-000000000100",
+  "format" : "com.compositor.project",
+  "height" : 32,
+  "layers" : [
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000001",
+      "imageFile" : "00000000-0000-4000-8000-000000000001.png",
+      "isVisible" : true,
+      "name" : "Base",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Multiply",
+      "id" : "00000000-0000-4000-8000-000000000002",
+      "imageFile" : "00000000-0000-4000-8000-000000000002.png",
+      "isVisible" : false,
+      "maskEnabled" : false,
+      "maskFile" : "00000000-0000-4000-8000-000000000002.mask.png",
+      "maskLinked" : false,
+      "maskPlacement" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          6,
+          5
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          20,
+          12
+        ]
+      },
+      "name" : "Top",
+      "opacity" : 0.75,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          5,
+          4
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          20,
+          12
+        ]
+      }
+    },
+    {
+      "id" : "00000000-0000-4000-8000-000000000003",
+      "isGroup" : true,
+      "isVisible" : true,
+      "name" : "Folder",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000004",
+      "imageFile" : "00000000-0000-4000-8000-000000000004.png",
+      "isVisible" : true,
+      "maskSourceID" : "00000000-0000-4000-8000-000000000001",
+      "name" : "Inside",
+      "opacity" : 1,
+      "parentID" : "00000000-0000-4000-8000-000000000003",
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          30,
+          20
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          16,
+          10
+        ]
+      }
+    }
+  ],
+  "resolution" : 300,
+  "version" : 5,
+  "width" : 48
+}

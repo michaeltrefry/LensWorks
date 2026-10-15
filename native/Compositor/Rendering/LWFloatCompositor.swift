@@ -407,7 +407,7 @@ nonisolated extension LWFloatCompositor {
                 manifest.layers[i].maskPlacement = manifest.layers[i].maskPlacement.map(shifted)
             }
             manifest.width = region.width; manifest.height = region.height
-            snapshot = ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, workingVersion: snapshot.workingVersion)
+            snapshot = ProjectSnapshot(manifest: manifest, images: snapshot.images, masks: snapshot.masks, coverages: snapshot.coverages, workingVersion: snapshot.workingVersion)
             documentOrigin = CGPoint(x: dx, y: dy)
         }
         let width = snapshot.manifest.width, height = snapshot.manifest.height
@@ -421,6 +421,14 @@ nonisolated extension LWFloatCompositor {
             let w = local?.width ?? width, h = local?.height ?? height
             let target = local != nil ? layer.transform : LayerTransform(origin:.zero,size:CGSize(width:w,height:h))
             return try LWSourceMaskReconcile.coveragePlane(mask,over:target,width:w,height:h,workspace:workspace)
+        }
+        /// The coverage baked into a layer, stretched over the layer's own grid. A record that names one the
+        /// snapshot does not carry is refused: a path that dropped it must not quietly show the layer without it.
+        func bakedCoverage(_ layer: ProjectLayerRecord, local: LWFloatPlane) throws -> LWFloatPlane? {
+            guard layer.coverageFile != nil else { return nil }
+            guard let asset = snapshot.coverages[layer.id] else { throw ProjectError.missingImage }
+            if let plane = asset.linearPlane, plane.width == local.width, plane.height == local.height { return plane }
+            return try LWSourceMaskReconcile.coveragePlane(LayerMask(asset: asset), over: layer.transform, width: local.width, height: local.height, workspace: workspace)
         }
         func applyAlpha(_ surface: LWFloatPlane, coverage: LWFloatPlane?, opacity: Float = 1) throws -> LWFloatPlane {
             guard coverage.map({ $0.width == surface.width && $0.height == surface.height }) ?? true,
@@ -441,11 +449,13 @@ nonisolated extension LWFloatCompositor {
             // would materialize the full layer even when only one region of it is evaluated.
             // Placement converts the samples it reads to premultiplied extended-linear float before any resampling,
             // exactly as converting the image to a plane first would, so the result is the same.
-            if asset.linearPlane == nil, snapshot.mask(for: record)?.isEnabled != true, record.effects?.visible.isEmpty ?? true {
+            if asset.linearPlane == nil, snapshot.mask(for: record)?.isEnabled != true, record.coverageFile == nil, record.effects?.visible.isEmpty ?? true {
                 return try place(asset.image, transform: record.transform, width: width, height: height, workspace: workspace)
             }
             var local = try asset.linearPlane ?? from(asset.image, workspace: workspace)
             local = try applyAlpha(local, coverage: checkedMask(record, local: local))
+            // Coverage baked into the layer multiplies its alpha too, whatever its own mask does.
+            local = try applyAlpha(local, coverage: bakedCoverage(record, local: local))
             if let effects = record.effects?.visible, !effects.isEmpty {
                 let made = try LWFloatEffects.local(local, effects: effects, workspace: workspace)
                 // Only dimensions enter placement; retain the range provider until

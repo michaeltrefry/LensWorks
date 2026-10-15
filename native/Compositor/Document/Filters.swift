@@ -841,6 +841,12 @@ extension EditorSession {
                 changed.mask = try LWSourceMaskReconcile.reconcilePlane(current.mask, previous: previous,
                     next: result.map, transform: current.transform, workspace: workspace)
             }
+            // Coverage baked into the layer lies over its developed grid: it follows the grid when the recipe (a
+            // crop, a rotation, a lens correction) or a filter that grows the layer changes it, as a linked mask does.
+            if let coverage = current.bakedCoverage {
+                changed.bakedCoverage = try LWSourceMaskReconcile.reconcilePlane(LayerMask(asset: coverage), previous: previous,
+                    next: result.map, transform: current.transform, workspace: workspace)?.asset
+            }
             if edit.kind != .cameraRaw { filterSettings = rendered }
             try workspace.cancellation.check(); try Task.checkCancellation()
             guard beginEdit(edit.kind.rawValue) else { return }

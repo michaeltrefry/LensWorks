@@ -219,7 +219,7 @@ nonisolated extension ProjectSnapshot {
         let topology=try LWSourceMetadataStorage.collectionBytes(count:imageCount,
             stride:MemoryLayout<UUID>.stride+MemoryLayout<ImportedImage>.stride)
         let manifest=try manifest.metadataCopy(additionalBytes:topology,workingSet:workingSet)
-        return .init(manifest:manifest,images:images,masks:masks,workingVersion:workingVersion)
+        return .init(manifest:manifest,images:images,masks:masks,coverages:coverages,workingVersion:workingVersion)
     }
 }
 

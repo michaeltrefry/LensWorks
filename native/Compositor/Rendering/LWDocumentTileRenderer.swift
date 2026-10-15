@@ -467,13 +467,14 @@ nonisolated final class LWDocumentTileRenderer: LWFloatReclaimable, @unchecked S
             return "image:\(UInt(bitPattern: ObjectIdentifier(asset.image)))"
         }
         // One layer's own state: record (transform, blend, opacity, visibility, adjustment,
-        // effects, live source recipe), its pixels and its mask.
+        // effects, live source recipe), its pixels, its mask and its baked coverage.
         var own: [UUID: Data] = [:]
         for record in manifest.layers {
             var hash = SHA256()
             hash.update(data: try encoder.encode(record))
             hash.update(data: Data(identity(snapshot.images[record.id]).utf8))
             hash.update(data: Data(identity(record.maskFile == nil ? nil : snapshot.masks[record.id]).utf8))
+            hash.update(data: Data(identity(record.coverageFile == nil ? nil : snapshot.coverages[record.id]).utf8))
             own[record.id] = Data(hash.finalize())
         }
         // Plus what reaches it from elsewhere: enclosing folders and clipping sources.

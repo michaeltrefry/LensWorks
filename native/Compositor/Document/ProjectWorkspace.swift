@@ -92,7 +92,9 @@ final class ProjectWorkspace {
         return opened
     }
     private func loadProject(_ url: URL) async -> Bool {
-        if let existing = tabs.first(where: { $0.session.projectURL?.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() }) {
+        // By path: a package's URL may or may not end in a slash, depending on whether it existed when the URL was made.
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        if let existing = tabs.first(where: { $0.session.projectURL?.resolvingSymlinksInPath().standardizedFileURL.path == path }) {
             selectedID = existing.id; return true
         }
         // Load into an unattached session, so a failed open never leaves a broken tab.
@@ -269,8 +271,9 @@ final class ProjectWorkspace {
             for i in copied.indices where copied[i].maskSourceID.map({ !included.contains($0) }) == true {
                 if copied[i].adjustment != nil { copied[i].maskSourceID = nil; continue }
                 let layerID = copied[i].id
-                try await Task.detached(priority: .userInitiated) { try LiveMaskBaker.bake(snapshot, target: layerID) }.value?.apply(to: &copied[i])
+                let baked = try await Task.detached(priority: .userInitiated) { try LiveMaskBaker.bake(snapshot, target: layerID) }.value
                 copied[i].maskSourceID = nil
+                baked?.apply(to: &copied[i])
             }
             let mapping = Dictionary(uniqueKeysWithValues: copied.map { ($0.id, UUID()) })
             let size = target.session.document?.size ?? sourceDocument.size
@@ -289,6 +292,8 @@ final class ProjectWorkspace {
                     opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] }, adjustment: layer.adjustment, shape: layer.shape, effects: layer.effects, text: layer.text)
                 // A live source layer stays one in the other project: its copy is developed there from the same original.
                 copy.liveSource = try layer.liveSource?.forked()
+                // With whatever coverage is baked into it: it lies over the layer's own grid, wherever the layer goes.
+                copy.bakedCoverage = layer.bakedCoverage
                 return copy
             }
             target.session.isProjectBusy = false

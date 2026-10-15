@@ -89,6 +89,6 @@ actor CanvasResizer {
                 transform: LayerTransform(origin: .zero, size: CGSize(width: options.width, height: options.height)),
                 imageFile: "\(id.uuidString)." + (asset.linearPlane == nil ? "png":"plane"),planeArchiveReference:asset.planeArchiveReference), at: 0)
         }
-        return ProjectSnapshot(manifest: manifest, images: images, masks: snapshot.masks, workingVersion:snapshot.workingVersion)
+        return ProjectSnapshot(manifest: manifest, images: images, masks: snapshot.masks, coverages: snapshot.coverages, workingVersion:snapshot.workingVersion)
     }
 }

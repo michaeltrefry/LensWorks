@@ -231,6 +231,7 @@ extension EditorSession {
             if let node = original.liveSource {
                 do { copy.liveSource = try node.forked() } catch { brushError = error.localizedDescription; return nil }
             }
+            copy.bakedCoverage = original.bakedCoverage
             copies.append(copy)
         }
         document?.layers.insert(contentsOf: copies, at: index + 1)

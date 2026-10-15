@@ -1,0 +1,55 @@
+{
+  "activeLayerID" : "00000000-0000-4000-8000-000000000002",
+  "colorSpace" : "sRGB",
+  "documentID" : "00000000-0000-4000-8000-000000000100",
+  "format" : "com.compositor.project",
+  "height" : 32,
+  "layers" : [
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000001",
+      "imageFile" : "00000000-0000-4000-8000-000000000001.png",
+      "isVisible" : true,
+      "name" : "Base",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          0,
+          0
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          48,
+          32
+        ]
+      }
+    },
+    {
+      "blendMode" : "Normal",
+      "id" : "00000000-0000-4000-8000-000000000002",
+      "imageFile" : "00000000-0000-4000-8000-000000000002.png",
+      "isVisible" : false,
+      "name" : "Top",
+      "opacity" : 1,
+      "transform" : {
+        "flipX" : false,
+        "flipY" : false,
+        "origin" : [
+          5,
+          4
+        ],
+        "rotation" : 0,
+        "sampling" : "Nearest",
+        "size" : [
+          20,
+          12
+        ]
+      }
+    }
+  ],
+  "version" : 1,
+  "width" : 48
+}

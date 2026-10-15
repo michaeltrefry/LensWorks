@@ -1,0 +1,10 @@
+{
+  "document" : [
+    "00000000-0000-4000-8000-000000000100 48x32 @300.0 guides []",
+    "00000000-0000-4000-8000-000000000001 Base visible true at (0.0, 0.0) (48.0, 32.0) r0.0 parent - group false opacity 1.0 blend normal clip - adjustment - source - pixels 6f998da4d135d761b80a0472e4c585efa4918e39e9de8938814000fe55d0ed55",
+    "00000000-0000-4000-8000-000000000002 Top visible false at (5.0, 4.0) (20.0, 12.0) r0.0 parent - group false opacity 1.0 blend normal clip - adjustment - source - pixels 8237f37057324b47c582984886490a8e66df9d8aa2c047e75ffbb6c84e7e332b",
+    "00000000-0000-4000-8000-000000000003 Folder visible true at (0.0, 0.0) (48.0, 32.0) r0.0 parent - group true opacity 1.0 blend normal clip - adjustment - source -",
+    "00000000-0000-4000-8000-000000000004 Inside visible true at (30.0, 20.0) (16.0, 10.0) r0.0 parent 00000000-0000-4000-8000-000000000003 group false opacity 1.0 blend normal clip - adjustment - source - pixels 8e223c4b02cc9c73023af6be8fd38a967f0970e09beae8d1568cb53c7fec3136"
+  ],
+  "version" : 2
+}
