@@ -649,7 +649,12 @@ extension CompositorUITests {
         let window = XCTAttachment(screenshot: app.screenshot()); window.name = "S24 AI Models"; window.lifetime = .keepAlways; add(window)
 
         let download = app.buttons["LensWorks.models.download.sam2_hiera_large"]
-        XCTAssertTrue(download.waitForExistence(timeout: 10)); download.click()
+        XCTAssertTrue(download.waitForExistence(timeout: 10))
+        // A button clipped by the list's edge counts as hittable but the click misses; scroll it fully into view.
+        let list = app.descendants(matching: .any).matching(identifier: "LensWorks.models.list").firstMatch
+        for _ in 0..<20 where !list.frame.contains(download.frame) { list.scroll(byDeltaX: 0, deltaY: -40) }
+        XCTAssertTrue(list.frame.contains(download.frame), "the SAM 2 download button is scrolled into view")
+        download.click()
         let size = app.descendants(matching: .any).matching(identifier: "LensWorks.download.size").firstMatch
         XCTAssertTrue(size.waitForExistence(timeout: 20), "the sheet shows the download size")
         let location = app.descendants(matching: .any).matching(identifier: "LensWorks.download.location").firstMatch

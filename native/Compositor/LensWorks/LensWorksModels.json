@@ -14,7 +14,13 @@
         {"key": "sana_sprint_1_6b_1024px_diffusers", "declared": "apache-2.0"},
         {"key": "gemma_2_2b_it", "declared": "gemma"}
       ],
-      "sceneWorksLicense": {"id": "sana", "name": "NVIDIA Open Model License", "homepage": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px", "nonCommercial": true},
+      "licenseNote": "NVIDIA relicensed the SANA-Sprint weights to Apache-2.0 on 2026-07-31 (upstream commit 19683c58 on Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers, \"Relicense model under Apache-2.0\"); the weight files are unchanged. The pinned mirror revision SceneWorks/Sana_Sprint_1.6B_1024px_mlx@0b0d1848 predates that, so the LICENSE, NOTICE and README it carries still state the earlier non-commercial NVIDIA licence.",
+      "sceneWorksLicense": {"id": "sana", "name": "Apache-2.0 (SANA) · Gemma Terms of Use (text encoder)", "homepage": "https://huggingface.co/Efficient-Large-Model/Sana_Sprint_1.6B_1024px", "nonCommercial": false, "documents": [
+        {"label": "Apache License 2.0 (SANA transformer/VAE)", "url": "https://huggingface.co/Efficient-Large-Model/Sana_Sprint_1.6B_1024px/blob/main/LICENSE"},
+        {"label": "Gemma Terms of Use (text encoder)", "url": "https://ai.google.dev/gemma/terms"},
+        {"label": "Gemma Prohibited Use Policy", "url": "https://ai.google.dev/gemma/prohibited_use_policy"}
+      ]},
+      "licenseAcknowledgement": "I accept the Gemma Terms of Use, including the Gemma Prohibited Use Policy, which govern the bundled gemma-2-2b-it text encoder.",
       "memory": {"peakBytes": 19832105360, "residentBytes": 5568309580, "pixels": 1048576},
       "components": [
         {
