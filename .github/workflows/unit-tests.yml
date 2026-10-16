@@ -1,0 +1,108 @@
+name: Native unit tests (GitHub-hosted)
+# Builds the app and runs the CompositorTests unit-test bundle on a GitHub-hosted Apple-silicon runner, so every
+# pull request — including Dark Factory's story pull requests into its factory/changeset-* branches, hence no
+# branch filter — gets a unit-test result without the self-hosted runner. Native libraries come from Homebrew at
+# whatever versions the image's Homebrew offers, not the exact DEPENDENCIES.json pins (verify-dependencies.py is not
+# run here: the self-hosted jobs keep that acceptance check).
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+    # The code graph document is regenerated after every merge; it changes no build input.
+    paths-ignore: [CODEGRAPH.md]
+permissions: {contents: read}
+# A newer push to a pull request replaces its older runs. Pushes to main are grouped by commit and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+jobs:
+  compositor-tests:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 4
+      MACOSX_DEPLOYMENT_TARGET: "26.2"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.build/rust-catalog
+      PHOTOCATALOG_DNG_SDK: ${{ github.workspace }}/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1
+    steps:
+      - uses: actions/checkout@v4
+        # The Xcode project compiles only native/; vendor/Compositor is the frozen baseline reference.
+        with: {submodules: false}
+      - name: Select Xcode 26.5
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s /Applications/Xcode_26.5.app
+          xcodebuild -version
+      - name: Install the native libraries the app links
+        run: |
+          brew install libraw libavif webp jpeg-xl jpeg-turbo little-cms2 libomp pkg-config
+          for lib in libraw libavif libwebp libjxl libjpeg lcms2; do echo "$lib $(pkg-config --modversion $lib)"; done
+      - name: Restore the DNG SDK and the Rust build
+        id: rust-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/deps
+            .build/rust-catalog
+          key: unit-tests-rust-${{ hashFiles('rust-toolchain.toml', 'adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock', 'adapters/mcp/Cargo.lock') }}
+          restore-keys: unit-tests-rust-
+      - name: Build the Rust catalog library and test helpers
+        run: |
+          python3 engines/catalog/scripts/fetch_dng_sdk.py --destination .build/deps
+          cargo --version
+          cargo build --manifest-path adapters/catalog/Cargo.toml --locked --release
+          cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin photocatalog --bin organization_probe
+          cargo build --manifest-path adapters/mcp/Cargo.toml --locked --release
+      - name: Save the DNG SDK and the Rust build
+        # Saved as soon as the Rust build succeeds, so a later failing step does not cost the next run that build.
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/deps
+            .build/rust-catalog
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - name: Build for testing
+        run: |
+          xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' \
+            -configuration Debug -derivedDataPath .build/xcode-unit -onlyUsePackageVersionsFromResolvedFile CODE_SIGN_IDENTITY=-
+      - name: Install the decode and catalog helpers into the test host
+        # As scripts/build-native.sh does for the development app: the live RAW suites develop through
+        # Contents/Helpers/LensWorksDecodeWorker of the app that hosts the tests.
+        run: |
+          app=.build/xcode-unit/Build/Products/Debug/LensWorks.app
+          helpers="$app/Contents/Helpers"
+          mkdir -p "$helpers"
+          cp "$CARGO_TARGET_DIR/release/photocatalog" "$helpers/PhotoCatalogWorker"
+          cp "$CARGO_TARGET_DIR/release/lensworks-decode-worker" "$helpers/LensWorksDecodeWorker"
+          cp "$CARGO_TARGET_DIR/release/lensworks-mcp" "$helpers/LensWorksMCP"
+          for helper in PhotoCatalogWorker LensWorksDecodeWorker LensWorksMCP; do codesign --force --sign - --timestamp=none "$helpers/$helper"; done
+          codesign --force --sign - --timestamp=none --preserve-metadata=entitlements,flags,runtime "$app"
+          codesign --verify --strict --deep "$app"
+      - name: Run the CompositorTests unit tests
+        timeout-minutes: 60
+        env:
+          TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
+          TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
+          TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE: ${{ github.workspace }}/.build/rust-catalog/release/organization_probe
+          TEST_RUNNER_LW_MCP_BRIDGE: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-mcp
+          # The three live-menu CommandAuditTests are skipped above: on the hosted image macOS adds Window menu items
+          # (Move & Resize, Minimize All, Zoom All, Arrange) the registry does not list, so they fail here for the
+          # host's menus, not the app's. The self-hosted S47 workflow runs CommandAuditTests on the maintained runner.
+          # Tests that skip themselves when an optional input (real weights, a licensed RAW matrix) is absent may skip.
+          XCODEBUILD_TEST_ALLOW_SKIPPED: CompositorTests
+        run: |
+          ./scripts/ci/xcodebuild_test.sh UnitTests.xcresult -project native/Compositor.xcodeproj -scheme Compositor \
+            -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-unit -parallel-testing-enabled NO \
+            -only-testing:CompositorTests \
+            '-skip-testing:CompositorTests/CommandAuditTests/everyMainMenuItemAndShortcutMapsToARegisteredCommand()' \
+            '-skip-testing:CompositorTests/CommandAuditTests/auditFailsNamingAnInjectedBypassingMenuItemAndShortcut()' \
+            '-skip-testing:CompositorTests/CommandAuditTests/hiddenItemsThatKeepTheirKeyEquivalentAndUnidentifiedItemsInFileMenusAreAudited()'
+      - name: Upload unit test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: unit-tests, path: UnitTests.xcresult, if-no-files-found: ignore, retention-days: 7}
