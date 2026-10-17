@@ -1,7 +1,42 @@
 import Foundation
 
-/// What one photo version holds: live RAW settings, a layer graph and source references. It is LensWorks' own
-/// versioned record, separate from PhotoCatalog's strict recipe schema.
+/// A reference to another catalog source revision. This is deliberately a LensWorks record rather than a
+/// PhotoCatalog recipe so document versions can retain their source dependency independently.
+nonisolated struct LensWorksSourceReference: Codable, Sendable, Equatable, Hashable {
+    var photoID: String
+    var revision: String? = nil
+    var assetID: String? = nil
+
+    init(photoID: String, revision: String? = nil, assetID: String? = nil) {
+        self.photoID = photoID
+        self.revision = revision
+        self.assetID = assetID
+    }
+
+    init(legacyValue: String) {
+        let parts = legacyValue.split(separator: "@", maxSplits: 1).map(String.init)
+        self.init(photoID: parts[0], revision: parts.count == 2 ? parts[1] : nil)
+    }
+}
+
+/// The complete native layer graph of one LensWorks version. `ProjectLayerRecord` already owns the
+/// Codable representation for transforms, groups, masks, adjustments, effects, text and live RAW sources.
+nonisolated struct LensWorksLayerGraph: Codable, Sendable, Equatable {
+    var layers: [ProjectLayerRecord] = []
+
+    var assetIDs: Set<String> {
+        Set(layers.flatMap { [$0.imageFile, $0.maskFile, $0.liveSourceFile].compactMap { $0 } })
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // ProjectLayerRecord intentionally has no Equatable conformance because its runtime graph has
+        // ownership-only state. Its persisted representation is the document contract.
+        (try? JSONEncoder().encode(lhs)) == (try? JSONEncoder().encode(rhs))
+    }
+}
+
+/// What one photo version holds: legacy scalar values, the native layer/RAW graph and source references.
+/// It is LensWorks' own versioned record, separate from PhotoCatalog's strict recipe schema.
 nonisolated struct LensWorksVersionContent: Codable, Sendable, Equatable {
     struct Layer: Codable, Sendable, Equatable, Identifiable {
         var id: UUID
@@ -9,12 +44,43 @@ nonisolated struct LensWorksVersionContent: Codable, Sendable, Equatable {
         /// Pixel data lives in a document asset; nil for adjustment-style layers.
         var assetID: String?
     }
+    /// Kept to read schema 1/2 documents. Schema 3 graph commands use typed `liveSource` records instead.
     var rawSettings: [String: Double] = [:]
+    /// Kept to read schema 1/2 documents. New documents store their complete graph in `layerGraph`.
     var layers: [Layer] = []
-    /// Stable source-version references (photo ID + revision) that this content depends on.
-    var sourceReferences: [String] = []
+    var layerGraph: LensWorksLayerGraph? = nil
+    var sourceReferences: [LensWorksSourceReference] = []
 
-    var assetIDs: Set<String> { Set(layers.compactMap(\.assetID)) }
+    var assetIDs: Set<String> {
+        var ids = Set(layers.compactMap(\.assetID))
+        if let layerGraph { ids.formUnion(layerGraph.assetIDs) }
+        ids.formUnion(sourceReferences.compactMap(\.assetID))
+        return ids
+    }
+
+    private enum Keys: String, CodingKey { case rawSettings, layers, layerGraph, sourceReferences }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        rawSettings = try c.decodeIfPresent([String: Double].self, forKey: .rawSettings) ?? [:]
+        layers = try c.decodeIfPresent([Layer].self, forKey: .layers) ?? []
+        layerGraph = try c.decodeIfPresent(LensWorksLayerGraph.self, forKey: .layerGraph)
+        if let references = try? c.decode([LensWorksSourceReference].self, forKey: .sourceReferences) {
+            sourceReferences = references
+        } else {
+            sourceReferences = try c.decodeIfPresent([String].self, forKey: .sourceReferences)?.map(LensWorksSourceReference.init(legacyValue:)) ?? []
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(rawSettings, forKey: .rawSettings)
+        try c.encode(layers, forKey: .layers)
+        try c.encodeIfPresent(layerGraph, forKey: .layerGraph)
+        try c.encode(sourceReferences, forKey: .sourceReferences)
+    }
 }
 
 /// Every supported document edit. Commands are Codable so schema upgrades can roundtrip them.
@@ -23,13 +89,20 @@ nonisolated enum LensWorksDocumentCommand: Codable, Sendable, Equatable {
     case addLayer(LensWorksVersionContent.Layer)
     case removeLayer(UUID)
     case addSourceReference(String)
+    case addSourceReferenceRecord(LensWorksSourceReference)
+    /// Atomically replaces the native graph, including groups, masks, transforms and live RAW nodes.
+    case replaceLayerGraph(LensWorksLayerGraph)
+    /// Replaces a live RAW node without reducing it to a scalar recipe.
+    case replaceLiveSource(layerID: UUID, source: LWLiveSourceNode?)
 
     var label: String {
         switch self {
         case .setRaw(let key, _): "Set \(key)"
         case .addLayer(let layer): "Add Layer “\(layer.name)”"
         case .removeLayer: "Delete Layer"
-        case .addSourceReference: "Add Source Reference"
+        case .addSourceReference, .addSourceReferenceRecord: "Add Source Reference"
+        case .replaceLayerGraph: "Update Layer Graph"
+        case .replaceLiveSource: "Update Live RAW"
         }
     }
 
@@ -43,7 +116,18 @@ nonisolated enum LensWorksDocumentCommand: Codable, Sendable, Equatable {
             guard content.layers.contains(where: { $0.id == id }) else { throw LensWorksDocumentError.missingLayer }
             content.layers.removeAll { $0.id == id }
         case .addSourceReference(let reference):
+            let record = LensWorksSourceReference(legacyValue: reference)
+            if !content.sourceReferences.contains(record) { content.sourceReferences.append(record) }
+        case .addSourceReferenceRecord(let reference):
             if !content.sourceReferences.contains(reference) { content.sourceReferences.append(reference) }
+        case .replaceLayerGraph(let graph): content.layerGraph = graph
+        case .replaceLiveSource(let layerID, let source):
+            guard var graph = content.layerGraph, let index = graph.layers.firstIndex(where: { $0.id == layerID }) else {
+                throw LensWorksDocumentError.missingLayer
+            }
+            graph.layers[index].liveSource = source
+            graph.layers[index].liveSourceFile = nil
+            content.layerGraph = graph
         }
     }
 }
@@ -113,7 +197,7 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
         photoID = try c.decode(String.self, forKey: .photoID)
         versions = try c.decode([LensWorksPhotoVersion].self, forKey: .versions)
         // Schema 1 predates the configurable limit.
-        maxUndoSteps = try c.decodeIfPresent(Int.self, forKey: .maxUndoSteps) ?? 100
+        maxUndoSteps = max(1, try c.decodeIfPresent(Int.self, forKey: .maxUndoSteps) ?? 100)
         self.schema = Self.currentSchema
     }
 
@@ -161,11 +245,14 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
         versions[i].content = step.content
     }
 
-    mutating func redo(_ id: UUID) throws {
+    /// Returns pruning warnings because redoing can grow the retained undo stack after its limit changed.
+    @discardableResult
+    mutating func redo(_ id: UUID) throws -> LensWorksPruneReport {
         let i = try index(id)
         guard let step = versions[i].redo.popLast() else { throw LensWorksDocumentError.nothingToRedo }
         versions[i].undo.append(LensWorksHistoryStep(id: step.id, name: step.name, command: step.command, content: versions[i].content, attributedToAgent: step.attributedToAgent))
         versions[i].content = step.content
+        return prune(i)
     }
 
     @discardableResult
@@ -177,13 +264,14 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
     }
 
     /// Restoring is itself an undoable step.
-    mutating func restoreCheckpoint(_ checkpoint: UUID, in id: UUID) throws {
+    @discardableResult
+    mutating func restoreCheckpoint(_ checkpoint: UUID, in id: UUID) throws -> LensWorksPruneReport {
         let i = try index(id)
         guard let saved = versions[i].checkpoints.first(where: { $0.id == checkpoint }) else { throw LensWorksDocumentError.unknownCheckpoint }
         versions[i].undo.append(LensWorksHistoryStep(name: "Restore “\(saved.name)”", command: nil, content: versions[i].content))
         versions[i].content = saved.content
         versions[i].redo = []
-        prune(i)
+        return prune(i)
     }
 
     mutating func setMaxUndoSteps(_ limit: Int) -> LensWorksPruneReport {
@@ -235,12 +323,17 @@ nonisolated struct LensWorksDocumentStore: Sendable {
     }
 
     func writeAsset(_ id: String, data: Data) throws {
+        guard Self.isValidAssetID(id) else { throw ProjectError.invalid }
         try FileManager.default.createDirectory(at: assetsURL, withIntermediateDirectories: true)
         try data.write(to: assetsURL.appendingPathComponent(id), options: .atomic)
     }
 
     func storedAssets() -> Set<String> {
-        Set((try? FileManager.default.contentsOfDirectory(atPath: assetsURL.path)) ?? [])
+        Set((try? FileManager.default.contentsOfDirectory(atPath: assetsURL.path)) ?? []).filter(Self.isValidAssetID)
+    }
+
+    static func isValidAssetID(_ id: String) -> Bool {
+        !id.isEmpty && id.utf8.count <= 255 && !id.contains("/") && !id.contains("\\") && !id.contains("\0") && id != "." && id != ".."
     }
 
     /// Deletes stored assets no version, step or checkpoint can reach; returns the removed IDs.

@@ -8,6 +8,9 @@ final class ProjectController {
     weak var window: NSWindow?
     weak var workspace: ProjectWorkspace?
     var workingVersion: LensWorksWorkingVersion? { didSet { if workingVersion?.id != relinkedOriginal?.version { relinkedOriginal = nil } } }
+    /// Package-persisted LensWorks versions, checkpoints and bounded history. Canvas undo remains session-only.
+    var lensWorksDocument: LensWorksPhotoDocument?
+    var lensWorksDocumentAssets: [String: Data] = [:]
     /// The original location a catalog relink assigned to the open working version this session.
     /// It is recorded by the next save and survives reloads of a package written elsewhere.
     var relinkedOriginal: (version: UUID, path: String, native: LWCatalogNativePath?)?
@@ -244,7 +247,9 @@ final class ProjectController {
     /// The document as it is now, and where it goes: asks with the Save panel when it has no file yet (or Save As).
     private func prepareSave(asNew: Bool, suppliedDestination: URL? = nil) async -> (snapshot: ProjectSnapshot, destination: URL, revision: UUID, workingVersion: LensWorksWorkingVersion?)? {
         let revision = session.history.currentRevision
-        guard let snapshot = session.projectSnapshot() else { return nil }
+        guard let canvasSnapshot = session.projectSnapshot() else { return nil }
+        let snapshot = ProjectSnapshot(manifest: canvasSnapshot.manifest, images: canvasSnapshot.images, masks: canvasSnapshot.masks,
+            workingVersion: canvasSnapshot.workingVersion, lensWorksDocument: lensWorksDocument, lensWorksDocumentAssets: lensWorksDocumentAssets)
         var destination = suppliedDestination ?? (asNew ? nil : session.projectURL)
         if destination == nil {
             let panel = NSSavePanel()
@@ -350,6 +355,8 @@ final class ProjectController {
             }
             session.installProject(snapshot, from: source)
             workingVersion = snapshot.workingVersion
+            lensWorksDocument = snapshot.lensWorksDocument
+            lensWorksDocumentAssets = snapshot.lensWorksDocumentAssets
             if recordsRecentProjects { RecentProjects.shared.note(source) }
             await rememberProjectDigest(for: source)
             watchProject(at: source)

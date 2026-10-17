@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Testing
 @testable import Compositor
 
@@ -40,6 +41,26 @@ struct LensWorksDocumentHistoryTests {
         #expect(reopened.versions[0].content.rawSettings["exposure"] == 3)
     }
 
+    @Test func projectPackagePersistsDocumentHistoryAndAssets() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LWProject-\(UUID().uuidString).comp")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var document = LensWorksPhotoDocument(photoID: "p1", maxUndoSteps: 2)
+        let version = document.addVersion(named: "A")
+        try document.perform(.addLayer(layer("retained", asset: "asset")), on: version)
+        _ = try document.addCheckpoint(named: "pin", to: version)
+        try document.perform(.setRaw(key: "exposure", value: 2), on: version)
+        try document.undo(version)
+        let manifest = ProjectManifest(documentID: UUID(), width: 10, height: 10, activeLayerID: nil, layers: [])
+        let snapshot = ProjectSnapshot(manifest: manifest, images: [:], lensWorksDocument: document,
+            lensWorksDocumentAssets: ["asset": Data([1, 2, 3])])
+        try await ProjectStore.shared.save(snapshot, to: directory)
+        let reopened = try await ProjectStore.shared.load(from: directory)
+        #expect(reopened.lensWorksDocument == document && reopened.lensWorksDocumentAssets["asset"] == Data([1, 2, 3]))
+        var restored = try #require(reopened.lensWorksDocument)
+        _ = try restored.redo(version)
+        #expect(restored.versions[0].content.rawSettings["exposure"] == 2)
+    }
+
     @Test func pruningKeepsCheckpointsAndReachableAssets() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LWDoc-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -64,15 +85,40 @@ struct LensWorksDocumentHistoryTests {
         #expect(doc.versions[0].undo.count == 2)
     }
 
-    @Test func schemaOneDocumentsUpgradeAndCommandsRoundtrip() throws {
-        let v1 = #"{"photoID":"p","versions":[{"id":"\#(UUID().uuidString)","name":"A","content":{"rawSettings":{"x":1},"layers":[],"sourceReferences":[]},"undo":[],"redo":[],"checkpoints":[]}]}"#
-        let doc = try JSONDecoder().decode(LensWorksPhotoDocument.self, from: Data(v1.utf8))
-        #expect(doc.schema == 2 && doc.maxUndoSteps == 100 && doc.versions[0].content.rawSettings["x"] == 1)
-        let l = layer("L", asset: "z")
-        for command: LensWorksDocumentCommand in [.setRaw(key: "a", value: 1), .addLayer(l), .removeLayer(l.id), .addSourceReference("p@3")] {
-            let data = try JSONEncoder().encode(command)
-            #expect(try JSONDecoder().decode(LensWorksDocumentCommand.self, from: data) == command)
-        }
+    @Test func redoPrunesAfterLimitIsLoweredWithPendingRedo() throws {
+        var doc = LensWorksPhotoDocument(photoID: "p1")
+        let version = doc.addVersion(named: "A")
+        for value in 0..<5 { try doc.perform(.setRaw(key: "exposure", value: Double(value)), on: version) }
+        for _ in 0..<5 { try doc.undo(version) }
+        #expect(doc.versions[0].undo.isEmpty && doc.versions[0].redo.count == 5)
+        _ = doc.setMaxUndoSteps(1)
+        for _ in 0..<5 { _ = try doc.redo(version) }
+        #expect(doc.versions[0].undo.count == 1)
+    }
+
+    @Test func schemaOneDocumentsUpgradeAndCommandsRoundtripThroughHistory() throws {
+        let legacyLayer = layer("L", asset: "z")
+        let graph = LensWorksLayerGraph(layers: [ProjectLayerRecord(id: UUID(), name: "Live", isVisible: true,
+            transform: LayerTransform(origin: .zero, size: CGSize(width: 10, height: 10)), imageFile: nil)])
+        let commands: [LensWorksDocumentCommand] = [
+            .setRaw(key: "a", value: 1), .addLayer(legacyLayer), .removeLayer(legacyLayer.id), .addSourceReference("p@3"),
+            .addSourceReferenceRecord(.init(photoID: "p", revision: "4", assetID: "source")), .replaceLayerGraph(graph),
+            .replaceLiveSource(layerID: graph.layers[0].id, source: nil)
+        ]
+        var original = LensWorksPhotoDocument(photoID: "p")
+        let version = original.addVersion(named: "A")
+        for command in commands { try original.perform(command, on: version) }
+        for _ in 0..<2 { try original.undo(version) }
+        _ = try original.addCheckpoint(named: "checkpoint", to: version)
+        var fixture = try JSONEncoder().encode(original)
+        fixture = Data(String(decoding: fixture, as: UTF8.self).replacingOccurrences(of: #""schema":2"#, with: #""schema":1"#).utf8)
+        let upgraded = try JSONDecoder().decode(LensWorksPhotoDocument.self, from: fixture)
+        #expect(upgraded.schema == 2 && upgraded.maxUndoSteps == 100)
+        #expect(upgraded.versions[0].undo.map(\.command) == original.versions[0].undo.map(\.command))
+        #expect(upgraded.versions[0].redo.map(\.command) == original.versions[0].redo.map(\.command))
+        #expect(upgraded.versions[0].checkpoints == original.versions[0].checkpoints)
+        let roundtrip = try JSONDecoder().decode(LensWorksPhotoDocument.self, from: JSONEncoder().encode(upgraded))
+        #expect(roundtrip == upgraded)
         #expect(throws: LensWorksDocumentError.unsupportedSchema(9)) {
             try JSONDecoder().decode(LensWorksPhotoDocument.self, from: Data(#"{"schema":9,"photoID":"p","versions":[]}"#.utf8))
         }

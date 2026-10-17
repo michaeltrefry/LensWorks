@@ -79,6 +79,10 @@ nonisolated struct ProjectSnapshot: @unchecked Sendable {
     let images: [UUID: ImportedImage]
     var masks: [UUID: ImportedImage] = [:]
     var workingVersion: LensWorksWorkingVersion? = nil
+    /// Persistent LensWorks named versions, undo/redo and checkpoints for this package.
+    var lensWorksDocument: LensWorksPhotoDocument? = nil
+    /// Bytes referenced by `lensWorksDocument`'s document-local asset IDs.
+    var lensWorksDocumentAssets: [String: Data] = [:]
 }
 
 nonisolated enum ProjectError: LocalizedError {
@@ -183,6 +187,21 @@ actor ProjectStore {
             version.projectPath = url.path
             contents["LensWorks.json"] = FileWrapper(regularFileWithContents: try version.encoded())
         }
+        if let document = snapshot.lensWorksDocument {
+            guard version.map({ $0.photoID == document.photoID }) ?? true else { throw ProjectError.invalid }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let encoded = try encoder.encode(document)
+            guard encoded.count <= 4 * 1024 * 1024 else { throw ProjectError.tooLarge }
+            var documentContents = ["document.json": FileWrapper(regularFileWithContents: encoded)]
+            var assets: [String: FileWrapper] = [:]
+            for (id, data) in snapshot.lensWorksDocumentAssets {
+                guard LensWorksDocumentStore.isValidAssetID(id), data.count <= 512 * 1024 * 1024 else { throw ProjectError.invalid }
+                assets[id] = FileWrapper(regularFileWithContents: data)
+            }
+            documentContents["assets"] = FileWrapper(directoryWithFileWrappers: assets)
+            contents["LensWorksDocument"] = FileWrapper(directoryWithFileWrappers: documentContents)
+        }
         if !sourceProjection.assets.isEmpty || !sourceProjection.planes.isEmpty {
             var sources = sourceProjection.assets.mapValues { FileWrapper(regularFileWithContents: $0) }
             for (name, asset) in sourceProjection.planes {
@@ -282,6 +301,31 @@ actor ProjectStore {
         try validate(manifest)
         let workingVersion = try LensWorksWorkingVersion.read(from: url)
         guard manifest.workingVersionID == workingVersion?.id || manifest.workingVersionID == nil else { throw ProjectError.invalid }
+        let documentDirectory = url.appendingPathComponent("LensWorksDocument", isDirectory: true)
+        var lensWorksDocument: LensWorksPhotoDocument?
+        var lensWorksDocumentAssets: [String: Data] = [:]
+        if FileManager.default.fileExists(atPath: documentDirectory.path) {
+            let directoryValues = try documentDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard directoryValues.isDirectory == true, directoryValues.isSymbolicLink != true else { throw ProjectError.invalid }
+            let documentURL = documentDirectory.appendingPathComponent("document.json")
+            try checkFile(documentURL, inside: url, maximumBytes: 4 * 1024 * 1024)
+            do { lensWorksDocument = try JSONDecoder().decode(LensWorksPhotoDocument.self, from: Data(contentsOf: documentURL)) }
+            catch { throw ProjectError.invalid }
+            guard workingVersion.map({ $0.photoID == lensWorksDocument?.photoID }) ?? true else { throw ProjectError.invalid }
+            let assetsDirectory = documentDirectory.appendingPathComponent("assets", isDirectory: true)
+            if FileManager.default.fileExists(atPath: assetsDirectory.path) {
+                let assetDirectoryValues = try assetsDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard assetDirectoryValues.isDirectory == true, assetDirectoryValues.isSymbolicLink != true else { throw ProjectError.invalid }
+                let names = try FileManager.default.contentsOfDirectory(atPath: assetsDirectory.path)
+                guard names.count <= 10_000 else { throw ProjectError.tooLarge }
+                for name in names {
+                    guard LensWorksDocumentStore.isValidAssetID(name) else { throw ProjectError.invalid }
+                    let assetURL = assetsDirectory.appendingPathComponent(name)
+                    try checkFile(assetURL, inside: url, maximumBytes: 512 * 1024 * 1024)
+                    lensWorksDocumentAssets[name] = try Data(contentsOf: assetURL)
+                }
+            }
+        }
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
         var pixels = 0, maskPixels = 0
@@ -332,7 +376,8 @@ actor ProjectStore {
             if isMask { masks[layer.id] = asset } else { images[layer.id] = asset }
           }
         }
-        let snapshot = ProjectSnapshot(manifest: manifest, images: images, masks: masks, workingVersion: workingVersion)
+        let snapshot = ProjectSnapshot(manifest: manifest, images: images, masks: masks, workingVersion: workingVersion,
+            lensWorksDocument: lensWorksDocument, lensWorksDocumentAssets: lensWorksDocumentAssets)
         return try migrateCompactFloatBackings(snapshot)
     }
     private func migrateCompactFloatBackings(_ snapshot:ProjectSnapshot)throws->ProjectSnapshot {
@@ -347,7 +392,8 @@ actor ProjectStore {
             manifest.layers[i].planeArchiveReference=try LWFloatPlaneArchive.reference(plane)
         }
         try validate(manifest)
-        return ProjectSnapshot(manifest:manifest,images:snapshot.images,masks:snapshot.masks,workingVersion:snapshot.workingVersion)
+        return ProjectSnapshot(manifest:manifest,images:snapshot.images,masks:snapshot.masks,workingVersion:snapshot.workingVersion,
+            lensWorksDocument: snapshot.lensWorksDocument, lensWorksDocumentAssets: snapshot.lensWorksDocumentAssets)
     }
 
     private func validate(_ manifest: ProjectManifest) throws {

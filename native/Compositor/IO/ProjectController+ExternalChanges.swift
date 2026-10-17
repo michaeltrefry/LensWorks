@@ -94,6 +94,8 @@ extension ProjectController {
         if let relinked = relinkedOriginal, let loaded = snapshot.workingVersion, loaded.id == relinked.version {
             workingVersion = loaded.relinked(originalPath: relinked.path, native: relinked.native)
         } else { workingVersion = snapshot.workingVersion }
+        lensWorksDocument = snapshot.lensWorksDocument
+        lensWorksDocumentAssets = snapshot.lensWorksDocumentAssets
         // Remember the package as loaded, not as first seen: it may have changed again while a sheet was up.
         await rememberProjectDigest(for: url)
         externalChanges.reloadCount += 1
