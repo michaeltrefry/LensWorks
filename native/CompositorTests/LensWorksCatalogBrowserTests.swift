@@ -239,6 +239,35 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
+    @Test func semanticBrowseCombinesActualCatalogFiltersAndRetainedOfflinePreviews() async throws {
+        let fixture = try Fixture(images: 3)
+        let semanticURL = fixture.root.appendingPathComponent("Semantic.sqlite3")
+        try await fixture.run(configure: { model in
+            model.semanticFactory = { _ in
+                LensWorksSemanticSearch(indexURL: semanticURL, embedder: FixtureEmbedder(), assets: ["fixture@1"],
+                                        imageProvider: "fixture", textProvider: "fixture")
+            }
+        }) { model in
+            try await fixture.importPhotos(model)
+            let beach = try #require(model.assets.first)
+            await model.select(beach)
+            try await model.setCatalogRating(5)
+            try await model.setFilters(rating: .some(5))
+            #expect(model.assets.map(\.id) == [beach.id])
+
+            // Semantic indexing consumes the retained thumbnail, not the now-unavailable original.
+            let original = URL(fileURLWithPath: beach.originalPath)
+            let offline = fixture.root.appendingPathComponent("offline-original.png")
+            try FileManager.default.moveItem(at: original, to: offline)
+            defer { try? FileManager.default.moveItem(at: offline, to: original) }
+            await model.observeSelectedOriginal()
+            #expect(model.selectedOriginalUnavailableReason != nil)
+
+            try await model.semanticBrowse("beach")
+            #expect(model.assets.map(\.id) == [beach.id])
+        }
+    }
+
     @Test func actualCatalogRecipeStaleRevisionIsRefusedWithoutRetry() async throws {
         #if DEBUG
         let fixture = try Fixture(images: 2)
@@ -2296,8 +2325,11 @@ struct LensWorksCatalogBrowserTests {
             try process.run(); process.waitUntilExit()
             guard process.terminationStatus == 0 else { throw LensWorksCatalogError.message("organization_probe prepare exited \(process.terminationStatus)") }
         }
-        func run(create: Bool = true, catalogService: LensWorksCatalogService? = nil, _ body: (LensWorksCatalog) async throws -> Void) async throws {
+        func run(create: Bool = true, catalogService: LensWorksCatalogService? = nil,
+                 configure: @MainActor (LensWorksCatalog) -> Void = { _ in },
+                 _ body: (LensWorksCatalog) async throws -> Void) async throws {
             let model = LensWorksCatalog(configuration: config, index: LensWorksCatalogIndex(url: root.appendingPathComponent("Index.sqlite3")), defaults: defaults, migrateLegacy: false, catalogService: catalogService)
+            configure(model)
             await model.connect(catalog.path, create: create)
             do {
                 if let error = model.error { throw LensWorksCatalogError.message(error) }

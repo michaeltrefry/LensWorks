@@ -4,7 +4,7 @@ import Testing
 
 /// Deterministic fixture embedder: each concept word owns one axis of a shared 4-d space, so a
 /// text query and a photo tagged with the same concept land on the same axis.
-private nonisolated final class FixtureEmbedder: LWSemanticEmbedder, @unchecked Sendable {
+nonisolated final class FixtureEmbedder: LWSemanticEmbedder, @unchecked Sendable {
     static let concepts = ["beach", "forest", "city", "snow"]
     let imageSpace: String
     let textSpace: String
@@ -108,6 +108,15 @@ private nonisolated func tempIndexURL() -> URL {
         let before = embedder.imageCalls
         let resumed = try await index.sync(Self.library, embedder: embedder)
         #expect(try await index.count() == 5 && embedder.imageCalls - before == resumed.embedded)
+    }
+
+    @Test func catalogScaleIndexingRetainsEveryCandidatePastTheBackgroundPassBound() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let catalog = (0..<50_001).map { photo("catalog-\($0)", concept: $0 % 4) }
+        let report = try await index.sync(catalog, limit: catalog.count, embedder: FixtureEmbedder())
+        #expect(report.embedded == catalog.count && report.remaining == 0)
+        #expect(try await index.count() == catalog.count)
     }
 
     @Test func versionChangeRebuildsAndDeletionRecovers() async throws {

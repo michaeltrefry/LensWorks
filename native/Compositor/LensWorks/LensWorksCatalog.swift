@@ -910,6 +910,10 @@ final class LensWorksCatalog {
     @ObservationIgnored private(set) var semantic: LensWorksSemanticSearch?
     @ObservationIgnored private var semanticTask: Task<Void, Never>?
     @ObservationIgnored private var semanticBlocked = false
+    /// Cursor and live IDs for the bounded passes that make up one complete index sweep.
+    @ObservationIgnored private var semanticIndexCursor: String?
+    @ObservationIgnored private var semanticIndexInProgress = false
+    @ObservationIgnored private var semanticLiveIDs = Set<String>()
     @ObservationIgnored private var semanticRun = UUID()
     var recursive = true
     var selection: Set<String> = []
@@ -1004,6 +1008,7 @@ final class LensWorksCatalog {
         let epoch = catalogEpoch, previousSelection = selectionOwner, previousQuery = queryOwner, previousCatalog = catalogToken
         activeFolder = nil; searchText = ""; previewSettings = nil
         semanticTask?.cancel(); semanticTask = nil; semantic = nil; semanticQuery = nil; semanticStatus = ""; semanticBlocked = false
+        semanticIndexCursor = nil; semanticIndexInProgress = false; semanticLiveIDs = []
         do {
             try await retireSettingsWork()
             guard !closingRequested, catalogEpoch == epoch else { return }
@@ -2901,7 +2906,7 @@ extension LensWorksCatalog {
 // MARK: - Semantic search
 
 extension LensWorksCatalog {
-    /// Photos scanned for one semantic pass; a larger catalog is indexed and searched over this prefix.
+    /// Photos scanned by one background indexing pass. Continuation pages make a complete sweep.
     static let semanticScanLimit = 50_000
     private static let semanticSyncLimit = LensWorksSemanticIndex.batchSize * 32
 
@@ -2924,52 +2929,70 @@ extension LensWorksCatalog {
         }
     }
 
-    /// Pages through the catalog for `options`, handing each page to `each`. Returns false when the
-    /// scan stopped at `semanticScanLimit` before reaching the end.
+    /// Pages through the catalog for `options`, handing each page to `each`. A bounded caller gets
+    /// the next cursor; nil means that this scan reached the end.
     private func semanticScan(_ options: LWApplicationBrowseOptions, scope: LensWorksCatalogScope,
-                              each: ([LWApplicationDtoGridImage]) async throws -> Void) async throws -> Bool {
-        var cursor: String?
+                              cursor: String? = nil, limit: Int? = nil,
+                              each: ([LWApplicationDtoGridImage]) async throws -> Void) async throws -> String? {
+        var after = cursor
         var seen = 0
         while true {
+            try Task.checkCancellation()
             try checkScope(scope)
-            let page = try await service.browse(options: options, cursor: cursor)
+            let page = try await service.browse(options: options, cursor: after)
+            try Task.checkCancellation()
             try checkScope(scope)
             try await each(page.rows)
             seen += page.rows.count
-            guard page.hasMore, let next = page.next, next != cursor else { return true }
-            if seen >= Self.semanticScanLimit { return false }
-            cursor = next
+            guard page.hasMore else { return nil }
+            guard let next = page.next, next != after else {
+                throw LensWorksManagedError.protocolViolation("A continuing semantic scan did not advance its cursor authority.")
+            }
+            if let limit, seen >= limit { return next }
+            after = next
         }
     }
 
-    /// Starts the bounded background pass that embeds new and changed photos and prunes removed ones.
-    /// At most one runs; a catalog switch or close cancels it, and the next pass resumes from what the
-    /// index already holds.
+    /// Starts one bounded background pass that embeds new and changed photos. Continuation passes
+    /// are scheduled until the complete catalog has been swept, then removed entries are pruned.
     func scheduleSemanticIndexing() {
         guard let semantic, semanticTask == nil, !semanticBlocked, !closingRequested, catalogPath != nil else { return }
         let scope = captureScope(), run = UUID()
         semanticRun = run
         semanticTask = Task { [weak self] in
             await self?.indexCatalog(semantic, scope: scope)
-            if let self, self.semanticRun == run { self.semanticTask = nil }
+            guard let self, self.semanticRun == run else { return }
+            self.semanticTask = nil
+            if self.semanticIndexInProgress { self.scheduleSemanticIndexing() }
         }
     }
 
     private func indexCatalog(_ semantic: LensWorksSemanticSearch, scope: LensWorksCatalogScope) async {
-        var live = Set<String>()
+        if !semanticIndexInProgress {
+            semanticIndexInProgress = true
+            semanticIndexCursor = nil
+            semanticLiveIDs = []
+        }
         var embedded = 0, unavailable = 0
         do {
             semanticStatus = "Indexing photos for semantic search…"
-            let complete = try await semanticScan(Self.allPhotosOptions, scope: scope) { rows in
-                live.formUnion(rows.map(\.image_id))
+            let next = try await semanticScan(Self.allPhotosOptions, scope: scope, cursor: semanticIndexCursor,
+                                              limit: Self.semanticScanLimit) { rows in
+                semanticLiveIDs.formUnion(rows.map(\.image_id))
                 let report = try await semantic.sync(rows.map { self.semanticCandidate($0) }, limit: Self.semanticSyncLimit)
                 embedded += report.embedded; unavailable += report.unavailable.count
                 if report.cancelled { throw CancellationError() }
             }
             try checkScope(scope)
-            if complete { try await semantic.index.prune(keeping: live) }
+            semanticIndexCursor = next
+            if next == nil {
+                try await semantic.index.prune(keeping: semanticLiveIDs)
+                semanticLiveIDs = []
+                semanticIndexInProgress = false
+            }
             let total = try await semantic.index.count()
-            semanticStatus = "Semantic index ready · \(total) photos" + (embedded > 0 ? " · \(embedded) new" : "") + (unavailable > 0 ? " · \(unavailable) without a preview" : "")
+            let progress = next == nil ? "Semantic index ready" : "Semantic indexing continues"
+            semanticStatus = "\(progress) · \(total) photos" + (embedded > 0 ? " · \(embedded) new" : "") + (unavailable > 0 ? " · \(unavailable) without a preview" : "")
         } catch is CancellationError {
             if scopeIsCurrent(scope) { semanticStatus = "Semantic indexing paused; it resumes where it stopped." }
         } catch {
