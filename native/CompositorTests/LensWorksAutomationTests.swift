@@ -267,7 +267,8 @@ struct LensWorksAutomationTests {
 
         let listed = try #require((try await bridge.request("tools/list"))["result"] as? [String: Any])
         let tools = try #require(listed["tools"] as? [[String: Any]])
-        #expect(Set(tools.compactMap { $0["name"] as? String }) == ["list_commands", "get_state", "invoke_command", "batch", "render_preview"])
+        let names = Set(tools.compactMap { $0["name"] as? String })
+        #expect(names.isSuperset(of: ["list_commands", "get_state", "invoke_command", "batch", "render_preview", "headless_open", "develop_set", "jobs_list", "jobs_cancel"]))
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
 
         let commands = try #require((try await bridge.call("list_commands"))["structuredContent"] as? [String: Any])["commands"] as? [[String: Any]]
@@ -962,5 +963,54 @@ struct LensWorksAutomationTests {
                     && !model.groups.contains { final.contains($0.id) } && harness.automation.pendingConfirmation == nil, "\(result)")
             harness.catalog = nil
         }
+    }
+
+    /// S41: a windowless catalog has the same recipe dispatch and folder boundary as attached automation. It never
+    /// borrows the attached catalog lock and permanent registry commands are refused before any confirmation UI.
+    @Test func headlessSessionUsesTheRegistryAndRefusesAttachedAndIrreversibleWork() async throws {
+        let harness = try Harness(); defer { harness.cleanUp() }
+        let fixture = try LensWorksCatalogBrowserTests.Fixture(images: 1)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let seed = LensWorksCatalog(configuration: fixture.config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("HeadlessIndex.sqlite3")), defaults: fixture.defaults)
+        await seed.connect(fixture.catalog.path, create: true)
+        try await fixture.importPhotos(seed)
+        try await seed.close()
+        try harness.automation.folders.grant(fixture.root)
+
+        let attached = LensWorksCatalog(configuration: fixture.config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("AttachedIndex.sqlite3")), defaults: fixture.defaults)
+        await attached.connect(fixture.catalog.path)
+        harness.catalog = attached
+        let locked = await harness.automation.headless.call("headless_open", arguments: ["catalog": fixture.catalog.path])
+        #expect(locked["isError"] as? Bool == true && text(locked).contains("attached mode"))
+        try await attached.close()
+        harness.catalog = nil
+
+        let opened = await harness.automation.headless.call("headless_open", arguments: ["catalog": fixture.catalog.path])
+        let open = try #require(opened["structuredContent"] as? [String: Any])
+        let id = try #require(open["session"] as? String)
+        let queried = await harness.automation.headless.call("catalog_query", arguments: ["session": id])
+        let photos = try #require((queried["structuredContent"] as? [String: Any])?["photos"] as? [[String: Any]])
+        let photo = try #require(photos.first?["id"] as? String)
+        let selected = await harness.automation.headless.call("catalog_select", arguments: ["session": id, "photo": photo])
+        #expect(selected["isError"] as? Bool == false, "\(selected)")
+        let changed = await harness.automation.headless.call("develop_set", arguments: ["session": id, "control": "develop.exposure", "value": 1.25])
+        let value = try #require((changed["structuredContent"] as? [String: Any])?["value"] as? Double)
+        #expect(changed["isError"] as? Bool == false && value == 1.25 && LensWorksCommandDispatcher.lastInvocation?.id == .exposure)
+
+        let output = fixture.root.appendingPathComponent("headless-export.png")
+        let started = await harness.automation.headless.call("headless_export", arguments: ["session": id, "path": output.path])
+        let job = try #require(((started["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["id"] as? String)
+        let listed = await harness.automation.headless.call("jobs_list", arguments: [:])
+        let jobs = try #require((listed["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]])
+        let cancelled = await harness.automation.headless.call("jobs_cancel", arguments: ["job": job])
+        #expect(jobs.contains { $0["id"] as? String == job } && cancelled["isError"] as? Bool == false && !FileManager.default.fileExists(atPath: output.path))
+
+        let outside = fixture.root.deletingLastPathComponent().appendingPathComponent("headless-outside.png")
+        let rejected = await harness.automation.headless.call("headless_export", arguments: ["session": id, "path": outside.path])
+        #expect(rejected["isError"] as? Bool == true && text(rejected).contains("outside every folder granted"))
+        let permanent = await harness.automation.headless.call("headless_run", arguments: ["session": id, "command": "catalog.virtualFolder.delete"])
+        #expect(permanent["isError"] as? Bool == true && text(permanent).contains("refused in headless mode"))
+
+        _ = await harness.automation.headless.call("headless_close", arguments: ["session": id])
     }
 }
