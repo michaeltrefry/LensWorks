@@ -4,6 +4,7 @@ import SwiftUI
 struct CompositorApp: App {
     @NSApplicationDelegateAdaptor(CompositorApplicationDelegate.self) private var applicationDelegate
     private var session: EditorSession { applicationDelegate.session }
+    private var plugins: LensWorksPluginLibrary { LensWorksPluginLibrary.shared }
     var body: some Scene {
         Window("LensWorks", id: "editor") {
             ProjectWorkspaceView(applicationDelegate: applicationDelegate).roundedControls()
@@ -237,6 +238,27 @@ struct CompositorApp: App {
                     ForEach(LensWorksCommandRegistry.filterMenuKinds, id: \.self) { kind in
                         LensWorksCommandButton(.filter, argument: kind.rawValue, title: "\(kind.rawValue)…",
                                                reason: reason(.filter, kind.rawValue)) { session.beginFilter(kind) }
+                    }
+                    Divider()
+                    Menu("Plugins") {
+                        LensWorksCommandButton(.installPlugin) { plugins.chooseAndInstall(window: applicationDelegate.workspace.window) }
+                        Divider()
+                        ForEach(plugins.plugins) { plugin in
+                            LensWorksCommandButton(.runPlugin, argument: plugin.id, title: plugin.name, reason: reason(.runPlugin)) {
+                                Task { await session.runPlugin(plugin.id, library: plugins) }
+                            }
+                        }
+                        Divider()
+                        Menu("Reload") {
+                            ForEach(plugins.plugins) { plugin in
+                                LensWorksCommandButton(.reloadPlugin, argument: plugin.id, title: plugin.name) { plugins.perform { try plugins.reload(plugin.id) } }
+                            }
+                        }
+                        Menu("Remove") {
+                            ForEach(plugins.plugins) { plugin in
+                                LensWorksCommandButton(.removePlugin, argument: plugin.id, title: plugin.name) { plugins.perform { try plugins.remove(plugin.id) } }
+                            }
+                        }
                     }
                 }
                 CommandMenu("Layer") {

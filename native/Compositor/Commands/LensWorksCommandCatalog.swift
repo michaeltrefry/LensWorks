@@ -46,6 +46,8 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case imageAdjustment = "image.adjustment", invert = "image.invert", canvasSize = "image.canvasSize"
     case imageSize = "image.imageSize", trim = "image.trim", flipCanvasHorizontal = "image.flipCanvasHorizontal"
     case flipCanvasVertical = "image.flipCanvasVertical", filter = "filter.apply"
+    // Filter › Plugins: sandboxed WebAssembly filters (S46). Each installed plugin is `plugin.run` with its id as argument.
+    case installPlugin = "plugin.install", runPlugin = "plugin.run", reloadPlugin = "plugin.reload", removePlugin = "plugin.remove"
     // Layer.
     case newAdjustment = "layer.newAdjustment", editAdjustment = "layer.editAdjustment"
     case transform = "layer.transform", layerViaCopy = "layer.viaCopy", duplicateLayer = "layer.duplicate"
@@ -262,7 +264,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, pluginMenu, layerMenu, canvas, panels, catalogBrowser, automation]
         return groups.flatMap { $0 }
     }()
 
@@ -360,6 +362,12 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .flipCanvasHorizontal, label: "Flip Canvas Horizontal", menu: "Image", undoable: true, historyOwner: .document),
         .init(id: .flipCanvasVertical, label: "Flip Canvas Vertical", menu: "Image", undoable: true, historyOwner: .document),
         .init(id: .filter, label: "Filter…", menu: "Filter", titles: filterMenuKinds.map { $0.rawValue + "…" }, parameters: choice("kind", filterMenuKinds.map(\.rawValue)) + [Argument.layer, Argument.settings("That filter's dialog settings.")], undoable: true, historyOwner: .document)
+    ]
+    private static let pluginMenu: [LensWorksCommandDescriptor] = [
+        .init(id: .installPlugin, label: "Install Plugin…", menu: "Filter/Plugins", parameters: [Argument.path("path", "The WebAssembly filter plugin (.wasm) to install. It is refused when it declares any import.")]),
+        .init(id: .runPlugin, label: "Run Plugin", menu: "Filter/Plugins", titleMatch: .any, parameters: reference("plugin", "The id of an installed plugin. It filters the active layer's pixels in a sandbox with instruction, time and memory limits."), undoable: true, historyOwner: .document),
+        .init(id: .reloadPlugin, label: "Reload Plugin", menu: "Filter/Plugins/Reload", titleMatch: .any, parameters: reference("plugin", "The id of an installed plugin whose file is read again.")),
+        .init(id: .removePlugin, label: "Remove Plugin", menu: "Filter/Plugins/Remove", titleMatch: .any, parameters: reference("plugin", "The id of an installed plugin to remove, with its command."))
     ]
     private static let layerMenu: [LensWorksCommandDescriptor] = [
         .init(id: .newAdjustment, label: "New Adjustment Layer", menu: "Layer/New Adjustment Layer", menus: ["Layer/New Adjustment Layer", "Layers Panel Footer/Adjustment"],

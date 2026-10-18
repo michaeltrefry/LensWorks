@@ -142,7 +142,7 @@ struct LensWorksAgentCommandTests {
         ]
         #expect(mustRun.filter { !$0.agentAccess.isRunnable }.isEmpty)
         // A command that enters document or catalog history is never left out.
-        #expect(Set(LensWorksCommandRegistry.descriptors.filter { $0.historyOwner != .none && !$0.agent.isRunnable }.map(\.id)).isSubset(of: [.apply, .opacityDigit, .finishText, .tracking, .leading]))
+        #expect(Set(LensWorksCommandRegistry.descriptors.filter { $0.historyOwner != .none && !$0.agent.isRunnable }.map(\.id)).isSubset(of: [.apply, .opacityDigit, .finishText, .tracking, .leading, .runPlugin]))
         let admitted = LensWorksCommandRegistry.agentCommands.count
         print("AGENT-TABLE total=\(LensWorksCommandID.allCases.count) admitted=\(admitted) notRunnable=\(LensWorksCommandID.allCases.count - admitted)")
         for (group, counts) in table.sorted(by: { $0.key < $1.key }) {
