@@ -584,7 +584,6 @@ final class LensWorksHeadlessSessions {
         guard let job = jobs[try text("job", values)] else { throw LensWorksCommandRefusal(reason: "That job does not exist.") }
         guard [.queued, .running].contains(job.state) else { throw LensWorksCommandRefusal(reason: "That job is already \(job.state.rawValue).") }
         job.task?.cancel(); job.state = .cancelled; job.message = "Cancellation requested; no output will be published."
-        try? FileManager.default.removeItem(at: job.destination)
         return ["job": job.response]
     }
 }
