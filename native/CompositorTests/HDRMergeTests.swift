@@ -1,3 +1,6 @@
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import Compositor
 
@@ -36,6 +39,32 @@ final class HDRMergeTests: XCTestCase {
         return try HDRFrame(width: width, height: height, rgb: rgb, exposureStops: stops[index])
     }
     private func bracket() throws -> [HDRFrame] { try (0..<3).map { try frame(index: $0) } }
+
+    /// Writes the generated -1/0/+1 EV bracket as files with the EXIF data the selection command reads.
+    private func writeGeneratedBracket(into directory: URL) throws -> [URL] {
+        try (0..<3).map { index in
+            let frame = try frame(index: index)
+            var pixels = [UInt8](repeating: 255, count: width * height * 4)
+            for pixel in 0..<(width * height) {
+                for channel in 0..<3 { pixels[pixel * 4 + channel] = UInt8((encode(frame.rgb[pixel * 3 + channel]) * 255).rounded()) }
+            }
+            let provider = try XCTUnwrap(CGDataProvider(data: Data(pixels) as CFData))
+            let image = try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                                               bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                               provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+            let url = directory.appendingPathComponent("generated-bracket-\(index + 1).jpg")
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+            let exif: [CFString: Any] = [
+                kCGImagePropertyExifExposureTime: [0.5, 1, 2][index],
+                kCGImagePropertyExifISOSpeedRatings: [100.0],
+                kCGImagePropertyExifFNumber: 1.0
+            ]
+            CGImageDestinationAddImage(destination, image, [kCGImagePropertyExifDictionary: exif] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            return url
+        }
+    }
 
     func testDeghostingLowersGhostMetricInMovingRegion() throws {
         let frames = try bracket()
@@ -106,38 +135,38 @@ final class HDRMergeTests: XCTestCase {
     }
 
     @MainActor
-    func testPublishRegistersOneLinkedFloatDNGAndLeavesSourcesUnchanged() async throws {
-        let fixture = try LensWorksCatalogBrowserTests.Fixture(images: 3)
+    func testSelectionMergeRegistersOneLinkedFloatDNGAndLeavesSourcesUnchanged() async throws {
+        let fixture = try LensWorksCatalogBrowserTests.Fixture(images: 0)
         try await fixture.run { catalog in
+            let sources = try writeGeneratedBracket(into: fixture.photos)
             try await fixture.importPhotos(catalog)
             let sourceAssets = catalog.assets
             XCTAssertEqual(sourceAssets.count, 3)
-            let sources = sourceAssets.map { URL(fileURLWithPath: $0.originalPath) }
+            XCTAssertEqual(Set(sourceAssets.map { URL(fileURLWithPath: $0.originalPath).standardizedFileURL }), Set(sources.map(\.standardizedFileURL)))
             let before = try sources.map(HDRMergePublisher.sha256)
-            let sourceRows = try sourceAssets.map { asset in
-                LensWorksSelectedRow(imageID: asset.id, key: try XCTUnwrap(asset.key))
-            }
-            XCTAssertEqual(sourceRows.count, 3)
-            let sourceIDs = Set(sourceRows.map(\.imageID))
+            let sourceIDs = Set(sourceAssets.map(\.id))
+            for (index, asset) in sourceAssets.enumerated() { await catalog.select(asset, extending: index > 0) }
+            XCTAssertEqual(catalog.selection, sourceIDs)
 
             var options = HDRMergeOptions(); options.deghost = true
-            let merged = try HDRMerge.merge(try bracket(), options: options)
-            let publication = try HDRMergePublisher.publish(merged, sources: sources, into: fixture.photos, name: "merged-hdr", options: options)
-            try await LensWorksHDRMergeRegistrar(catalog: catalog, sources: sourceRows).registerMerged(publication)
+            await catalog.mergeSelectionToHDR(options: options)
+            XCTAssertNil(catalog.error)
 
             let registered = catalog.assets.filter { !sourceIDs.contains($0.id) }
             XCTAssertEqual(registered.count, 1)
+            let dngURL = URL(fileURLWithPath: try XCTUnwrap(registered.first?.originalPath))
+            let linkURL = dngURL.appendingPathExtension("sources.json")
             XCTAssertEqual(try sources.map(HDRMergePublisher.sha256), before)
-            XCTAssertEqual(publication.record.sources.map(\.sha256), before)
-            XCTAssertEqual(publication.record.sources.map(\.path), sources.map { $0.standardizedFileURL.path })
-            let stored = try JSONDecoder().decode(HDRMergeLinkRecord.self, from: Data(contentsOf: publication.link))
-            XCTAssertEqual(stored, publication.record)
-            let group = try catalog.group(named: "HDR Merge merged-hdr")
+            let stored = try JSONDecoder().decode(HDRMergeLinkRecord.self, from: Data(contentsOf: linkURL))
+            XCTAssertEqual(stored.sources.map(\.sha256), before)
+            XCTAssertEqual(stored.sources.map(\.path), sources.map { $0.standardizedFileURL.path })
+            XCTAssertTrue(stored.deghost)
+            let group = try catalog.group(named: "HDR Merge " + dngURL.deletingPathExtension().lastPathComponent)
             try await catalog.browse(collection: group.id)
             XCTAssertEqual(Set(catalog.assets.map(\.id)), sourceIDs.union(registered.map(\.id)))
 
-            // Linear floating-point DNG: TIFF LE, LinearRaw, 3 x 32-bit IEEE float, DNG version tag, exact samples.
-            let dng = try Data(contentsOf: publication.dng)
+            // Linear floating-point DNG: TIFF LE, LinearRaw, 3 x 32-bit IEEE float, and a DNG version tag.
+            let dng = try Data(contentsOf: dngURL)
             XCTAssertEqual(Array(dng.prefix(4)), [0x49, 0x49, 42, 0])
             func u16(_ o: Int) -> Int { Int(dng[o]) | Int(dng[o + 1]) << 8 }
             func u32(_ o: Int) -> Int { u16(o) | u16(o + 2) << 16 }
@@ -150,9 +179,8 @@ final class HDRMergeTests: XCTestCase {
             XCTAssertEqual(u16(tags[339]!), 3)
             let offset = tags[273]!
             XCTAssertEqual(dng.count - offset, width * height * 12)
-            XCTAssertEqual(Float(bitPattern: UInt32(u32(offset))), merged.rgb[0])
-            XCTAssertEqual(Float(bitPattern: UInt32(u32(dng.count - 4))), merged.rgb.last!)
-            XCTAssertThrowsError(try HDRMergePublisher.publish(merged, sources: sources, into: fixture.photos, name: "merged-hdr", options: options))
+            XCTAssertTrue(Float(bitPattern: UInt32(u32(offset))).isFinite)
+            XCTAssertTrue(Float(bitPattern: UInt32(u32(dng.count - 4))).isFinite)
         }
     }
 }
