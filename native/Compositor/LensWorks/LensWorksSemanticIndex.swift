@@ -89,8 +89,8 @@ actor LensWorksSemanticIndex {
     private let url: URL
     private var database: OpaquePointer?
     private var version: LWSemanticIndexVersion?
-    /// Bumped whenever stored vectors are invalidated (version change, reset, deletion). A sync
-    /// that suspended across such a change must not write vectors computed under the old state.
+    /// Bumped for invalidation and newer pending source observations, even without a stored row.
+    /// A sync suspended across such a change must not write vectors from the superseded state.
     private var generation = 0
     private let applicationID: Int32 = 0x4c575349
 
@@ -215,12 +215,22 @@ actor LensWorksSemanticIndex {
     func sync(_ candidates: [LWSemanticCandidate], limit: Int = 256, embedder: any LWSemanticEmbedder,
               progress: @Sendable (Int, Int) -> Void = { _, _ in }) async throws -> LWSemanticSyncReport {
         guard let version else { throw LWSemanticError.storage("no index version has been adopted") }
-        let epoch = generation
         var report = LWSemanticSyncReport()
         var pending: [LWSemanticCandidate] = []
+        var stale: [String] = []
         for candidate in candidates {
-            if try storedStamp(candidate.id) == candidate.stamp { report.upToDate += 1 } else { pending.append(candidate) }
+            let stored = try storedStamp(candidate.id)
+            if stored == candidate.stamp { report.upToDate += 1 } else {
+                pending.append(candidate)
+                if stored != nil { stale.append(candidate.id) }
+            }
         }
+        // Validity is independent of the replacement budget and preview availability. Commit
+        // invalidation before the first suspension so search never ranks an obsolete vector,
+        // including after cancellation, a failed embedding, or reopening a partial rebuild.
+        if !pending.isEmpty { generation &+= 1 }
+        try remove(stale)
+        let epoch = generation
         let budget = max(0, limit)
         if pending.count > budget { report.remaining = pending.count - budget; pending = Array(pending.prefix(budget)) }
         let total = pending.count
@@ -232,17 +242,19 @@ actor LensWorksSemanticIndex {
             var loaded: [(LWSemanticCandidate, LWInferenceImage)] = []
             for candidate in slice {
                 do { loaded.append((candidate, try await candidate.image())) }
-                catch is CancellationError { report.cancelled = true }
+                catch is CancellationError { report.cancelled = true; break }
                 catch { report.unavailable.append(candidate.id) }
+                if Task.isCancelled { report.cancelled = true; break }
             }
-            if report.cancelled { report.remaining += pending.count - index + slice.count - loaded.count; break }
+            // None of this slice has committed, including the successfully loaded images.
+            if report.cancelled { report.remaining += pending.count - index + slice.count; break }
             guard !loaded.isEmpty else { continue }
             let vectors: LWSemanticVectors
             do { vectors = try await embedder.embedImages(loaded.map(\.1)) }
             catch is CancellationError { report.cancelled = true; report.remaining += pending.count - index + loaded.count; break }
             // Both awaits are behind us and nothing below suspends: if the index was adopted anew,
             // reset or deleted meanwhile, these vectors belong to the old state and are dropped.
-            guard generation == epoch else { report.cancelled = true; report.remaining += pending.count - index + loaded.count; break }
+            guard !Task.isCancelled, generation == epoch else { report.cancelled = true; report.remaining += pending.count - index + loaded.count; break }
             try validate(vectors, count: loaded.count, against: version)
             try execute("BEGIN IMMEDIATE")
             do {
@@ -264,6 +276,9 @@ actor LensWorksSemanticIndex {
     /// Drops entries for photos no longer in the catalog (`keeping` is the complete live id set).
     @discardableResult
     func prune(keeping live: Set<String>) throws -> Int {
+        // Also supersede batches with no committed row yet; an authoritative catalog snapshot
+        // must not let a suspended sync insert a photo that has since left the catalog.
+        generation &+= 1
         let stored = try statement("SELECT photo FROM entries") { s -> [String] in
             var ids: [String] = []
             while sqlite3_step(s) == SQLITE_ROW { ids.append(String(cString: sqlite3_column_text(s, 0))) }
@@ -277,6 +292,7 @@ actor LensWorksSemanticIndex {
     /// Invalidates entries immediately (for example a photo's edit or removal).
     func remove(_ ids: [String]) throws {
         guard !ids.isEmpty else { return }
+        generation &+= 1
         try execute("BEGIN IMMEDIATE")
         do {
             for id in ids {

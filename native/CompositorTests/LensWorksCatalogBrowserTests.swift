@@ -257,7 +257,8 @@ struct LensWorksCatalogBrowserTests {
 
             // Semantic indexing consumes the retained thumbnail, not the now-unavailable original.
             _ = try await model.thumbnail(beach)
-            let original = URL(fileURLWithPath: beach.originalPath)
+            let resolved = try await model.resolveSelectedOriginal()
+            let original = try resolved.originalURL
             let offline = fixture.root.appendingPathComponent("offline-original.png")
             try FileManager.default.moveItem(at: original, to: offline)
             defer { try? FileManager.default.moveItem(at: offline, to: original) }

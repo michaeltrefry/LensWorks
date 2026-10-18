@@ -33,6 +33,126 @@ struct LensWorksCatalogTests {
         #expect(try Data(contentsOf: source) == Data([1, 2, 3]))
     }
 
+    @Test func interruptedSemanticRebuildReopensCommittedBatchesWithoutChangingCatalogOrDocuments() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SemanticRecovery-\(UUID())")
+        let media = root.appendingPathComponent("Photos"), catalogURL = root.appendingPathComponent("Catalog")
+        let support = root.appendingPathComponent("ApplicationSupport")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: catalogURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = try ImageImportTests().fixture(.png)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let total = LensWorksSemanticIndex.batchSize * 2 + 1
+        for i in 0..<total {
+            try FileManager.default.copyItem(at: fixture, to: media.appendingPathComponent("Original-\(i).png"))
+        }
+        let service = LensWorksCatalogService()
+        _ = try await service.request(LensWorksCatalogRequest(op: "create", catalog_path: catalogURL.path), as: LensWorksCatalogLocation.self)
+        let imported = try await service.request(LensWorksCatalogRequest(op: "import", catalog_path: catalogURL.path, source_path: media.path, max_files: 1000), as: LensWorksImportReport.self)
+        #expect(imported.imported == total)
+        let page = try await service.request(LensWorksCatalogRequest(op: "list", catalog_path: catalogURL.path), as: LensWorksCatalogPage.self)
+        #expect(page.assets.count == total)
+        let asset = try #require(page.assets.first)
+        let session = EditorSession()
+        await session.importImages([URL(fileURLWithPath: asset.originalPath)])
+        let layerID = try #require(session.activeLayerID)
+        session.renameLayer(layerID, to: "Irreplaceable edit")
+        session.setLayerOpacity(0.6)
+        let snapshot = try #require(session.projectSnapshot())
+        let project = root.appendingPathComponent("Working version.comp")
+        let workingVersion = LensWorksWorkingVersion(id: UUID(), photoID: asset.photoID, catalogPath: catalogURL.path,
+            originalPath: asset.originalPath, projectPath: project.path, name: "Preserved version")
+        try await ProjectStore.shared.save(snapshot, to: project, workingVersion: workingVersion)
+        try await service.close() // freeze durable catalog bytes, excluding a live connection's WAL bookkeeping
+
+        // Compare every original, catalog database/sidecar and project asset byte-for-byte, not
+        // just a synthetic marker. Only the rebuildable application-support index may change.
+        func protectedFiles() throws -> [String: Data] {
+            var files: [String: Data] = [:]
+            // Relative enumeration avoids macOS's /var versus /private/var URL aliases.
+            let entries = try #require(FileManager.default.enumerator(atPath: root.path))
+            for case let path as String in entries {
+                if path == "ApplicationSupport" { entries.skipDescendants(); continue }
+                let file = root.appendingPathComponent(path)
+                if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                    files[path] = try Data(contentsOf: file)
+                }
+            }
+            return files
+        }
+        let before = try protectedFiles()
+        func expectProtectedFilesUnchanged() throws {
+            let after = try protectedFiles()
+            for path in Set(before.keys).union(after.keys).sorted() {
+                #expect(after[path] == before[path], "Protected file changed: \(path)")
+            }
+        }
+        let indexURL = LensWorksSemanticSearch.indexURL(forCatalog: catalogURL.path, in: support)
+        let indexVersion = LWSemanticIndexVersion(imageProvider: "img", textProvider: "txt", space: "fixture", dimension: 4,
+            assets: ["fixture@1"], source: "preview", recipe: "recovery")
+        let image = try LWInferenceImage(width: 1, height: 1, channels: 3, alpha: .none, pixels: Data([0, 0, 0]))
+        let candidates = page.assets.map { asset in LWSemanticCandidate(id: asset.id, stamp: "r1") { image } }
+        let embedder = FixtureEmbedder()
+        weak var interruptedIndex: LensWorksSemanticIndex?
+        func interruptAfterFirstCommit() async throws {
+            let index = LensWorksSemanticIndex(url: indexURL)
+            interruptedIndex = index
+            try await index.adopt(indexVersion)
+            let started = AsyncStream<Void>.makeStream()
+            var interrupted = candidates
+            let blocked = candidates[LensWorksSemanticIndex.batchSize]
+            interrupted[LensWorksSemanticIndex.batchSize] = LWSemanticCandidate(id: blocked.id, stamp: blocked.stamp) {
+                started.continuation.yield(())
+                try await Task.sleep(for: .seconds(60))
+                return image
+            }
+            let task = Task {
+                defer { started.continuation.finish() }
+                return try await index.sync(interrupted, embedder: embedder)
+            }
+            var iterator = started.stream.makeAsyncIterator()
+            guard await iterator.next() != nil else {
+                _ = try await task.value // surface an early sync failure instead of hanging
+                Issue.record("The rebuild ended before reaching its second batch")
+                return
+            }
+            #expect(try await index.count() == LensWorksSemanticIndex.batchSize)
+            task.cancel()
+            let partial = try await task.value
+            #expect(partial.cancelled && partial.embedded == LensWorksSemanticIndex.batchSize)
+            started.continuation.finish()
+        }
+        try await interruptAfterFirstCommit()
+        #expect(interruptedIndex == nil, "the interrupted actor and SQLite connection are closed before reopening")
+        try expectProtectedFilesUnchanged()
+        let reopened = LensWorksSemanticIndex(url: indexURL)
+        #expect(try await reopened.adopt(indexVersion) == false)
+        #expect(try await reopened.count() == LensWorksSemanticIndex.batchSize)
+        let resumed = try await reopened.sync(candidates, embedder: embedder)
+        #expect(resumed.upToDate == LensWorksSemanticIndex.batchSize && resumed.embedded == total - LensWorksSemanticIndex.batchSize)
+        #expect(embedder.imageCalls == total, "committed vectors are not recomputed after reopening")
+        #expect(Set(try await reopened.search("beach", limit: total, embedder: embedder).map(\.id)) == Set(page.assets.map(\.id)))
+        await reopened.deleteIndexFiles()
+        try await reopened.adopt(indexVersion)
+        #expect(try await reopened.sync(candidates, embedder: embedder).embedded == total)
+        try expectProtectedFilesUnchanged() // interruption, recovery and full index deletion preserve every protected byte
+        let reopenedService = LensWorksCatalogService()
+        _ = try await reopenedService.request(LensWorksCatalogRequest(op: "open", catalog_path: catalogURL.path), as: LensWorksCatalogLocation.self)
+        let later = try await reopenedService.request(LensWorksCatalogRequest(op: "list", catalog_path: catalogURL.path), as: LensWorksCatalogPage.self)
+        #expect(Set(later.assets.map(\.id)) == Set(page.assets.map(\.id)))
+        try await reopenedService.close()
+        let workspace = ProjectWorkspace()
+        #expect(await workspace.open(project))
+        let recovered = try #require(workspace.current.controller.workingVersion)
+        #expect(recovered.id == workingVersion.id && recovered.photoID == workingVersion.photoID)
+        #expect(recovered.catalogPath == workingVersion.catalogPath && recovered.originalPath == workingVersion.originalPath)
+        #expect(recovered.projectPath == workingVersion.projectPath && recovered.name == workingVersion.name)
+        #expect(workspace.current.session.document?.id == session.document?.id)
+        #expect(workspace.current.session.document?.layers.first?.id == layerID)
+        #expect(workspace.current.session.document?.layers.first?.name == "Irreplaceable edit")
+        #expect(workspace.current.session.document?.layers.first?.opacity == 0.6)
+    }
+
     @Test func realCatalogWorkingVersionRetainsSourceAndLayersAcrossReopen() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LensWorksCatalogTests-\(UUID())")
         let media = root.appendingPathComponent("Photos")

@@ -94,6 +94,115 @@ private nonisolated func tempIndexURL() -> URL {
         #expect(try await index.count() == 4)
     }
 
+    @Test func changedStampsInvalidateBeforeBudgetAndUnavailablePreview() async throws {
+        let url = tempIndexURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let index = LensWorksSemanticIndex(url: url)
+        let embedder = FixtureEmbedder()
+        try await index.adopt(version())
+        _ = try await index.sync(Self.library, embedder: embedder)
+        struct Offline: Error {}
+        let changed = [
+            LWSemanticCandidate(id: "beach-1", stamp: "r2") { throw Offline() },
+            photo("beach-2", concept: 1, stamp: "r2")
+        ]
+        let report = try await index.sync(changed, limit: 1, embedder: embedder)
+        #expect(report.embedded == 0 && report.remaining == 1 && report.unavailable == ["beach-1"])
+        #expect(embedder.imageCalls == 5)
+        let hits = try await index.search("beach", embedder: embedder)
+        #expect(Set(hits.map(\.id)) == ["forest-1", "city-1", "snow-1"], "neither unavailable nor over-budget stale vector is searchable")
+        let reopened = LensWorksSemanticIndex(url: url)
+        try await reopened.adopt(version())
+        #expect(try await reopened.count() == 3, "invalidation is durable even without replacement work")
+        let recovered = try await reopened.sync([photo("beach-2", concept: 1, stamp: "r2")], embedder: embedder)
+        #expect(recovered.embedded == 1 && recovered.upToDate == 0)
+        #expect(try await reopened.search("forest", within: ["beach-2"], embedder: embedder).map(\.id) == ["beach-2"])
+    }
+
+    @Test func zeroBudgetInvalidatesChangedButRetainsUnchangedOfflinePhotos() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let embedder = FixtureEmbedder()
+        _ = try await index.sync(Self.library, embedder: embedder)
+        struct MustNotLoad: Error {}
+        let report = try await index.sync([
+            LWSemanticCandidate(id: "beach-1", stamp: "r2") { throw MustNotLoad() },
+            LWSemanticCandidate(id: "beach-2", stamp: "r1") { throw MustNotLoad() }
+        ], limit: 0, embedder: embedder)
+        #expect(report.remaining == 1 && report.upToDate == 1 && report.unavailable.isEmpty)
+        #expect(try await index.search("beach", embedder: embedder).first?.id == "beach-2")
+        #expect(try await index.count() == 4)
+    }
+
+    @Test func removalDuringLoadingCannotResurrectAnInvalidatedVector() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let candidate = LWSemanticCandidate(id: "removed", stamp: "r1") {
+            try await index.remove(["removed"])
+            return try LWInferenceImage(width: 1, height: 1, channels: 3, alpha: .none, pixels: Data([0, 0, 0]))
+        }
+        let report = try await index.sync([candidate], embedder: FixtureEmbedder())
+        #expect(report.cancelled && report.embedded == 0)
+        #expect(try await index.count() == 0)
+    }
+
+    @Test func newerSyncSupersedesAnUncommittedOlderSourceStamp() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let embedder = FixtureEmbedder()
+        let older = LWSemanticCandidate(id: "photo", stamp: "r1") {
+            let newer = try await index.sync([photo("photo", concept: 1, stamp: "r2")], embedder: embedder)
+            #expect(newer.embedded == 1)
+            return try LWInferenceImage(width: 1, height: 1, channels: 3, alpha: .none, pixels: Data([0, 0, 0]))
+        }
+        let superseded = try await index.sync([older], embedder: embedder)
+        #expect(superseded.cancelled && superseded.embedded == 0)
+        let current = try await index.sync([photo("photo", concept: 1, stamp: "r2")], embedder: embedder)
+        #expect(current.upToDate == 1 && current.embedded == 0, "the older batch cannot replace the latest stamp")
+    }
+
+    @Test func pruneDuringLoadingCannotReinsertAPhotoAbsentFromTheCatalog() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let candidate = LWSemanticCandidate(id: "removed", stamp: "r1") {
+            #expect(try await index.prune(keeping: []) == 0, "there is no committed row to remove yet")
+            return try LWInferenceImage(width: 1, height: 1, channels: 3, alpha: .none, pixels: Data([0, 0, 0]))
+        }
+        let report = try await index.sync([candidate], embedder: FixtureEmbedder())
+        #expect(report.cancelled && report.embedded == 0)
+        #expect(try await index.count() == 0)
+    }
+
+    @Test func cancellationAfterPartialLoadingCountsTheWholeUncommittedBatch() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let embedder = FixtureEmbedder()
+        var candidates = (0..<LensWorksSemanticIndex.batchSize).map { photo("photo-\($0)", concept: 0) }
+        candidates[candidates.count - 1] = LWSemanticCandidate(id: "last", stamp: "r1") { throw CancellationError() }
+        let report = try await index.sync(candidates, embedder: embedder)
+        #expect(report.cancelled && report.embedded == 0 && report.remaining == candidates.count)
+        #expect(embedder.imageCalls == 0)
+        #expect(try await index.count() == 0)
+    }
+
+    @Test func cancelledEmbeddingCannotCommitEvenIfTheEmbedderReturnsVectors() async throws {
+        struct CancellingEmbedder: LWSemanticEmbedder {
+            func embedImages(_ images: [LWInferenceImage]) async throws -> LWSemanticVectors {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await FixtureEmbedder().embedImages(images)
+            }
+            func embedTexts(_ texts: [String]) async throws -> LWSemanticVectors {
+                try await FixtureEmbedder().embedTexts(texts)
+            }
+        }
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let task = Task { try await index.sync(Self.library, embedder: CancellingEmbedder()) }
+        let report = try await task.value
+        #expect(report.cancelled && report.embedded == 0 && report.remaining == Self.library.count)
+        #expect(try await index.count() == 0)
+    }
+
     @Test func syncIsBoundedAndCancellable() async throws {
         let index = LensWorksSemanticIndex(url: tempIndexURL())
         let embedder = FixtureEmbedder()
