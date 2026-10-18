@@ -13,10 +13,15 @@ final class ProjectController {
     /// Package-persisted LensWorks versions, checkpoints and bounded history. Canvas undo remains session-only.
     var lensWorksDocument: LensWorksPhotoDocument?
     var lensWorksDocumentAssets: [String: Data] = [:]
+    var lensWorksDocumentPlanes: [String: LWFloatPlane] = [:]
     /// The version selected by the LensWorks history controls for this open photo.
     var selectedLensWorksVersionID: UUID?
     /// Kept separate from canvas history so changing a persisted LensWorks record still prompts to save.
     var lensWorksDocumentModified = false
+    /// A durable capture may safely replace this exact canvas revision; later
+    /// session edits must be saved/captured before Undo, Redo or checkpoint restore.
+    private var capturedLensWorksCanvasRevision: UUID?
+
     /// Protected history is never discarded merely to honor a limit; this is surfaced by the editor controls instead.
     var lensWorksHistoryWarning: String?
     /// The original location a catalog relink assigned to the open working version this session.
@@ -40,52 +45,78 @@ final class ProjectController {
 
     /// Starts the persisted native record for a catalog working version. The initial graph is copied out of the editor,
     /// so later version changes do not share mutable state with its siblings.
-    func initializeLensWorksDocument(photoID: String, named name: String, sourceReference: LensWorksSourceReference? = nil) {
+    func initializeLensWorksDocument(photoID: String, named name: String, sourceReference: LensWorksSourceReference? = nil) throws {
         guard lensWorksDocument == nil, !photoID.isEmpty else { return }
         var document = LensWorksPhotoDocument(photoID: photoID)
         let versionID = document.addVersion(named: name)
         var content = LensWorksVersionContent()
-        // A live RAW photo's source stays in the working version's own package; only byte-retainable graphs are copied.
-        var assets = lensWorksDocumentAssets
-        if let snapshot = session.projectSnapshot(), let graph = try? retainedGraph(snapshot, assets: &assets) {
-            content.layerGraph = graph
-            lensWorksDocumentAssets = assets
-        }
+        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        var assets = lensWorksDocumentAssets, planes = lensWorksDocumentPlanes
+        content.layerGraph = try retainedGraph(snapshot, assets: &assets, planes: &planes)
+        lensWorksDocumentAssets = assets
+        lensWorksDocumentPlanes = planes
+        document.selectedVersionID = versionID
         if let sourceReference { content.sourceReferences = [sourceReference] }
         guard let index = document.versions.firstIndex(where: { $0.id == versionID }) else { return }
         document.versions[index].content = content
         lensWorksDocument = document
         selectedLensWorksVersionID = versionID
+        capturedLensWorksCanvasRevision = session.history.currentRevision
         lensWorksDocumentModified = true
     }
 
     func addLensWorksVersion(named name: String) throws {
-        guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        var assets = lensWorksDocumentAssets, planes = lensWorksDocumentPlanes
+        let graph = try retainedGraph(snapshot, assets: &assets, planes: &planes)
         let versionID = document.addVersion(named: name)
+        document.versions[document.versions.count - 1].content.layerGraph = graph
+        document.selectedVersionID = versionID
         lensWorksDocument = document
+        lensWorksDocumentAssets = assets; lensWorksDocumentPlanes = planes
         selectedLensWorksVersionID = versionID
+        capturedLensWorksCanvasRevision = session.history.currentRevision
         lensWorksDocumentModified = true
     }
 
     func duplicateLensWorksVersion(_ id: UUID, named name: String) throws {
         guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
-        selectedLensWorksVersionID = try document.duplicateVersion(id, named: name)
+        // Duplicate the chosen record, but do not replace a different canvas or lose
+        // uncaptured edits merely by changing the selection as a side effect.
+        let copy = try document.duplicateVersion(id, named: name)
         lensWorksDocument = document
         lensWorksDocumentModified = true
+        if selectedLensWorksVersionID == id {
+            selectedLensWorksVersionID = copy
+            lensWorksDocument?.selectedVersionID = copy
+        }
     }
 
     /// Copies the snapshot's layer pixels into content-addressed document assets and returns the graph that names them,
     /// so every captured composition keeps the bytes it needs however the canvas changes afterwards.
-    /// Float-backed (live RAW) layers have no byte form here and are refused.
-    private func retainedGraph(_ snapshot: ProjectSnapshot, assets: inout [String: Data]) throws -> LensWorksLayerGraph {
-        var records = snapshot.manifest.layers
+    private func retainedGraph(_ snapshot: ProjectSnapshot, assets: inout [String: Data], planes: inout [String: LWFloatPlane]) throws -> LensWorksLayerGraph {
+        var manifest = try snapshot.manifest.metadataCopy()
+        var records = manifest.layers
+        var references: [String: LWFloatPlaneArchive.Reference] = [:]
         for i in records.indices {
             let layerID = records[i].id
             for isMask in [false, true] {
                 guard (isMask ? records[i].maskFile : records[i].imageFile) != nil else { continue }
                 guard let asset = (isMask ? snapshot.masks : snapshot.images)[layerID] else { throw ProjectError.missingImage }
-                guard asset.linear == nil, asset.linearPlane == nil else {
-                    throw LensWorksCommandRefusal(reason: "Versions of floating-point or live RAW layers can’t retain their pixels yet.")
+                if let plane = asset.linearPlane {
+                    let reference = try LWFloatPlaneArchive.reference(plane)
+                    let id = reference.manifestSHA256 + ".plane"
+                    planes[id] = plane; references[id] = reference
+                    if isMask { records[i].maskFile = id; records[i].maskPlaneArchiveReference = reference }
+                    else { records[i].imageFile = id; records[i].planeArchiveReference = reference }
+                    continue
+                }
+                if let linear = asset.linear, !isMask {
+                    let data = try linear.packageData(maximumFileBytes: 512 * 1024 * 1024)
+                    let id = LWSourcePackageArchive.digest(data) + ".f32"
+                    assets[id] = data; records[i].imageFile = id
+                    continue
                 }
                 let data = NSMutableData()
                 guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw ProjectError.encode }
@@ -96,20 +127,76 @@ final class ProjectController {
                 assets[id] = data as Data
                 if isMask { records[i].maskFile = id } else { records[i].imageFile = id }
             }
-            records[i].liveSourceFile = nil
         }
-        return LensWorksLayerGraph(layers: records)
+        manifest.layers = records
+        let projection = try LWSourcePackageArchive.externalize(manifest, maximumBytes: LWSourceDeveloper.maximumResultBytes)
+        for (id, bytes) in projection.assets { assets[id] = bytes }
+        for (id, asset) in projection.planes {
+            guard let plane = asset.plane else { throw ProjectError.missingImage }
+            planes[id] = plane; references[id] = asset.reference
+        }
+        var composition = projection.manifest
+        composition.layers = []
+        return LensWorksLayerGraph(layers: projection.manifest.layers, composition: composition,
+            retainedAssetIDs: projection.assets.keys.sorted(), planeReferences: references)
     }
 
     /// Puts a version's stored layer graph on the canvas, decoding its retained assets back into layers.
     private func installLensWorksContent(_ content: LensWorksVersionContent) throws {
+        guard session.canStartProjectOperation, session.canEditLayers, session.opacityEditLayerID == nil else {
+            throw LensWorksCommandRefusal(reason: "Finish the current canvas edit before switching or restoring versions. Your edits and Undo history have been kept.")
+        }
         guard let graph = content.layerGraph, let base = session.projectSnapshot() else { return }
-        var records = graph.layers
+        var captured = graph.composition ?? base.manifest
+        if graph.composition == nil, let active = captured.activeLayerID,
+           !graph.layers.contains(where: { $0.id == active }) {
+            // Older graphs did not capture selection; do not carry a foreign
+            // current-canvas layer ID into the restored graph's validation.
+            captured = ProjectManifest(workingSpace: captured.workingSpace, workingSample: captured.workingSample,
+                resolution: captured.resolution, documentID: captured.documentID, width: captured.width,
+                height: captured.height, activeLayerID: nil, layers: [], guides: captured.guides,
+                metadataStorage: captured.metadataStorage)
+        }
+        captured.layers = graph.layers
+        captured = try LWSourcePackageArchive.hydrate(captured, read: { id, maximum in
+            guard let bytes = self.lensWorksDocumentAssets[id], bytes.count <= maximum else { throw ProjectError.missingImage }
+            return bytes
+        }, readPlane: { id, reference in
+            guard let plane = self.lensWorksDocumentPlanes[id],
+                  try LWFloatPlaneArchive.reference(plane) == reference else { throw ProjectError.missingImage }
+            return plane
+        })
+        var records = captured.layers
         var images: [UUID: ImportedImage] = [:], masks: [UUID: ImportedImage] = [:]
+        var pixels = 0, maskPixels = 0
+        func admit(width: Int, height: Int, isMask: Bool) throws {
+            if isMask { try ProjectStore.checkSize(width: width, height: height, used: &maskPixels) }
+            else { try ProjectStore.checkSize(width: width, height: height, used: &pixels) }
+        }
         func decode(_ id: String, name: String, isMask: Bool) throws -> ImportedImage {
+            if let reference = graph.planeReferences?[id] {
+                guard let plane = lensWorksDocumentPlanes[id],
+                      try LWFloatPlaneArchive.reference(plane) == reference else { throw ProjectError.missingImage }
+                try admit(width: plane.width, height: plane.height, isMask: isMask)
+                return try isMask ? ImportedImage(maskPlane: plane, name: name) : ImportedImage(plane: plane, name: name)
+            }
+            if id.hasSuffix(".f32") {
+                guard !isMask, let bytes = lensWorksDocumentAssets[id] else { throw ProjectError.missingImage }
+                let extent = try LWLinearSurface.packageExtent(bytes, maximumFileBytes: 512 * 1024 * 1024)
+                try admit(width: extent.width, height: extent.height, isMask: false)
+                let linear = try LWLinearSurface.package(bytes, maximumFileBytes: 512 * 1024 * 1024)
+                return try ImportedImage(linear: linear, name: name)
+            }
             guard let bytes = lensWorksDocumentAssets[id],
                   let source = CGImageSourceCreateWithData(bytes as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-                  let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
+                  CGImageSourceGetType(source) as String? == UTType.png.identifier,
+                  CGImageSourceGetCount(source) == 1,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  (properties[kCGImagePropertyDepth] as? Int ?? 8) <= 8 else { throw ProjectError.missingImage }
+            try admit(width: width, height: height, isMask: isMask)
+            guard let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
                   let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                       kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 96,
                       kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
@@ -120,44 +207,63 @@ final class ProjectController {
             let layer = records[i]
             if let file = layer.imageFile {
                 images[layer.id] = try decode(file, name: layer.name, isMask: false)
-                records[i].imageFile = "\(layer.id.uuidString).png"
+                records[i].imageFile = "\(layer.id.uuidString)." + (images[layer.id]?.linearPlane != nil ? "plane" : images[layer.id]?.linear != nil ? "f32" : "png")
             }
             if let file = layer.maskFile {
                 masks[layer.id] = try decode(file, name: layer.name, isMask: true)
-                records[i].maskFile = "\(layer.id.uuidString).mask.png"
+                records[i].maskFile = "\(layer.id.uuidString).mask." + (masks[layer.id]?.linearPlane != nil ? "plane" : "png")
             }
         }
-        let old = base.manifest
-        let active = old.activeLayerID.flatMap { id in records.contains { $0.id == id } ? id : nil }
-        let manifest = ProjectManifest(resolution: old.resolution, documentID: old.documentID, width: old.width, height: old.height,
-            activeLayerID: active, layers: records, guides: old.guides, metadataStorage: old.metadataStorage)
+        captured.layers = records
+        try ProjectStore.validate(captured)
         let url = session.projectURL
-        session.installProject(ProjectSnapshot(manifest: manifest, images: images, masks: masks), from: url ?? URL(fileURLWithPath: "/"))
+        session.installProject(ProjectSnapshot(manifest: captured, images: images, masks: masks), from: url ?? URL(fileURLWithPath: "/"))
         session.projectURL = url
     }
 
     /// Selects a version and shows its stored composition on the canvas.
     func selectLensWorksVersion(_ id: UUID) throws {
         guard let version = lensWorksDocument?.versions.first(where: { $0.id == id }) else { throw ProjectError.invalid }
+        guard selectedLensWorksVersionID != id else { return }
+        // Replacing the canvas resets its session undo. Never do that to unsaved work.
+        guard !session.isModified else {
+            throw LensWorksCommandRefusal(reason: "Save your canvas edits before switching versions. Your edits and Undo history have been kept.")
+        }
         try installLensWorksContent(version.content)
         selectedLensWorksVersionID = id
+        lensWorksDocument?.selectedVersionID = id
+        lensWorksDocumentModified = true
     }
 
     /// Commits a changed document only after the version's content is on the canvas.
     private func commit(_ document: LensWorksPhotoDocument, showing id: UUID) throws {
+        guard !session.isModified || capturedLensWorksCanvasRevision == session.history.currentRevision else {
+            throw LensWorksCommandRefusal(reason: "Save or capture your canvas edits before restoring version history. Your edits and Undo history have been kept.")
+        }
         if let content = document.versions.first(where: { $0.id == id })?.content { try installLensWorksContent(content) }
         lensWorksDocument = document
+        selectedLensWorksVersionID = id
+        lensWorksDocument?.selectedVersionID = id
+        capturedLensWorksCanvasRevision = session.history.currentRevision
+        pruneRetainedLensWorksAssets()
         lensWorksDocumentModified = true
     }
 
     /// Records the current native layer/RAW graph as a durable, independently undoable version edit.
     func captureLensWorksComposition(in id: UUID) throws {
         guard var document = lensWorksDocument, let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
-        var assets = lensWorksDocumentAssets
-        let graph = try retainedGraph(snapshot, assets: &assets)
+        var assets = lensWorksDocumentAssets, planes = lensWorksDocumentPlanes
+        let graph = try retainedGraph(snapshot, assets: &assets, planes: &planes)
+        guard document.versions.first(where: { $0.id == id })?.content.layerGraph != graph else {
+            capturedLensWorksCanvasRevision = session.history.currentRevision
+            return
+        }
         record(try document.perform(.replaceLayerGraph(graph), on: id))
         lensWorksDocumentAssets = assets
+        lensWorksDocumentPlanes = planes
         lensWorksDocument = document
+        capturedLensWorksCanvasRevision = session.history.currentRevision
+        pruneRetainedLensWorksAssets()
         lensWorksDocumentModified = true
     }
 
@@ -169,8 +275,9 @@ final class ProjectController {
 
     func redoLensWorksVersion(_ id: UUID) throws {
         guard var document = lensWorksDocument else { throw ProjectError.invalid }
-        record(try document.redo(id))
+        let report = try document.redo(id)
         try commit(document, showing: id)
+        record(report)
     }
 
     func addLensWorksCheckpoint(named name: String, to id: UUID) throws {
@@ -182,15 +289,24 @@ final class ProjectController {
 
     func restoreLensWorksCheckpoint(_ checkpoint: UUID, in id: UUID) throws {
         guard var document = lensWorksDocument else { throw ProjectError.invalid }
-        record(try document.restoreCheckpoint(checkpoint, in: id))
+        let report = try document.restoreCheckpoint(checkpoint, in: id)
         try commit(document, showing: id)
+        record(report)
     }
 
     func setLensWorksMaxUndoSteps(_ limit: Int) throws {
         guard var document = lensWorksDocument, limit > 0 else { throw ProjectError.invalid }
         record(document.setMaxUndoSteps(limit))
         lensWorksDocument = document
+        pruneRetainedLensWorksAssets()
         lensWorksDocumentModified = true
+    }
+
+    private func pruneRetainedLensWorksAssets() {
+        guard let document = lensWorksDocument else { return }
+        let reachable = document.reachableAssets
+        lensWorksDocumentAssets = lensWorksDocumentAssets.filter { reachable.contains($0.key) }
+        lensWorksDocumentPlanes = lensWorksDocumentPlanes.filter { reachable.contains($0.key) }
     }
 
     private func record(_ report: LensWorksPruneReport) {
@@ -231,10 +347,19 @@ final class ProjectController {
     private var writing: Task<Bool, Never>?
     func finishWriting() async { if let writing { _ = await writing.value } }
 
+    /// Save and every export must carry historical original authority too.
+    private func snapshotWithLensWorksHistory() -> ProjectSnapshot? {
+        guard var snapshot = session.projectSnapshot() else { return nil }
+        snapshot.lensWorksDocument = lensWorksDocument
+        snapshot.lensWorksDocumentAssets = lensWorksDocumentAssets
+        snapshot.lensWorksDocumentPlanes = lensWorksDocumentPlanes
+        return snapshot
+    }
+
     func exportPNG() async {
         guard session.document != nil, begin() else { return }
         defer { session.isProjectBusy = false }
-        guard let snapshot = session.projectSnapshot() else { return }
+        guard let snapshot = snapshotWithLensWorksHistory() else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.canCreateDirectories = true
@@ -257,14 +382,14 @@ final class ProjectController {
     func exportPNG(to url: URL) async throws {
         guard session.document != nil, begin() else { throw LensWorksCommandRefusal(reason: "Finish the current project operation first.") }
         defer { session.isProjectBusy = false }
-        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        guard let snapshot = snapshotWithLensWorksHistory() else { throw ProjectError.invalid }
         try await ImageExporter.shared.exportPNG(snapshot, to: url, workingVersion: workingVersion)
     }
     /// Export JPEG straight to `url` with `options`, without the export sheet.
     func exportJPEG(to url: URL, options: JPEGOptions) async throws {
         guard session.document != nil, begin() else { throw LensWorksCommandRefusal(reason: "Finish the current project operation first.") }
         defer { session.isProjectBusy = false }
-        guard let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        guard let snapshot = snapshotWithLensWorksHistory() else { throw ProjectError.invalid }
         let raster = try await ImageExporter.shared.render(snapshot)
         let data = try await ImageExporter.shared.jpegFile(raster, options: options)
         try data.check()
@@ -373,7 +498,7 @@ final class ProjectController {
     func exportJPEG() async {
         guard let window, session.document != nil, begin() else { return }
         defer { session.isProjectBusy = false }
-        guard let snapshot = session.projectSnapshot() else { return }
+        guard let snapshot = snapshotWithLensWorksHistory() else { return }
         do {
             let raster = try await ImageExporter.shared.render(snapshot)
             let data: JPEGFileResult? = await withCheckedContinuation { continuation in
@@ -413,10 +538,14 @@ final class ProjectController {
 
     /// The document as it is now, and where it goes: asks with the Save panel when it has no file yet (or Save As).
     private func prepareSave(asNew: Bool, suppliedDestination: URL? = nil) async -> (snapshot: ProjectSnapshot, destination: URL, revision: UUID, workingVersion: LensWorksWorkingVersion?)? {
+        // Saving is the safe bridge from session edits to the selected durable version.
+        // Otherwise a subsequent (now clean) version switch would still lose saved edits.
+        if session.isModified, let id = selectedLensWorksVersionID {
+            do { try captureLensWorksComposition(in: id) }
+            catch { await showError("Couldn’t capture the current version", error: error); return nil }
+        }
         let revision = session.history.currentRevision
-        guard let canvasSnapshot = session.projectSnapshot() else { return nil }
-        let snapshot = ProjectSnapshot(manifest: canvasSnapshot.manifest, images: canvasSnapshot.images, masks: canvasSnapshot.masks,
-            workingVersion: canvasSnapshot.workingVersion, lensWorksDocument: lensWorksDocument, lensWorksDocumentAssets: lensWorksDocumentAssets)
+        guard let snapshot = snapshotWithLensWorksHistory() else { return nil }
         var destination = suppliedDestination ?? (asNew ? nil : session.projectURL)
         if destination == nil {
             let panel = NSSavePanel()
@@ -527,7 +656,8 @@ final class ProjectController {
             workingVersion = snapshot.workingVersion
             lensWorksDocument = snapshot.lensWorksDocument
             lensWorksDocumentAssets = snapshot.lensWorksDocumentAssets
-            selectedLensWorksVersionID = lensWorksDocument?.versions.first?.id
+            lensWorksDocumentPlanes = snapshot.lensWorksDocumentPlanes
+            selectedLensWorksVersionID = lensWorksDocument?.selectedVersionID ?? lensWorksDocument?.versions.first?.id
             lensWorksDocumentModified = false
             lensWorksHistoryWarning = nil
             if recordsRecentProjects { RecentProjects.shared.note(source) }

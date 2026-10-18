@@ -22,10 +22,12 @@ same atomic `ProjectStore` transaction as `manifest.json`, images, sources and
 its assets in the project snapshot, and a catalog document's `photoID` must
 match the package working version's `photoID`.
 
-`document.json` is currently schema 2. The reader upgrades schema 1, which did
-not contain `maxUndoSteps`; older content may use scalar RAW settings, simple
-layer entries and string source references. Schema-2 content can retain the
-complete native `ProjectLayerRecord` graph, including
+`document.json` is currently schema 3. The reader upgrades schemas 1 and 2;
+schema 1 did not contain `maxUndoSteps`, and older content may use scalar RAW
+settings, simple layer entries and string source references. Schema 3 adds
+complete composition state, exact float/source archives and persisted version
+selection; older readers reject this schema rather than misreading tiled assets.
+Version content can retain the complete native `ProjectLayerRecord` graph, including
 parent/group topology, transforms, opacity/blend modes, masks, adjustment,
 shape, effect and text state, plus its `LWLiveSourceNode` live-RAW graph. It
 also records structured catalog source references. The retained legacy fields
@@ -48,7 +50,20 @@ than deleting recoverability.
 Asset reachability includes current version content, undo/redo snapshots and
 checkpoints. Layer, mask and live-source asset references remain retained until
 no current version, composition/history step, or named checkpoint can reach
-them; `collectUnreachableAssets` removes only the remainder.
+them. Every real package save writes only the reachable inventory, so the atomic
+replacement prunes unreachable assets without ever deleting data from the old
+package before publication. Float samples use exact `.f32` or tiled `.plane`
+archives; live-source metadata, payloads and source planes are retained
+transitively, not reduced to an integer preview. A missing reachable asset is
+an error, not a partially restorable save.
+
+Newly captured graphs also keep canvas dimensions, resolution, guides, active
+layer and working color/sample state. Older schema-2 graphs lacking this
+optional composition record keep the legacy canvas fallback. Selecting another
+version refuses unsaved canvas edits with an actionable Save message, leaving
+both edits and session Undo intact. Save captures those edits into the selected
+persistent version before publication. The selected version is saved with the
+document so reopening the canvas and its history controls agree.
 
 Saving a catalog working version under a different project path creates a new
 working-version UUID while retaining photo/source links; normal Save preserves

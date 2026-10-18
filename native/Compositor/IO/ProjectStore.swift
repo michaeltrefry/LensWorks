@@ -83,6 +83,7 @@ nonisolated struct ProjectSnapshot: @unchecked Sendable {
     var lensWorksDocument: LensWorksPhotoDocument? = nil
     /// Bytes referenced by `lensWorksDocument`'s document-local asset IDs.
     var lensWorksDocumentAssets: [String: Data] = [:]
+    var lensWorksDocumentPlanes: [String: LWFloatPlane] = [:]
 }
 
 nonisolated enum ProjectError: LocalizedError {
@@ -115,7 +116,7 @@ actor ProjectStore {
     }
 
     func save(_ snapshot: ProjectSnapshot, to url: URL, quickLook: QuickLookImages? = nil, workingVersion: LensWorksWorkingVersion? = nil) throws {
-        try validate(snapshot.manifest)
+        try Self.validate(snapshot.manifest)
         let sourceProtection = try LWSourceDestinationAuthority(snapshot)
         try sourceProtection.validate(url)
         let version = workingVersion ?? snapshot.workingVersion
@@ -130,7 +131,7 @@ actor ProjectStore {
             manifest.workingSpace="extended-linear-sRGB";manifest.workingSample="float32-straight-RGBA"
         }
         manifest.version = Self.usesVersion13(manifest) ? ProjectManifest.current : min(manifest.version, ProjectManifest.baseline)
-        try validate(manifest)
+        try Self.validate(manifest)
         var images: [String: FileWrapper] = [:]
         var planeAssets: [String: LWFloatPlane] = [:]
         var planeReferences: [String: LWFloatPlaneArchive.Reference] = [:]
@@ -141,8 +142,8 @@ actor ProjectStore {
             guard let asset = (isMask ? snapshot.masks : snapshot.images)[layer.id] else { throw ProjectError.missingImage }
             if isMask {
                 guard LayerMask.isValid(asset.image) else { throw ProjectError.invalid }
-                try checkSize(width: asset.image.width, height: asset.image.height, used: &maskPixels)
-            } else { try checkSize(width: asset.image.width, height: asset.image.height, used: &pixels) }
+                try Self.checkSize(width: asset.image.width, height: asset.image.height, used: &maskPixels)
+            } else { try Self.checkSize(width: asset.image.width, height: asset.image.height, used: &pixels) }
             if let plane = asset.linearPlane {
                 let reference=isMask ? layer.maskPlaneArchiveReference : layer.planeArchiveReference
                 guard filename == "\(layer.id.uuidString)." + (isMask ? "mask.plane" : "plane"),
@@ -175,7 +176,7 @@ actor ProjectStore {
         var publicationOwners=sourceProjection.ownership
         defer { withExtendedLifetime(publicationOwners) {} }
         manifest=sourceProjection.manifest
-        try validate(manifest)
+        try Self.validate(manifest)
         let encodedManifest=try LWSourceMetadataStorage.encode(manifest,maximumBytes:4*1024*1024,formatting:[.prettyPrinted,.sortedKeys])
         publicationOwners.append(encodedManifest.owner)
         let metadata=try encodedManifest.copyData(ownedBy:encodedManifest.owner)
@@ -194,11 +195,27 @@ actor ProjectStore {
             let encoded = try encoder.encode(document)
             guard encoded.count <= 4 * 1024 * 1024 else { throw ProjectError.tooLarge }
             var documentContents = ["document.json": FileWrapper(regularFileWithContents: encoded)]
-            guard snapshot.lensWorksDocumentAssets.count <= 10_000 else { throw ProjectError.tooLarge }
+            // The atomic replacement is also GC: only assets reachable from a current
+            // version, retained history or checkpoint enter the new package.
+            let reachable = document.reachableAssets
+            let references = document.reachablePlaneReferences
+            guard reachable.count <= 10_000 else { throw ProjectError.tooLarge }
             var assets: [String: FileWrapper] = [:]
-            for (id, data) in snapshot.lensWorksDocumentAssets {
-                guard LensWorksDocumentStore.isValidAssetID(id), data.count <= 512 * 1024 * 1024 else { throw ProjectError.invalid }
-                assets[id] = FileWrapper(regularFileWithContents: data)
+            for id in reachable {
+                guard LensWorksPhotoDocument.isValidAssetID(id) else { throw ProjectError.invalid }
+                if let reference = references[id] {
+                    guard let plane = snapshot.lensWorksDocumentPlanes[id],
+                          try LWFloatPlaneArchive.reference(plane) == reference else { throw ProjectError.missingImage }
+                    let placeholder = FileWrapper(directoryWithFileWrappers: [:])
+                    placeholder.fileAttributes = [FileAttributeKey.type.rawValue: FileAttributeType.typeDirectory.rawValue, FileAttributeKey.posixPermissions.rawValue: 0o700]
+                    assets[id] = placeholder
+                    let path = "LensWorksDocument/assets/" + id
+                    planeAssets[path] = plane; planeReferences[path] = reference
+                } else {
+                    guard let data = snapshot.lensWorksDocumentAssets[id] else { throw ProjectError.missingImage }
+                    guard data.count <= 512 * 1024 * 1024 else { throw ProjectError.tooLarge }
+                    assets[id] = FileWrapper(regularFileWithContents: data)
+                }
             }
             documentContents["assets"] = FileWrapper(directoryWithFileWrappers: assets)
             contents["LensWorksDocument"] = FileWrapper(directoryWithFileWrappers: documentContents)
@@ -281,7 +298,7 @@ actor ProjectStore {
             manifest=decoded.value;manifest.metadataStorage=decoded.owner
         }
         catch { throw ProjectError.invalid }
-        try validate(manifest)
+        try Self.validate(manifest)
         let sourceCache=LWSourcePackageArchive.HydrationCache()
         var currentSources:[String:LWSourceOwnedData]=[:],currentSourcePlanes:[String:LWFloatPlane]=[:],sourceBytes=0
         manifest=try LWSourcePackageArchive.hydrate(manifest,readOwned: { name,maximum in
@@ -299,12 +316,13 @@ actor ProjectStore {
                 reference: reference, workspace: workspace)
             currentSourcePlanes[name] = plane; return plane
         },cache:sourceCache)
-        try validate(manifest)
+        try Self.validate(manifest)
         let workingVersion = try LensWorksWorkingVersion.read(from: url)
         guard manifest.workingVersionID == workingVersion?.id || manifest.workingVersionID == nil else { throw ProjectError.invalid }
         let documentDirectory = url.appendingPathComponent("LensWorksDocument", isDirectory: true)
         var lensWorksDocument: LensWorksPhotoDocument?
         var lensWorksDocumentAssets: [String: Data] = [:]
+        var lensWorksDocumentPlanes: [String: LWFloatPlane] = [:]
         if FileManager.default.fileExists(atPath: documentDirectory.path) {
             let directoryValues = try documentDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard directoryValues.isDirectory == true, directoryValues.isSymbolicLink != true else { throw ProjectError.invalid }
@@ -320,12 +338,19 @@ actor ProjectStore {
                 let names = try FileManager.default.contentsOfDirectory(atPath: assetsDirectory.path)
                 guard names.count <= 10_000 else { throw ProjectError.tooLarge }
                 for name in names {
-                    guard LensWorksDocumentStore.isValidAssetID(name) else { throw ProjectError.invalid }
+                    guard LensWorksPhotoDocument.isValidAssetID(name) else { throw ProjectError.invalid }
                     let assetURL = assetsDirectory.appendingPathComponent(name)
-                    try checkFile(assetURL, inside: url, maximumBytes: 512 * 1024 * 1024)
-                    lensWorksDocumentAssets[name] = try Data(contentsOf: assetURL)
+                    if let reference = lensWorksDocument?.reachablePlaneReferences[name] {
+                        let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
+                        lensWorksDocumentPlanes[name] = try LWFloatPlaneArchive.read(from: assetURL, reference: reference, workspace: workspace)
+                    } else {
+                        try checkFile(assetURL, inside: url, maximumBytes: 512 * 1024 * 1024)
+                        lensWorksDocumentAssets[name] = try Data(contentsOf: assetURL)
+                    }
                 }
             }
+            guard let document = lensWorksDocument,
+                  document.reachableAssets.isSubset(of: Set(lensWorksDocumentAssets.keys).union(lensWorksDocumentPlanes.keys)) else { throw ProjectError.missingImage }
         }
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
@@ -338,8 +363,8 @@ actor ProjectStore {
                 guard manifest.version >= 13, let reference = isMask ? layer.maskPlaneArchiveReference : layer.planeArchiveReference else { throw ProjectError.invalid }
                 let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
                 let plane = try LWFloatPlaneArchive.read(from: file, reference: reference, workspace: workspace)
-                if isMask { try checkSize(width:plane.width,height:plane.height,used:&maskPixels);masks[layer.id]=try ImportedImage(maskPlane:plane,name:"Layer Mask") }
-                else { try checkSize(width:plane.width,height:plane.height,used:&pixels);images[layer.id]=try ImportedImage(plane:plane,name:layer.name) }
+                if isMask { try Self.checkSize(width:plane.width,height:plane.height,used:&maskPixels);masks[layer.id]=try ImportedImage(maskPlane:plane,name:"Layer Mask") }
+                else { try Self.checkSize(width:plane.width,height:plane.height,used:&pixels);images[layer.id]=try ImportedImage(plane:plane,name:layer.name) }
                 continue
             }
             try checkFile(file, inside: url, maximumBytes: 512 * 1024 * 1024)
@@ -347,7 +372,7 @@ actor ProjectStore {
                 guard manifest.version >= 13 else { throw ProjectError.invalid }
                 let workspace=try LWFloatWorkspace(workingSet:.sourceGraphs)
                 let plane=try LWFloatLegacyArchive.read(from:file,maximumFileBytes:512*1024*1024,workspace:workspace)
-                try checkSize(width:plane.width,height:plane.height,used:&pixels)
+                try Self.checkSize(width:plane.width,height:plane.height,used:&pixels)
                 images[layer.id]=try ImportedImage(plane:plane,name:layer.name);continue
             }
             let asset = try autoreleasepool {
@@ -362,8 +387,8 @@ actor ProjectStore {
                       let width = properties[kCGImagePropertyPixelWidth] as? Int,
                       let height = properties[kCGImagePropertyPixelHeight] as? Int,
                       (properties[kCGImagePropertyDepth] as? Int ?? 8) <= 8 else { throw ProjectError.missingImage }
-                if isMask { try checkSize(width: width, height: height, used: &maskPixels) }
-                else { try checkSize(width: width, height: height, used: &pixels) }
+                if isMask { try Self.checkSize(width: width, height: height, used: &maskPixels) }
+                else { try Self.checkSize(width: width, height: height, used: &pixels) }
                 guard let image = CGImageSourceCreateImageAtIndex(source, 0,
                     [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
                       let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -378,7 +403,7 @@ actor ProjectStore {
           }
         }
         let snapshot = ProjectSnapshot(manifest: manifest, images: images, masks: masks, workingVersion: workingVersion,
-            lensWorksDocument: lensWorksDocument, lensWorksDocumentAssets: lensWorksDocumentAssets)
+            lensWorksDocument: lensWorksDocument, lensWorksDocumentAssets: lensWorksDocumentAssets, lensWorksDocumentPlanes: lensWorksDocumentPlanes)
         return try migrateCompactFloatBackings(snapshot)
     }
     private func migrateCompactFloatBackings(_ snapshot:ProjectSnapshot)throws->ProjectSnapshot {
@@ -392,12 +417,12 @@ actor ProjectStore {
             manifest.layers[i].imageFile="\(layer.id.uuidString).plane"
             manifest.layers[i].planeArchiveReference=try LWFloatPlaneArchive.reference(plane)
         }
-        try validate(manifest)
+        try Self.validate(manifest)
         return ProjectSnapshot(manifest:manifest,images:snapshot.images,masks:snapshot.masks,workingVersion:snapshot.workingVersion,
-            lensWorksDocument: snapshot.lensWorksDocument, lensWorksDocumentAssets: snapshot.lensWorksDocumentAssets)
+            lensWorksDocument: snapshot.lensWorksDocument, lensWorksDocumentAssets: snapshot.lensWorksDocumentAssets, lensWorksDocumentPlanes: snapshot.lensWorksDocumentPlanes)
     }
 
-    private func validate(_ manifest: ProjectManifest) throws {
+    nonisolated static func validate(_ manifest: ProjectManifest) throws {
         guard manifest.format == "com.compositor.project" else { throw ProjectError.invalid }
         guard ProjectManifest.supported.contains(manifest.version) else { throw ProjectError.version(manifest.version) }
         guard manifest.colorSpace == "sRGB",manifest.workingVersionID == nil || manifest.version >= 12 else { throw ProjectError.invalid }
@@ -465,10 +490,10 @@ actor ProjectStore {
             } else { guard layer.planeArchiveReference == nil else { throw ProjectError.invalid } }
         }
         if let id = manifest.activeLayerID, !ids.contains(id) { throw ProjectError.invalid }
-        try validateGuides(manifest)
+        try Self.validateGuides(manifest)
     }
 
-    private func validateGuides(_ manifest: ProjectManifest) throws {
+    nonisolated private static func validateGuides(_ manifest: ProjectManifest) throws {
         let guides = manifest.guides ?? []
         if manifest.version < 8 {
             guard guides.isEmpty else { throw ProjectError.invalid }
@@ -483,7 +508,7 @@ actor ProjectStore {
         }
     }
 
-    private func checkSize(width: Int, height: Int, used: inout Int) throws {
+    nonisolated static func checkSize(width: Int, height: Int, used: inout Int) throws {
         guard (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height), width * height <= DocumentLimits.documentPixelBudget - used else {
             throw ProjectError.tooLarge
         }

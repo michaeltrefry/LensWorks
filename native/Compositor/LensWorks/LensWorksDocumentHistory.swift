@@ -24,15 +24,25 @@ nonisolated struct LensWorksSourceReference: Codable, Sendable, Equatable, Hasha
 /// Codable representation for transforms, groups, masks, adjustments, effects, text and live RAW sources.
 nonisolated struct LensWorksLayerGraph: Codable, Sendable, Equatable {
     var layers: [ProjectLayerRecord] = []
+    /// Document-level state belongs to the captured composition, not the canvas being replaced.
+    /// Nil reads older graphs, whose dimensions were not recorded.
+    var composition: ProjectManifest? = nil
+    /// Transitive source metadata/payloads and exact tiled sample archives.
+    var retainedAssetIDs: [String]? = nil
+    var planeReferences: [String: LWFloatPlaneArchive.Reference]? = nil
 
     var assetIDs: Set<String> {
         Set(layers.flatMap { [$0.imageFile, $0.maskFile, $0.liveSourceFile].compactMap { $0 } })
+            .union(retainedAssetIDs ?? []).union(planeReferences?.keys.map { $0 } ?? [])
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         // ProjectLayerRecord intentionally has no Equatable conformance because its runtime graph has
         // ownership-only state. Its persisted representation is the document contract.
-        (try? JSONEncoder().encode(lhs)) == (try? JSONEncoder().encode(rhs))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let left = try? encoder.encode(lhs), let right = try? encoder.encode(rhs) else { return false }
+        return left == right
     }
 }
 
@@ -45,7 +55,7 @@ nonisolated struct LensWorksVersionContent: Codable, Sendable, Equatable {
         /// Pixel data lives in a document asset; nil for adjustment-style layers.
         var assetID: String?
     }
-    /// Kept to read schema 1/2 documents. Schema 3 graph commands use typed `liveSource` records instead.
+    /// Kept to read legacy documents. Native graph commands retain typed live-source records instead.
     var rawSettings: [String: Double] = [:]
     /// Kept to read schema 1/2 documents. New documents store their complete graph in `layerGraph`.
     var layers: [Layer] = []
@@ -181,7 +191,8 @@ nonisolated struct LensWorksPruneReport: Sendable, Equatable {
 
 /// A catalog photo's versioned document. Versions never share mutable state: duplication copies values.
 nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
-    static let currentSchema = 2
+    static let currentSchema = 3
+    var selectedVersionID: UUID? = nil
     var schema = LensWorksPhotoDocument.currentSchema
     var photoID: String
     var versions: [LensWorksPhotoVersion] = []
@@ -199,12 +210,13 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
         guard (1...Self.currentSchema).contains(schema) else { throw LensWorksDocumentError.unsupportedSchema(schema) }
         photoID = try c.decode(String.self, forKey: .photoID)
         versions = try c.decode([LensWorksPhotoVersion].self, forKey: .versions)
+        selectedVersionID = try c.decodeIfPresent(UUID.self, forKey: .selectedVersionID)
         // Schema 1 predates the configurable limit.
         maxUndoSteps = max(1, try c.decodeIfPresent(Int.self, forKey: .maxUndoSteps) ?? 100)
         self.schema = Self.currentSchema
     }
 
-    private enum Keys: String, CodingKey { case schema, photoID, versions, maxUndoSteps }
+    private enum Keys: String, CodingKey { case schema, photoID, versions, maxUndoSteps, selectedVersionID }
 
     private func index(_ id: UUID) throws -> Int {
         guard let i = versions.firstIndex(where: { $0.id == id }) else { throw LensWorksDocumentError.unknownVersion }
@@ -308,42 +320,20 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
     var reachableAssets: Set<String> { versions.reduce(into: Set<String>()) { $0.formUnion($1.reachableAssets) } }
 }
 
-/// Persists a document and its assets in a package directory (`document.json`, `assets/<id>`).
-nonisolated struct LensWorksDocumentStore: Sendable {
-    let directory: URL
-    var documentURL: URL { directory.appendingPathComponent("document.json") }
-    var assetsURL: URL { directory.appendingPathComponent("assets", isDirectory: true) }
-
-    func save(_ document: LensWorksPhotoDocument) throws {
-        try FileManager.default.createDirectory(at: assetsURL, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(document).write(to: documentURL, options: .atomic)
-    }
-
-    func load() throws -> LensWorksPhotoDocument {
-        try JSONDecoder().decode(LensWorksPhotoDocument.self, from: Data(contentsOf: documentURL))
-    }
-
-    func writeAsset(_ id: String, data: Data) throws {
-        guard Self.isValidAssetID(id) else { throw ProjectError.invalid }
-        try FileManager.default.createDirectory(at: assetsURL, withIntermediateDirectories: true)
-        try data.write(to: assetsURL.appendingPathComponent(id), options: .atomic)
-    }
-
-    func storedAssets() -> Set<String> {
-        Set((try? FileManager.default.contentsOfDirectory(atPath: assetsURL.path)) ?? []).filter(Self.isValidAssetID)
+/// One inventory for ProjectStore's real atomic package writer and reader.
+nonisolated extension LensWorksPhotoDocument {
+    var reachablePlaneReferences: [String: LWFloatPlaneArchive.Reference] {
+        var result: [String: LWFloatPlaneArchive.Reference] = [:]
+        for version in versions {
+            let contents = [version.content] + (version.undo + version.redo).map(\.content) + version.checkpoints.map(\.content)
+            for content in contents {
+                for (name, reference) in content.layerGraph?.planeReferences ?? [:] { result[name] = reference }
+            }
+        }
+        return result
     }
 
     static func isValidAssetID(_ id: String) -> Bool {
         !id.isEmpty && id.utf8.count <= 255 && !id.contains("/") && !id.contains("\\") && !id.contains("\0") && id != "." && id != ".."
-    }
-
-    /// Deletes stored assets no version, step or checkpoint can reach; returns the removed IDs.
-    @discardableResult
-    func collectUnreachableAssets(for document: LensWorksPhotoDocument) throws -> Set<String> {
-        let doomed = storedAssets().subtracting(document.reachableAssets)
-        for id in doomed { try FileManager.default.removeItem(at: assetsURL.appendingPathComponent(id)) }
-        return doomed
     }
 }

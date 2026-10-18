@@ -2597,7 +2597,7 @@ final class LensWorksCatalog {
             let name = URL(fileURLWithPath: asset.originalPath).deletingPathExtension().lastPathComponent + " – Edit"
             let project = URL(fileURLWithPath: output).appendingPathComponent("\(name)-\(id.uuidString.prefix(8)).comp")
             tab.controller.workingVersion = LensWorksWorkingVersion(id: id, photoID: asset.photoID, catalogPath: catalogPath, originalPath: asset.originalPath, projectPath: project.path, name: name, originalNativePath: asset.nativeOriginal, originalVariantKey: asset.key)
-            tab.controller.initializeLensWorksDocument(photoID: asset.photoID, named: name,
+            try tab.controller.initializeLensWorksDocument(photoID: asset.photoID, named: name,
                 sourceReference: LensWorksSourceReference(photoID: asset.photoID))
             tab.session.projectURL = project
             let saved = await tab.controller.save()

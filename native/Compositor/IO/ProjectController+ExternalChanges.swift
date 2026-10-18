@@ -96,7 +96,8 @@ extension ProjectController {
         } else { workingVersion = snapshot.workingVersion }
         lensWorksDocument = snapshot.lensWorksDocument
         lensWorksDocumentAssets = snapshot.lensWorksDocumentAssets
-        selectedLensWorksVersionID = lensWorksDocument?.versions.first?.id
+        lensWorksDocumentPlanes = snapshot.lensWorksDocumentPlanes
+        selectedLensWorksVersionID = lensWorksDocument?.selectedVersionID ?? lensWorksDocument?.versions.first?.id
         lensWorksDocumentModified = false
         lensWorksHistoryWarning = nil
         // Remember the package as loaded, not as first seen: it may have changed again while a sheet was up.
