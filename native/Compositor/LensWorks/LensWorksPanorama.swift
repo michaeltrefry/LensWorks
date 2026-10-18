@@ -97,12 +97,13 @@ nonisolated enum LensWorksPanoramaStitcher {
         let mappedX = projected.map { ($0 - projectedLow) / projectedSpan * Double(worldWidth) }
         // Keep one unpainted projection column on each side. Auto Crop removes it; Fill Edges retains it and extends
         // the adjacent projected samples, which makes the chosen boundary policy explicit in the published rectangle.
-        let outputWidth = max(1, Int((mappedX.max()! - mappedX.min()!).rounded()) + 3)
+        let mappedMinimum = mappedX.min()!
+        let outputWidth = max(1, Int((mappedX.max()! - mappedMinimum).rounded()) + 3)
         guard outputWidth * worldHeight <= maximumPixels else { throw LensWorksCatalogError.message("The panorama exceeds the supported pixel limit.") }
         var sums = Array(repeating: (r: 0, g: 0, b: 0, count: 0), count: outputWidth * worldHeight)
         for (raster, position) in zip(rasters, positions) {
             for y in 0..<raster.height { for x in 0..<raster.width {
-                let worldX = position.x + x - minX, outputX = Int((mappedX[worldX] - mappedX.min()!).rounded()) + 1
+                let worldX = position.x + x - minX, outputX = Int((mappedX[worldX] - mappedMinimum).rounded()) + 1
                 let outputY = position.y + y - minY
                 guard (0..<outputWidth).contains(outputX), (0..<worldHeight).contains(outputY) else { continue }
                 let pixel = raster.pixel(x, y), index = outputY * outputWidth + outputX
@@ -151,9 +152,10 @@ nonisolated enum LensWorksPanoramaStitcher {
     private static func match(_ left: Raster, _ right: Raster) -> (dx: Int, dy: Int, error: Double) {
         var best = (dx: 0, dy: 0, error: Double.infinity)
         let minimumOverlap = max(16, left.width / 6), maximumVertical = min(32, left.height / 4)
+        let minimumVerticalOverlap = max(1, left.height / 2)
         for dx in 1...(left.width - minimumOverlap) { for dy in -maximumVertical...maximumVertical {
             let yStart = max(0, dy), yEnd = min(left.height, right.height + dy)
-            guard yEnd - yStart >= minimumOverlap else { continue }
+            guard yEnd - yStart >= minimumVerticalOverlap else { continue }
             var total = 0, count = 0
             for y in stride(from: yStart, to: yEnd, by: 2) { for x in stride(from: dx, to: left.width, by: 2) {
                 let a = left.pixel(x, y), b = right.pixel(x - dx, y - dy)

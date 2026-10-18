@@ -46,6 +46,39 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
+    @Test func mergeSelectionToPanoramaImportsLinkedEditableCatalogItem() async throws {
+        let width = 160, height = 120, step = 112
+        let fixture = try Fixture(images: 3) { number in
+            var rgba = [UInt8](repeating: 255, count: width * height * 4)
+            for y in 0..<height { for x in 0..<width {
+                let world = number * step + x, offset = (y * width + x) * 4
+                rgba[offset] = UInt8((world * 17 + y * 13 + (world * y) % 71) & 255)
+                rgba[offset + 1] = UInt8((world * 29 + y * 7 + (world * 3 + y * 11) % 89) & 255)
+                rgba[offset + 2] = UInt8((world * 5 + y * 31 + (world + y * 19) % 97) & 255)
+            } }
+            return try LensWorksPanoramaResult(width: width, height: height, rgba: Data(rgba), alignments: []).pngData()
+        }
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            let originals = model.assets.sorted { $0.sequence < $1.sequence }
+            #expect(originals.count == 3)
+            let output = fixture.root.appendingPathComponent("Versions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            model.selection = Set(originals.map(\.id))
+            let workspace = Self.isolatedWorkspace()
+            await model.mergeSelectionToPanorama(workspace: workspace, projection: .cylindrical, boundary: .autoCrop)
+            #expect(model.error == nil)
+            let version = try #require(workspace.current.controller.workingVersion)
+            #expect(version.sourceLinks?.map(\.photoID) == originals.map(\.photoID))
+            #expect(!originals.map(\.photoID).contains(version.photoID))
+            #expect(model.assets.count == 4)
+            #expect(workspace.current.session.document != nil)
+            let saved = try #require(try LensWorksWorkingVersion.read(from: URL(fileURLWithPath: version.projectPath)))
+            #expect(saved.sourceLinks == version.sourceLinks)
+        }
+    }
+
     #if DEBUG
     @Test(arguments: ["selection", "selectionABA", "page", "closed", "variant"])
     func actualResolvedOriginalRejectsDeferredPublicationIntoChangedAuthority(_ change: String) async throws {
@@ -2239,7 +2272,7 @@ struct LensWorksCatalogBrowserTests {
         private var comparisonPreviewTasks: [Task<Void, Never>] = []
         private var comparisonPreviewReplies: [Result<PreviewExperimentOutcome, any Error>?] = []
         private var comparisonAdmissionObservation: [String: Int] = [:]
-        init(images: Int, scanRows: UInt = 512, previewRequests: UInt? = nil) throws {
+        init(images: Int, scanRows: UInt = 512, previewRequests: UInt? = nil, flatImages: ((Int) throws -> Data)? = nil) throws {
             let physical = try #require(realpath(FileManager.default.temporaryDirectory.path, nil)); defer { free(physical) }
             root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWBrowser-\(UUID())")
             photos = root.appendingPathComponent("Photos"); catalog = root.appendingPathComponent("Catalog")
@@ -2247,9 +2280,9 @@ struct LensWorksCatalogBrowserTests {
             try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
             var originals: [URL: Data] = [:]
             for number in 0..<images {
-                let folder = number < 2 ? photos : (number % 2 == 0 ? photos.appendingPathComponent("Nested") : nested)
+                let folder = flatImages != nil || number < 2 ? photos : (number % 2 == 0 ? photos.appendingPathComponent("Nested") : nested)
                 let path = folder.appendingPathComponent(String(format: "Photo-%04d.png", number))
-                let data = try Self.png(red: UInt8(32 + number % 192))
+                let data = try flatImages?(number) ?? Self.png(red: UInt8(32 + number % 192))
                 try data.write(to: path); originals[path] = data
             }
             sources = originals

@@ -6,6 +6,7 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case automation = "Automation settings and confirmations are never available to agents."
     case appVisibility = "It hides or shows apps on the person’s screen and changes nothing in a document or the catalog."
     case opensWindow = "It only opens a window for the person (Keyboard Shortcuts or AI Models) and changes nothing."
+    case panoramaMerge = "It stitches the person’s multi-photo catalog selection into a new panorama through the person’s menu choice of projection and boundary; agents have no such selection or choice."
     case recentList = "It clears the person’s Open Recent list, which macOS keeps for them and nothing can restore."
     case canvasZoom = "It changes only the zoom of the person’s canvas view; render_preview renders the document at any size."
     case viewPreference = "It is a display or snapping preference for the person’s pointer on the canvas and changes nothing in the document."
@@ -112,7 +113,8 @@ extension LensWorksCommandID {
              .automationCopyConfiguration, .automationAllow, .automationDecline, .automationGrantFolder, .automationRevokeFolder:
             .notRunnable(.automation)
         case .hideApp, .hideOthers, .showAll: .notRunnable(.appVisibility)
-        case .keyboardShortcuts, .aiModels, .mergePanorama: .notRunnable(.opensWindow)
+        case .keyboardShortcuts, .aiModels: .notRunnable(.opensWindow)
+        case .mergePanorama: .notRunnable(.panoramaMerge)
         case .clearRecent: .notRunnable(.recentList)
         case .fitCanvas, .actualPixels, .zoomIn, .zoomOut: .notRunnable(.canvasZoom)
         case .pixelGrid, .smartSnap, .transformControls, .showGrid, .showGuides, .rulers, .snap, .snapToGuides, .snapToGrid,

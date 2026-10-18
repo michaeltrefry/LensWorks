@@ -496,10 +496,7 @@ nonisolated enum LensWorksCommandRegistry {
     private static let photoMenu: [LensWorksCommandDescriptor] = [
         .init(id: .mergePanorama, label: "Merge to Panorama", menu: "Photo/Merge to Panorama", titles: LensWorksPanoramaBoundary.allCases.flatMap { boundary in
             LensWorksPanoramaProjection.allCases.map { "\($0.rawValue.capitalized) – \(boundary == .autoCrop ? "Auto Crop" : "Fill Edges")" }
-        }, parameters: [
-            .init(name: "projection", type: .choice, description: "Projection used for the aligned panorama.", required: true, choices: LensWorksPanoramaProjection.allCases.map(\.rawValue)),
-            .init(name: "boundary", type: .choice, description: "Whether to crop transparent projection borders or fill them.", required: true, choices: LensWorksPanoramaBoundary.allCases.map(\.rawValue))
-        ])
+        })
     ]
 
     private static let automation: [LensWorksCommandDescriptor] = [
