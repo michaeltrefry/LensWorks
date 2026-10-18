@@ -5,14 +5,14 @@ import Testing
 @Suite struct LensWorksPanoramaTests {
     private let width = 160, height = 120, overlap = 48
 
-    private func frame(start: Int) -> LensWorksPanoramaStitcher.Raster {
+    private func frame(start: Int, verticalStart: Int = 0) -> LensWorksPanoramaStitcher.Raster {
         var rgba = [UInt8](repeating: 255, count: width * height * 4)
         for y in 0..<height { for x in 0..<width {
-            let world = start + x, offset = (y * width + x) * 4
+            let world = start + x, worldY = verticalStart + y, offset = (y * width + x) * 4
             // Non-periodic detail makes a false overlap observably worse than the declared shared world crop.
-            rgba[offset] = UInt8((world * 17 + y * 13 + (world * y) % 71) & 255)
-            rgba[offset + 1] = UInt8((world * 29 + y * 7 + (world * 3 + y * 11) % 89) & 255)
-            rgba[offset + 2] = UInt8((world * 5 + y * 31 + (world + y * 19) % 97) & 255)
+            rgba[offset] = UInt8((world * 17 + worldY * 13 + (world * worldY) % 71) & 255)
+            rgba[offset + 1] = UInt8((world * 29 + worldY * 7 + (world * 3 + worldY * 11) % 89) & 255)
+            rgba[offset + 2] = UInt8((world * 5 + worldY * 31 + (world + worldY * 19) % 97) & 255)
         } }
         return .init(width: width, height: height, rgba: rgba)
     }
@@ -28,20 +28,31 @@ import Testing
         #expect(stride(from: 3, to: result.rgba.count, by: 4).allSatisfy { result.rgba[$0] == 255 })
     }
 
+    @Test(arguments: LensWorksPanoramaProjection.allCases)
+    func alignsFramesCapturedRightToLeft(projection: LensWorksPanoramaProjection) throws {
+        let step = width - overlap
+        let result = try LensWorksPanoramaStitcher.stitch([frame(start: step * 2), frame(start: step), frame(start: 0)], projection: projection, boundary: .autoCrop)
+        #expect(result.alignments.allSatisfy { $0.horizontalOffset == -step && $0.verticalOffset == 0 })
+        #expect(result.alignments.allSatisfy { $0.meanSeamError <= LensWorksPanoramaStitcher.declaredSeamErrorTolerance })
+    }
+
     @Test(arguments: LensWorksPanoramaBoundary.allCases)
     func boundaryHandlingLeavesAnOpaqueRectangle(boundary: LensWorksPanoramaBoundary) throws {
         let step = width - overlap
         let result = try LensWorksPanoramaStitcher.stitch([frame(start: 0), frame(start: step), frame(start: step * 2)], projection: .cylindrical, boundary: boundary)
         #expect(result.width > 0 && result.height > 0)
-        // Auto-crop removes transparent boundary columns before the final edge repair; fill keeps its full projection bounds.
+        // Auto-crop returns a fully covered rectangle; fill keeps its full projection bounds and repairs edges.
         #expect(stride(from: 3, to: result.rgba.count, by: 4).allSatisfy { result.rgba[$0] == 255 })
     }
 
-    @Test func fillEdgesRetainsProjectionBoundsThatAutoCropRemoves() throws {
-        let step = width - overlap, frames = [frame(start: 0), frame(start: step), frame(start: step * 2)]
+    @Test func autoCropRemovesPartialBoundaryRowsInsteadOfFillingThem() throws {
+        let step = width - overlap, verticalOffset = 8
+        let frames = [frame(start: 0), frame(start: step, verticalStart: verticalOffset), frame(start: step * 2, verticalStart: verticalOffset)]
         let cropped = try LensWorksPanoramaStitcher.stitch(frames, projection: .spherical, boundary: .autoCrop)
         let filled = try LensWorksPanoramaStitcher.stitch(frames, projection: .spherical, boundary: .fillEdges)
-        #expect(filled.width > cropped.width)
+        #expect(cropped.height < filled.height)
+        #expect(cropped.height == height - verticalOffset)
+        #expect(filled.height == height + verticalOffset)
         #expect(stride(from: 3, to: cropped.rgba.count, by: 4).allSatisfy { cropped.rgba[$0] == 255 })
         #expect(stride(from: 3, to: filled.rgba.count, by: 4).allSatisfy { filled.rgba[$0] == 255 })
     }
