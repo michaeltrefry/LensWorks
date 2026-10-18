@@ -138,7 +138,7 @@ struct LensWorksAgentCommandTests {
             .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .sortBy, .sortDirection,
             .addToVirtualFolder, .removeFromVirtualFolder, .renameVirtualFolder, .moveVirtualFolder, .deleteVirtualFolder,
             .openProject, .openRecent, .importImages, .save, .saveAs, .exportPNG, .exportJPEG, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .undo, .redo,
-            .locateFolder, .openInEditor
+            .locateFolder, .openInEditor, .mergePanorama
         ]
         #expect(mustRun.filter { !$0.agentAccess.isRunnable }.isEmpty)
         // A command that enters document or catalog history is never left out.
@@ -1014,6 +1014,49 @@ struct LensWorksAgentCommandTests {
             #expect(ok(reopened) && model.catalogPath == original, "\(text(reopened))")
             let absentCatalog = await fixture.invoke("file.catalog.open", ["path": catalog.root.appendingPathComponent("Nowhere").path])
             #expect(absentCatalog["isError"] as? Bool == true && text(absentCatalog) == "There is no catalog folder at that path." && model.catalogPath == original)
+        }
+    }
+
+    @Test func panoramaCommandValidatesEnumsAndAdmitsEverySourceAndOutputBeforeMerging() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try LensWorksCatalogBrowserTests.Fixture(images: 3) { try LensWorksCatalogBrowserTests.panoramaPNG($0) }
+        try await catalog.run { model in
+            try await catalog.importPhotos(model)
+            let workspace = ProjectWorkspace()
+            workspace.configureController = { $0.recordsRecentProjects = false; $0.sharesWorkingVersions = false }
+            let tools = LensWorksAgentTools(session: { workspace.current.session }, catalog: { model }, folders: fixture.harness.automation.folders)
+            tools.projects = { workspace.current.controller }; tools.workspace = { workspace }
+            let sources = model.assets
+            for (index, asset) in sources.enumerated() { await model.select(asset, extending: index > 0) }
+            let output = fixture.granted.appendingPathComponent("PanoramaVersions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            func invoke(_ projection: String, _ boundary: String) async -> [String: Any] {
+                await tools.call("invoke_command", arguments: ["command": "photo.mergePanorama", "arguments": ["projection": projection, "boundary": boundary]])
+            }
+            for args in [("unknown", "autoCrop"), ("perspective", "unknown")] {
+                let result = await invoke(args.0, args.1)
+                #expect(result["isError"] as? Bool == true)
+            }
+            let outside = await invoke("perspective", "autoCrop")
+            #expect(outside["isError"] as? Bool == true && text(outside).contains("outside every folder granted to automation"))
+            #expect(workspace.current.session.document == nil && model.assets.count == 3)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty)
+            try fixture.harness.automation.folders.grant(catalog.photos)
+            let media = output.appendingPathComponent("Panoramas")
+            try FileManager.default.createSymbolicLink(at: media, withDestinationURL: fixture.outside)
+            let redirected = await invoke("perspective", "autoCrop")
+            #expect(redirected["isError"] as? Bool == true && text(redirected).contains("symbolic link"))
+            #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.outside.path).isEmpty)
+            #expect(workspace.current.session.document == nil)
+            try FileManager.default.removeItem(at: media)
+            let result = await invoke("perspective", "autoCrop")
+            #expect(ok(result), "\(text(result))")
+            #expect(workspace.current.session.activeLayer?.liveSource != nil)
+            #expect(workspace.current.controller.workingVersion?.sourceLinks?.map(\.photoID) == sources.map(\.photoID))
+            #expect(model.assets.count == 4)
+            #expect(LensWorksCommandID.mergePanorama.agentAccess.kind == .standalone)
+            #expect(LensWorksCommandID.mergePanorama.reversal == .additive)
         }
     }
 

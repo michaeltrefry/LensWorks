@@ -143,6 +143,7 @@ struct CompositorApp: App {
                     }
                     CommandMenu("Photo") {
                         let catalog = applicationDelegate.catalog
+                        LensWorksCommandButton(.cancelPanorama, reason: catalog.isMergingPanorama ? nil : "No panorama merge is running.") { catalog.cancelPanorama() }
                         Menu("Merge to Panorama") {
                             ForEach(LensWorksPanoramaBoundary.allCases, id: \.self) { boundary in
                                 let boundaryTitle = boundary == .autoCrop ? "Auto Crop" : "Fill Edges"

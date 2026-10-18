@@ -46,18 +46,20 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
-    @Test func mergeSelectionToPanoramaImportsLinkedEditableCatalogItem() async throws {
+    static func panoramaPNG(_ number: Int) throws -> Data {
         let width = 160, height = 120, step = 112
-        let fixture = try Fixture(images: 3) { number in
-            var rgba = [UInt8](repeating: 255, count: width * height * 4)
-            for y in 0..<height { for x in 0..<width {
-                let world = number * step + x, offset = (y * width + x) * 4
-                rgba[offset] = UInt8((world * 17 + y * 13 + (world * y) % 71) & 255)
-                rgba[offset + 1] = UInt8((world * 29 + y * 7 + (world * 3 + y * 11) % 89) & 255)
-                rgba[offset + 2] = UInt8((world * 5 + y * 31 + (world + y * 19) % 97) & 255)
-            } }
-            return try LensWorksPanoramaResult(width: width, height: height, rgba: Data(rgba), alignments: []).pngData()
-        }
+        var rgba = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0..<height { for x in 0..<width {
+            let world = number * step + x, offset = (y * width + x) * 4
+            rgba[offset] = UInt8((world * 17 + y * 13 + (world * y) % 71) & 255)
+            rgba[offset + 1] = UInt8((world * 29 + y * 7 + (world * 3 + y * 11) % 89) & 255)
+            rgba[offset + 2] = UInt8((world * 5 + y * 31 + (world + y * 19) % 97) & 255)
+        } }
+        return try LensWorksPanoramaResult(width: width, height: height, rgba: Data(rgba), alignments: []).pngData()
+    }
+
+    @Test func mergeSelectionToPanoramaImportsLinkedEditableCatalogItem() async throws {
+        let fixture = try Fixture(images: 3) { try Self.panoramaPNG($0) }
         try await fixture.run { model in
             try await fixture.importPhotos(model)
             let originals = model.assets.sorted { $0.sequence < $1.sequence }
@@ -65,7 +67,7 @@ struct LensWorksCatalogBrowserTests {
             let output = fixture.root.appendingPathComponent("Versions")
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
             await model.setOutput(output.path)
-            model.selection = Set(originals.map(\.id))
+            for (index, asset) in originals.enumerated() { await model.select(asset, extending: index > 0) }
             let workspace = Self.isolatedWorkspace()
             await model.mergeSelectionToPanorama(workspace: workspace, projection: .cylindrical, boundary: .autoCrop)
             #expect(model.error == nil)
@@ -76,8 +78,83 @@ struct LensWorksCatalogBrowserTests {
             #expect(workspace.current.session.document != nil)
             let saved = try #require(try LensWorksWorkingVersion.read(from: URL(fileURLWithPath: version.projectPath)))
             #expect(saved.sourceLinks == version.sourceLinks)
+            #expect(URL(fileURLWithPath: version.originalPath).pathExtension == "dng")
+            let session = workspace.current.session
+            let sourceLayer = try #require(session.activeLayer)
+            let source = try #require(sourceLayer.liveSource, "The generated catalog original opens as a live RAW source, not a PNG layer")
+            #expect(sourceLayer.asset?.linearPlane != nil && source.rawHint)
+            session.beginFilter(.cameraRaw)
+            let edit = try #require(session.filterEdit)
+            #expect(edit.liveSource?.id == source.id)
+            var settings = edit.settings; settings.cameraRaw.exposure = 0.5
+            session.updateFilter(settings, preview: false)
+            await session.commitFilter()
+            #expect(session.brushError == nil && session.filterEdit == nil)
+            #expect(session.activeLayer?.liveSource?.settings.exposure == 0.5)
+            session.addBlankLayer()
+            #expect(session.document?.layers.count == 2)
+            #expect(await workspace.current.controller.save())
+            let reopened = try await ProjectStore.shared.load(from: URL(fileURLWithPath: version.projectPath))
+            #expect(reopened.manifest.layers.count == 2)
+            let restored = try #require(reopened.manifest.layers.first(where: { $0.liveSource?.id == source.id }))
+            #expect(restored.liveSource?.settings.exposure == 0.5 && reopened.images[restored.id]?.linearPlane != nil)
+            let linked = try #require(try LensWorksWorkingVersion.read(from: URL(fileURLWithPath: version.projectPath)))
+            #expect(linked.sourceLinks == saved.sourceLinks)
         }
     }
+
+    @Test func panoramaIncludesIndexedSourcesFromEverySelectedPage() async throws {
+        let fixture = try Fixture(images: 3, scanRows: 2) { try Self.panoramaPNG($0) }
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            var selected: [String] = []
+            repeat {
+                for asset in model.assets { await model.select(asset, extending: !selected.isEmpty); selected.append(asset.photoID) }
+            } while await model.nextPage()
+            #expect(selected.count == 3 && model.selectionCount == 3 && model.assets.count < 3)
+            let output = fixture.root.appendingPathComponent("Versions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            let workspace = Self.isolatedWorkspace()
+            await model.mergeSelectionToPanorama(workspace: workspace, projection: .perspective, boundary: .autoCrop)
+            #expect(model.error == nil)
+            let version = try #require(workspace.current.controller.workingVersion)
+            #expect(version.sourceLinks?.map(\.photoID) == selected)
+            #expect(workspace.current.session.activeLayer?.liveSource != nil)
+        }
+    }
+
+    #if DEBUG
+    @Test(arguments: [LensWorksCatalogContinuationPoint.panoramaAdmission, .panoramaDocumentReady, .panoramaSaved])
+    func cancellationRetiresWholePanoramaWithoutChangingTheOpenDocument(_ point: LensWorksCatalogContinuationPoint) async throws {
+        let fixture = try Fixture(images: 3) { try Self.panoramaPNG($0) }
+        try await fixture.run { model in
+            try await fixture.importPhotos(model)
+            let output = fixture.root.appendingPathComponent("Versions")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+            await model.setOutput(output.path)
+            let sources = model.assets
+            for (index, asset) in sources.enumerated() { await model.select(asset, extending: index > 0) }
+            let originalSelection = model.selection, workspace = Self.isolatedWorkspace(), selectedTab = workspace.selectedID
+            let gate = ContinuationGate()
+            model.continuationFixture = { if $0 == point { await gate.hold() } }
+            let merge = Task { await model.mergeSelectionToPanorama(workspace: workspace, projection: .perspective, boundary: .autoCrop) }
+            let watchdog = Task { do { try await Task.sleep(for: .seconds(30)); await gate.release() } catch { } }
+            defer { watchdog.cancel(); model.continuationFixture = nil; merge.cancel(); Task { await gate.release() } }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+            while !(await gate.entered) {
+                guard ContinuousClock.now < deadline else { throw LensWorksCatalogError.message("Panorama did not reach its cancellation checkpoint.") }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(model.isMergingPanorama && model.isBusy)
+            model.cancelPanorama()
+            await gate.release(); await merge.value
+            #expect(!model.isMergingPanorama && !model.isBusy && model.error == nil)
+            #expect(workspace.tabs.count == 1 && workspace.selectedID == selectedTab && workspace.current.session.document == nil)
+            #expect(model.selection == originalSelection && model.showingCatalog)
+        }
+    }
+    #endif
 
     #if DEBUG
     @Test(arguments: ["selection", "selectionABA", "page", "closed", "variant"])

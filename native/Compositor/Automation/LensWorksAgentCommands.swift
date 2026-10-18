@@ -612,6 +612,9 @@ struct LensWorksAgentProjectCommands {
             if catalog.isBusy || catalog.isImporting || catalog.relink.isRunning { return "Finish the current catalog operation first." }
             do { try catalog.admitCatalogWork() } catch { return error.localizedDescription }
             return nil
+        case .mergePanorama:
+            guard let catalog = context.catalog, let workspace = context.workspace else { return "There is no catalog project window." }
+            return catalog.panoramaAvailability(workspace: workspace)
         case .openInEditor:
             guard let catalog = context.catalog, catalog.catalogPath != nil else { return "Open a catalog first." }
             guard let workspace = context.workspace else { return "There is no project window to open the photo in." }
@@ -833,6 +836,43 @@ struct LensWorksAgentProjectCommands {
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else { throw refuse("There is no folder at that path.") }
             try await context.folders.withAccess(to: url) { try await catalog.startImport(url.path) }
             return "The folder is being added to the catalog; get_state shows the catalog when it is no longer busy."
+        case .mergePanorama:
+            guard let catalog = context.catalog, let workspace = context.workspace else { throw refuse("There is no catalog project window.") }
+            let projectionName = try arguments.required("projection", try arguments.string("projection"))
+            let boundaryName = try arguments.required("boundary", try arguments.string("boundary"))
+            guard let projection = LensWorksPanoramaProjection(rawValue: projectionName),
+                  let boundary = LensWorksPanoramaBoundary(rawValue: boundaryName) else { throw refuse("Choose a registered panorama projection and boundary policy.") }
+            let scope = catalog.captureScope(), epoch = catalog.catalogSelectionEpoch
+            let selected = try await catalog.panoramaSources()
+            guard let output = catalog.outputDirectory else { throw refuse("Choose a working-versions folder first.") }
+            let outputURL = try folders.admit(output)
+            var originals: [URL] = []
+            for asset in selected {
+                let resolved = try await catalog.service.resolve(asset)
+                originals.append(try folders.admit(try resolved.originalURL.path))
+            }
+            guard catalog.scopeIsCurrent(scope), catalog.catalogSelectionEpoch == epoch,
+                  catalog.outputDirectory == output else {
+                throw refuse("The catalog selection or output folder changed during folder admission.")
+            }
+            let prior = catalog.error, files = originals + [outputURL]
+            catalog.error = nil
+            defer { catalog.error = prior }
+            func runWithAccess(_ index: Int) async throws {
+                if index == files.count {
+                    await catalog.mergeSelectionToPanorama(workspace: workspace, projection: projection, boundary: boundary,
+                        admitted: (originals.map(\.path), outputURL.path))
+                } else {
+                    try await folders.withAccess(to: files[index]) { try await runWithAccess(index + 1) }
+                }
+            }
+            try await runWithAccess(0)
+            if let error = catalog.error { throw refuse(error) }
+            try Task.checkCancellation()
+            guard workspace.current.controller.workingVersion?.sourceLinks?.map(\.photoID) == selected.map(\.photoID) else {
+                throw refuse("The panorama operation was cancelled or its catalog authority changed.")
+            }
+            return "The panorama is a new linked catalog original, open for live RAW development and layered editing."
         case .openInEditor:
             guard let catalog = context.catalog, let workspace = context.workspace else { throw refuse("There is no project window to open the photo in.") }
             let photo = try arguments.required("photo", try arguments.string("photo"))

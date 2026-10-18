@@ -89,7 +89,7 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     /// Choosing photos in the catalog grid: the selection every organize command acts on.
     case selectPhotos = "catalog.photo.select"
     // Photo.
-    case mergePanorama = "photo.mergePanorama"
+    case mergePanorama = "photo.mergePanorama", cancelPanorama = "photo.cancelPanorama"
     // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
     case automationEnabled = "automation.enabled", automationShowSecret = "automation.secret.show"
     case automationCopySecret = "automation.secret.copy", automationRegenerateSecret = "automation.secret.regenerate"
@@ -494,9 +494,11 @@ nonisolated enum LensWorksCommandRegistry {
     ]
 
     private static let photoMenu: [LensWorksCommandDescriptor] = [
+        .init(id: .cancelPanorama, label: "Cancel Panorama Merge", menu: "Photo"),
         .init(id: .mergePanorama, label: "Merge to Panorama", menu: "Photo/Merge to Panorama", titles: LensWorksPanoramaBoundary.allCases.flatMap { boundary in
             LensWorksPanoramaProjection.allCases.map { "\($0.rawValue.capitalized) – \(boundary == .autoCrop ? "Auto Crop" : "Fill Edges")" }
-        })
+        }, parameters: choice("projection", LensWorksPanoramaProjection.allCases.map(\.rawValue), required: true, "The panorama projection.")
+            + choice("boundary", LensWorksPanoramaBoundary.allCases.map(\.rawValue), required: true, "Crop to covered pixels or fill the projected rectangle."))
     ]
 
     private static let automation: [LensWorksCommandDescriptor] = [

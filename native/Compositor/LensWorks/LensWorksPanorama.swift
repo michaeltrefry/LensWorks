@@ -65,10 +65,7 @@ nonisolated enum LensWorksPanoramaStitcher {
     static let declaredSeamErrorTolerance = 3.0
     private static let maximumPixels = 100_000_000
 
-    static func stitch(_ urls: [URL], projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary) throws -> LensWorksPanoramaResult {
-        try stitch(try urls.map(Raster.init(url:)), projection: projection, boundary: boundary)
-    }
-
+    /// Small RGBA8 mathematical reference. Production media uses LensWorksPanoramaLinear.
     static func stitch(_ rasters: [Raster], projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary) throws -> LensWorksPanoramaResult {
         guard rasters.count >= 2 else { throw LensWorksCatalogError.message("Select at least two overlapping photos to merge to a panorama.") }
         guard let first = rasters.first, rasters.allSatisfy({ $0.width == first.width && $0.height == first.height }) else {
@@ -77,137 +74,267 @@ nonisolated enum LensWorksPanoramaStitcher {
         guard first.width >= 17, first.height >= 16 else {
             throw LensWorksCatalogError.message("Panorama frames must be at least 17 × 16 pixels for feature matching.")
         }
-        var positions = [(x: 0, y: 0)]
-        var alignments: [LensWorksPanoramaAlignment] = []
-        for index in 1..<rasters.count {
-            let match = match(rasters[index - 1], rasters[index])
-            guard match.error <= declaredSeamErrorTolerance else {
-                throw LensWorksCatalogError.message("The selected photos do not have a reliable overlapping seam (mean error \(String(format: "%.2f", match.error)); tolerance \(declaredSeamErrorTolerance)).")
-            }
-            let previous = positions[index - 1]
-            positions.append((previous.x + match.dx, previous.y + match.dy))
-            alignments.append(.init(horizontalOffset: match.dx, verticalOffset: match.dy, meanSeamError: match.error))
-        }
-        let minX = positions.map(\.x).min()!, maxX = zip(positions, rasters).map { $0.0.x + $0.1.width }.max()!
-        let minY = positions.map(\.y).min()!, maxY = zip(positions, rasters).map { $0.0.y + $0.1.height }.max()!
-        let worldWidth = maxX - minX, worldHeight = maxY - minY
-        // Projected coordinates are normalised, so rescale them to span the world's pixel width.
-        let projected = (0...worldWidth).map { project(Double($0) / Double(max(1, worldWidth)), projection: projection) }
-        let projectedLow = projected.first!, projectedSpan = max(1e-9, projected.last! - projectedLow)
-        let mappedX = projected.map { ($0 - projectedLow) / projectedSpan * Double(worldWidth) }
-        // Keep one unpainted projection column on each side. Auto Crop removes it; Fill Edges retains it and extends
-        // the adjacent projected samples, which makes the chosen boundary policy explicit in the published rectangle.
-        let mappedMinimum = mappedX.min()!
-        let outputWidth = max(1, Int((mappedX.max()! - mappedMinimum).rounded()) + 3)
-        guard outputWidth * worldHeight <= maximumPixels else { throw LensWorksCatalogError.message("The panorama exceeds the supported pixel limit.") }
-        var sums = Array(repeating: (r: 0, g: 0, b: 0, count: 0), count: outputWidth * worldHeight)
-        for (raster, position) in zip(rasters, positions) {
-            for y in 0..<raster.height { for x in 0..<raster.width {
-                let worldX = position.x + x - minX
-                let outputX = Int((mappedX[worldX] - mappedMinimum).rounded()) + 1
-                let nextOutputX = Int((mappedX[worldX + 1] - mappedMinimum).rounded()) + 1
-                let outputY = position.y + y - minY
-                guard (0..<worldHeight).contains(outputY) else { continue }
-                let pixel = raster.pixel(x, y)
-                for projectedX in min(outputX, nextOutputX)...max(outputX, nextOutputX) where (0..<outputWidth).contains(projectedX) {
-                    let index = outputY * outputWidth + projectedX
-                    sums[index].r += Int(pixel.0); sums[index].g += Int(pixel.1); sums[index].b += Int(pixel.2); sums[index].count += 1
-                }
-            } }
-        }
-        let bounds = boundary == .autoCrop ? largestCoveredRectangle(sums, width: outputWidth, height: worldHeight) : (left: 0, right: outputWidth - 1, top: 0, bottom: worldHeight - 1)
-        let width = bounds.right - bounds.left + 1, height = bounds.bottom - bounds.top + 1
-        var rgba = Data(count: width * height * 4)
-        rgba.withUnsafeMutableBytes { destination in
+        let geometry = try Geometry(rasters: rasters, projection: projection, boundary: boundary)
+        var rgba = Data(count: geometry.width * geometry.height * 4)
+        try rgba.withUnsafeMutableBytes { destination in
             let bytes = destination.bindMemory(to: UInt8.self)
-            for y in 0..<height { for x in 0..<width {
-                let point = sums[(bounds.top + y) * outputWidth + bounds.left + x]
-                let sample = point.count > 0 ? point : boundary == .fillEdges ? nearestSample(sums, width: outputWidth, height: worldHeight, x: bounds.left + x, y: bounds.top + y) : point
-                let offset = (y * width + x) * 4
-                bytes[offset] = UInt8(sample.r / max(1, sample.count)); bytes[offset + 1] = UInt8(sample.g / max(1, sample.count))
-                bytes[offset + 2] = UInt8(sample.b / max(1, sample.count)); bytes[offset + 3] = sample.count > 0 ? 255 : 0
-            } }
-        }
-        return .init(width: width, height: height, rgba: rgba, alignments: alignments)
-    }
-
-    private static func project(_ x: Double, projection: LensWorksPanoramaProjection) -> Double {
-        switch projection {
-        case .perspective: x
-        case .cylindrical: atan((x - 0.5) * 1.15) / atan(0.575) * 0.5 + 0.5
-        case .spherical: asin(max(-1, min(1, (x - 0.5) * 1.0))) / .pi + 0.5
-        }
-    }
-
-    private static func nearestSample(_ samples: [(r: Int, g: Int, b: Int, count: Int)], width: Int, height: Int, x: Int, y: Int) -> (r: Int, g: Int, b: Int, count: Int) {
-        for radius in 1...max(width, height) {
-            for candidateX in [x - radius, x + radius] where (0..<width).contains(candidateX) {
-                let sample = samples[y * width + candidateX]; if sample.count > 0 { return sample }
-            }
-        }
-        return (0, 0, 0, 1)
-    }
-
-    private static func largestCoveredRectangle(_ samples: [(r: Int, g: Int, b: Int, count: Int)], width: Int, height: Int) -> (left: Int, right: Int, top: Int, bottom: Int) {
-        var heights = Array(repeating: 0, count: width)
-        var best = (area: 0, left: 0, right: 0, top: 0, bottom: 0)
-        for y in 0..<height {
-            for x in 0..<width { heights[x] = samples[y * width + x].count > 0 ? heights[x] + 1 : 0 }
-            var stack: [Int] = []
-            for x in 0...width {
-                let current = x == width ? 0 : heights[x]
-                while let bar = stack.last, heights[bar] > current {
-                    stack.removeLast()
-                    let left = (stack.last.map { $0 + 1 }) ?? 0, rectangleWidth = x - left
-                    let area = heights[bar] * rectangleWidth
-                    if area > best.area {
-                        best = (area, left, x - 1, y - heights[bar] + 1, y)
+            for y in 0..<geometry.height {
+                try Task.checkCancellation()
+                for x in 0..<geometry.width {
+                    let sample = try geometry.sample(x: x, y: y) { index, sx, sy in
+                        let raster = rasters[index], left = Int(floor(sx)), right = min(raster.width - 1, left + 1)
+                        let top = Int(floor(sy)), bottom = min(raster.height - 1, top + 1)
+                        let tx = Float(sx - Double(left)), ty = Float(sy - Double(top))
+                        func pixel(_ x: Int, _ y: Int) -> SIMD4<Float> {
+                            let p = raster.pixel(x, y); return SIMD4(Float(p.0), Float(p.1), Float(p.2), 255)
+                        }
+                        return (pixel(left, top) * (1 - tx) + pixel(right, top) * tx) * (1 - ty)
+                            + (pixel(left, bottom) * (1 - tx) + pixel(right, bottom) * tx) * ty
                     }
+                    let offset = (y * geometry.width + x) * 4
+                    for channel in 0..<4 { bytes[offset + channel] = UInt8(clamping: Int(sample[channel].rounded())) }
                 }
-                stack.append(x)
             }
         }
-        return (best.left, best.right, best.top, best.bottom)
+        return .init(width: geometry.width, height: geometry.height, rgba: rgba, alignments: geometry.alignments)
     }
 
-    private static func match(_ left: Raster, _ right: Raster) -> (dx: Int, dy: Int, error: Double) {
-        var best = (dx: 0, dy: 0, error: Double.infinity)
-        let minimumOverlap = max(16, left.width / 6), maximumVertical = min(32, left.height / 4)
-        let minimumVerticalOverlap = max(1, left.height / 2)
-        for dx in -(right.width - minimumOverlap)...(left.width - minimumOverlap) { for dy in -maximumVertical...maximumVertical {
-            let xStart = max(0, dx), xEnd = min(left.width, right.width + dx)
-            let yStart = max(0, dy), yEnd = min(left.height, right.height + dy)
-            guard xEnd - xStart >= minimumOverlap, yEnd - yStart >= minimumVerticalOverlap else { continue }
-            var total = 0, count = 0
-            for y in stride(from: yStart, to: yEnd, by: 2) { for x in stride(from: xStart, to: xEnd, by: 2) {
-                let a = left.pixel(x, y), b = right.pixel(x - dx, y - dy)
-                total += abs(Int(a.0) - Int(b.0)) + abs(Int(a.1) - Int(b.1)) + abs(Int(a.2) - Int(b.2)); count += 3
-            } }
-            let error = Double(total) / Double(max(1, count))
-            if error < best.error { best = (dx, dy, error) }
-        } }
-        return best
+    /// Inverse mapping samples each output pixel once. Pixel centres map to pixel centres; an
+    /// identity transform is bit-exact, including the first/last column and non-overlap regions.
+    struct Geometry {
+        let frameWidth: Int, frameHeight: Int
+        let positions: [(x: Int, y: Int)]
+        let worldX: [Double]
+        let minY: Int
+        let yScale: [Double]
+        let focalLength: Double
+        let projectedHeight: Int
+        let worldHeight: Int
+        let projection: LensWorksPanoramaProjection
+        let boundary: LensWorksPanoramaBoundary
+        let bounds: (left: Int, right: Int, top: Int, bottom: Int)
+        let alignments: [LensWorksPanoramaAlignment]
+        var width: Int { bounds.right - bounds.left + 1 }
+        var height: Int { bounds.bottom - bounds.top + 1 }
+        @_optimize(speed) init(rasters: [Raster], projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary,
+             fullWidth: Int? = nil, fullHeight: Int? = nil, matchingScale: Int = 1, knownAlignments: [LensWorksPanoramaAlignment]? = nil) throws {
+            guard let first = rasters.first, rasters.count >= 2,
+                  rasters.allSatisfy({ $0.width == first.width && $0.height == first.height }) else { throw ProjectError.invalid }
+            let frameWidth = fullWidth ?? first.width, frameHeight = fullHeight ?? first.height
+            self.frameWidth = frameWidth; self.frameHeight = frameHeight
+            var placed = [(x: 0, y: 0)], aligned: [LensWorksPanoramaAlignment] = []
+            for index in 1..<rasters.count {
+                let match: (dx: Int, dy: Int, error: Double, comparisons: Int)
+                if let knownAlignments {
+                    let a = knownAlignments[index - 1]; match = (a.horizontalOffset, a.verticalOffset, a.meanSeamError, 0)
+                } else { match = try LensWorksPanoramaStitcher.match(rasters[index - 1], rasters[index]) }
+                guard match.error <= declaredSeamErrorTolerance else {
+                    throw LensWorksCatalogError.message("The selected photos do not have a reliable overlapping seam (mean error \(String(format: "%.2f", match.error)); tolerance \(declaredSeamErrorTolerance)).")
+                }
+                let dx = match.dx * matchingScale, dy = match.dy * matchingScale, previous = placed[index - 1]
+                placed.append((previous.x + dx, previous.y + dy))
+                aligned.append(.init(horizontalOffset: dx, verticalOffset: dy, meanSeamError: match.error))
+            }
+            positions = placed; alignments = aligned
+            let minX = placed.map(\.x).min()!, maxX = placed.map { $0.x + frameWidth }.max()!
+            let minY = placed.map(\.y).min()!
+            self.minY = minY
+            let worldWidth = maxX - minX, worldHeight = placed.map { $0.y + frameHeight }.max()! - minY
+            self.worldHeight = worldHeight; self.projection = projection; self.boundary = boundary
+            let focalLength = Double(worldWidth) / 1.15
+            self.focalLength = focalLength
+            let projectedHeight = projection == .spherical ? max(1, Int(ceil(2 * focalLength * atan(Double(worldHeight) / (2 * focalLength))))) : worldHeight
+            self.projectedHeight = projectedHeight
+            guard worldWidth > 0, worldHeight > 0, worldWidth <= DocumentLimits.maxSide,
+                  worldHeight <= DocumentLimits.maxSide, worldWidth <= maximumPixels / worldHeight else {
+                throw LensWorksCatalogError.message("The panorama exceeds the supported pixel limit.")
+            }
+            let horizontalAngle = atan(Double(worldWidth) / (2 * focalLength))
+            let worldX = (0..<worldWidth).map { x in
+                if projection == .perspective { return Double(x + minX) }
+                let angle = ((Double(x) + 0.5) / Double(worldWidth) * 2 - 1) * horizontalAngle
+                return focalLength * tan(angle) + Double(worldWidth) / 2 - 0.5 + Double(minX)
+            }
+            let yScale = worldX.map { wx in
+                let centered = wx - Double(minX) + 0.5 - Double(worldWidth) / 2
+                return sqrt(1 + centered * centered / (focalLength * focalLength))
+            }
+            self.worldX = worldX; self.yScale = yScale
+            if boundary == .autoCrop {
+                bounds = try Self.largestCoveredRectangle(width: worldWidth, height: projectedHeight) { x, y in
+                    let py = Double(y) + 0.5 - Double(projectedHeight) / 2
+                    let wy = (projection == .perspective ? py : projection == .cylindrical ? py * yScale[x]
+                        : focalLength * tan(py / focalLength) * yScale[x]) + Double(worldHeight) / 2 - 0.5 + Double(minY)
+                    return placed.contains { worldX[x] >= Double($0.x) - 0.5 && worldX[x] < Double($0.x + frameWidth) - 0.5
+                        && wy >= Double($0.y) - 0.5 && wy < Double($0.y + frameHeight) - 0.5 }
+                }
+            } else { bounds = (0, worldWidth - 1, 0, projectedHeight - 1) }
+        }
+        func sourcePoint(x: Int, y: Int) -> (x: Double, y: Double) {
+            let column = x + bounds.left
+            let py = Double(y + bounds.top) + 0.5 - Double(projectedHeight) / 2
+            let wy = (projection == .perspective ? py : projection == .cylindrical ? py * yScale[column]
+                : focalLength * tan(py / focalLength) * yScale[column]) + Double(worldHeight) / 2 - 0.5 + Double(minY)
+            return (worldX[column], wy)
+        }
+        /// Exact source footprint of an output tile, including bilinear neighbours and edge fill.
+        /// Y is monotone in output y; evaluating both row endpoints at every column covers its
+        /// curved extrema without allocating a full-resolution coordinate or sample buffer.
+        func sourceRange(for range: LWFloatRange, frame: Int) -> LWFloatRange {
+            let position = positions[frame]
+            var minX = frameWidth - 1, maxX = 0, minY = frameHeight - 1, maxY = 0
+            for x in range.x..<(range.x + range.width) {
+                for y in [range.y, range.y + range.height - 1] {
+                    let point = sourcePoint(x: x, y: y)
+                    let sx = max(0, min(Double(frameWidth - 1), point.x - Double(position.x)))
+                    let sy = max(0, min(Double(frameHeight - 1), point.y - Double(position.y)))
+                    minX = min(minX, Int(floor(sx))); maxX = max(maxX, Int(ceil(sx)))
+                    minY = min(minY, Int(floor(sy))); maxY = max(maxY, Int(ceil(sy)))
+                }
+            }
+            return .init(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+        }
+        @_optimize(speed) func sample(x: Int, y: Int, read: (Int, Double, Double) throws -> SIMD4<Float>) throws -> SIMD4<Float> {
+            let point = sourcePoint(x: x, y: y), wx = point.x, wy = point.y
+            var sum = SIMD4<Float>.zero, count: Float = 0
+            var nearest: (index: Int, x: Double, y: Double, distance: Double)?
+            for (index, position) in positions.enumerated() {
+                let sx = wx - Double(position.x), sy = wy - Double(position.y)
+                let cx = max(0, min(Double(frameWidth - 1), sx)), cy = max(0, min(Double(frameHeight - 1), sy))
+                let distance = abs(cx - sx) + abs(cy - sy)
+                if nearest == nil || distance < nearest!.distance { nearest = (index, cx, cy, distance) }
+                if sx >= -0.5, sx < Double(frameWidth) - 0.5, sy >= -0.5, sy < Double(frameHeight) - 0.5 {
+                    sum += try read(index, cx, cy); count += 1
+                }
+            }
+            if count > 0 { return sum / count }
+            guard boundary == .fillEdges else { return .zero }
+            guard let nearest else { throw ProjectError.invalid }
+            return try read(nearest.index, nearest.x, nearest.y)
+        }
+        @_optimize(speed) private static func largestCoveredRectangle(width: Int, height: Int, covered: (Int, Int) -> Bool) throws -> (left: Int, right: Int, top: Int, bottom: Int) {
+            var heights = Array(repeating: 0, count: width)
+            var best = (area: 0, left: 0, right: 0, top: 0, bottom: 0)
+            for y in 0..<height {
+                try Task.checkCancellation()
+                for x in 0..<width { heights[x] = covered(x, y) ? heights[x] + 1 : 0 }
+                var stack: [Int] = []
+                for x in 0...width {
+                    let current = x == width ? 0 : heights[x]
+                    while let bar = stack.last, heights[bar] > current {
+                        stack.removeLast()
+                        let left = stack.last.map { $0 + 1 } ?? 0, area = heights[bar] * (x - left)
+                        if area > best.area { best = (area, left, x - 1, y - heights[bar] + 1, y) }
+                    }
+                    if x < width { stack.append(x) }
+                }
+            }
+            guard best.area > 0 else { throw ProjectError.invalid }
+            return (best.left, best.right, best.top, best.bottom)
+        }
     }
+
+    /// A coarse-to-fine translation beam. Coarse search is at most 96 pixels on the long
+    /// edge, thirty-two candidates survive each level, and each score reads at most 2048 samples.
+    /// Full-resolution work is linear to make the pyramid, never quadratic in photo width.
+    @_optimize(speed) static func match(_ left: Raster, _ right: Raster, maximumVertical: Int? = nil, minimumOverlap overrideOverlap: Int? = nil) throws -> (dx: Int, dy: Int, error: Double, comparisons: Int) {
+        var pyramid = [(left, right)], scale = 1
+        while max(pyramid.last!.0.width, pyramid.last!.0.height) > 96 {
+            try Task.checkCancellation()
+            pyramid.append((try pyramid.last!.0.reduced(), try pyramid.last!.1.reduced())); scale *= 2
+        }
+        var beam: [(dx: Int, dy: Int, error: Double)] = [], comparisons = 0
+        for level in pyramid.indices.reversed() {
+            let (a, b) = pyramid[level]
+            let minimumOverlap = min(a.width, max(1, (overrideOverlap ?? max(16, left.width / 6)) / scale))
+            let maxDX = a.width - minimumOverlap, maxDY = max(1, Int(ceil(Double(min(maximumVertical ?? 32, left.height / 4)) / Double(scale))))
+            var candidates = Set<Offset>()
+            if beam.isEmpty {
+                for dx in -maxDX...maxDX { for dy in -maxDY...maxDY { candidates.insert(.init(x: dx, y: dy)) } }
+            } else {
+                for item in beam { for x in -2...2 { for y in -2...2 {
+                    let dx = item.dx * 2 + x, dy = item.dy * 2 + y
+                    if abs(dx) <= maxDX, abs(dy) <= maxDY { candidates.insert(.init(x: dx, y: dy)) }
+                } } }
+            }
+            var scored: [(dx: Int, dy: Int, error: Double)] = []
+            for candidate in candidates {
+                try Task.checkCancellation()
+                let dx = candidate.x, dy = candidate.y
+                let xStart = max(0, dx), xEnd = min(a.width, b.width + dx)
+                let yStart = max(0, dy), yEnd = min(a.height, b.height + dy)
+                guard xStart < xEnd, yEnd - yStart >= max(1, a.height / 2) else { continue }
+                let sx = max(1, Int(ceil(Double(xEnd - xStart) / 64))), sy = max(1, Int(ceil(Double(yEnd - yStart) / 32)))
+                var total = 0, count = 0
+                for y in stride(from: yStart, to: yEnd, by: sy) { for x in stride(from: xStart, to: xEnd, by: sx) {
+                    let p = a.pixel(x, y), q = b.pixel(x - dx, y - dy)
+                    total += abs(Int(p.0) - Int(q.0)) + abs(Int(p.1) - Int(q.1)) + abs(Int(p.2) - Int(q.2)); count += 3; comparisons += 1
+                } }
+                scored.append((dx, dy, Double(total) / Double(count)))
+            }
+            scored.sort { a, b in
+                if a.error != b.error { return a.error < b.error }
+                if abs(a.dx) + abs(a.dy) != abs(b.dx) + abs(b.dy) { return abs(a.dx) + abs(a.dy) < abs(b.dx) + abs(b.dy) }
+                return a.dx == b.dx ? a.dy < b.dy : a.dx < b.dx
+            }
+            beam = Array(scored.prefix(32)); scale = max(1, scale / 2)
+        }
+        guard let best = beam.first else { throw ProjectError.invalid }
+        return (best.dx, best.dy, best.error, comparisons)
+    }
+    private struct Offset: Hashable { let x: Int, y: Int }
 
     struct Raster: Sendable {
         let width: Int, height: Int, rgba: [UInt8]
-        init(url: URL) throws {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-                throw LensWorksCatalogError.message("\(url.lastPathComponent) could not be decoded for panorama matching.")
+        let lease: LWFloatWorkingSet.Lease?
+        let sourceScale: Int
+        private let workingSet: LWFloatWorkingSet?
+        init(width: Int, height: Int, rgba: [UInt8], lease: LWFloatWorkingSet.Lease? = nil, sourceScale: Int = 1, workingSet: LWFloatWorkingSet? = nil) { self.width = width; self.height = height; self.rgba = rgba; self.lease = lease; self.sourceScale = sourceScale; self.workingSet = workingSet }
+        @_optimize(speed) init(plane: LWFloatPlane) throws {
+            var scale = 1
+            while (max(plane.width, plane.height) + scale - 1) / scale > 1536 { scale *= 2 }
+            let width = (plane.width + scale - 1) / scale, height = (plane.height + scale - 1) / scale
+            sourceScale = scale; self.width = width; self.height = height; workingSet = plane.workingSet
+            lease = try plane.workingSet.reserve(width * height * 4)
+            rgba = try plane.workingSet.withScratch(bytes: width * height * 32) {
+                var sums = [SIMD4<Double>](repeating: .zero, count: width * height)
+                for entry in plane.manifest.entries {
+                    try Task.checkCancellation()
+                    let tile = try plane.read(entry.range)
+                    for y in 0..<entry.range.height { for x in 0..<entry.range.width {
+                        let pixel = tile.surface.pixels[y * entry.range.width + x]
+                        guard pixel.w == 1 else { throw LensWorksCatalogError.message("Panorama source photos must be opaque.") }
+                        let index = ((y + entry.range.y) / scale) * width + (x + entry.range.x) / scale
+                        sums[index] += SIMD4(Double(pixel.x), Double(pixel.y), Double(pixel.z), 1)
+                    } }
+                }
+                var bytes = [UInt8](repeating: 255, count: width * height * 4)
+                for index in sums.indices { for channel in 0..<3 {
+                    bytes[index * 4 + channel] = Self.descriptor(Float(sums[index][channel] / sums[index].w))
+                } }
+                return bytes
             }
-            try self.init(image: image)
         }
-        init(image: CGImage) throws {
-            width = image.width; height = image.height
-            guard width > 0, height > 0, width * height <= LensWorksPanoramaStitcher.maximumPixels else { throw LensWorksCatalogError.message("A panorama frame exceeds the supported pixel limit.") }
-            var bytes = [UInt8](repeating: 0, count: width * height * 4)
-            guard let context = CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-                throw LensWorksCatalogError.message("A panorama frame could not be converted to RGB.")
+        static func descriptor(_ value: Float) -> UInt8 {
+            guard value > 0 else { return 0 }
+            if value >= 1 { return 255 }
+            let linear = Double(value), encoded = linear <= 0.0031308 ? linear * 12.92 : 1.055 * pow(linear, 1 / 2.4) - 0.055
+            return UInt8(clamping: Int((min(1, encoded) * 255).rounded()))
+        }
+        @_optimize(speed) func reduced() throws -> Raster {
+            let w = max(1, width / 2), h = max(1, height / 2)
+            let charge = try workingSet?.reserve(w * h * 4)
+            var bytes = [UInt8](repeating: 255, count: w * h * 4)
+            for y in 0..<h {
+                try Task.checkCancellation()
+                for x in 0..<w { for c in 0..<3 {
+                    var total = 0
+                    for yy in 0..<2 { for xx in 0..<2 { total += Int(rgba[(min(height - 1, y * 2 + yy) * width + min(width - 1, x * 2 + xx)) * 4 + c]) } }
+                    bytes[(y * w + x) * 4 + c] = UInt8(total / 4)
+                } }
             }
-            context.interpolationQuality = .none; context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height)); rgba = bytes
+            return .init(width: w, height: h, rgba: bytes, lease: charge, workingSet: workingSet)
         }
-        init(width: Int, height: Int, rgba: [UInt8]) { self.width = width; self.height = height; self.rgba = rgba }
         func pixel(_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) { let offset = (y * width + x) * 4; return (rgba[offset], rgba[offset + 1], rgba[offset + 2]) }
     }
 }

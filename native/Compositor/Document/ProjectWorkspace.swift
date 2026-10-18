@@ -51,6 +51,15 @@ final class ProjectWorkspace {
         tabs.append(tab); selectedID = tab.id
         return tab
     }
+    /// Admit a completely prepared generated document without exposing an unfinished import tab.
+    /// The caller checks its catalog/cancellation authority immediately before this synchronous step.
+    func adoptPreparedTab(_ tab: ProjectTab) {
+        tab.controller.workspace = self; tab.controller.window = window
+        tab.controller.agentRequest = agentRequest
+        if tabs.count == 1, current.session.document == nil { tabs = [tab] }
+        else { tabs.append(tab) }
+        selectedID = tab.id
+    }
     /// Reorders a tab by dragging it in the strip. Chrome, not a document edit, so it never touches undo.
     /// `index` is where the tab should land in the final order, clamped to the array's bounds.
     func moveTab(_ id: UUID, to index: Int) {
