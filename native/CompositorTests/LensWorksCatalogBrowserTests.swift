@@ -256,6 +256,7 @@ struct LensWorksCatalogBrowserTests {
             #expect(model.assets.map(\.id) == [beach.id])
 
             // Semantic indexing consumes the retained thumbnail, not the now-unavailable original.
+            _ = try await model.thumbnail(beach)
             let original = URL(fileURLWithPath: beach.originalPath)
             let offline = fixture.root.appendingPathComponent("offline-original.png")
             try FileManager.default.moveItem(at: original, to: offline)
