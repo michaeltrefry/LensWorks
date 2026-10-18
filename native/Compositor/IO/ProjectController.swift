@@ -10,7 +10,7 @@ final class ProjectController {
     weak var window: NSWindow?
     weak var workspace: ProjectWorkspace?
     var workingVersion: LensWorksWorkingVersion? { didSet { if workingVersion?.id != relinkedOriginal?.version { relinkedOriginal = nil } } }
-    /// Package-persisted LensWorks versions, checkpoints and bounded history. Canvas undo remains session-only.
+    /// Package-persisted LensWorks versions, checkpoints and the ordinary editor Undo/Redo timeline.
     var lensWorksDocument: LensWorksPhotoDocument?
     var lensWorksDocumentAssets: [String: Data] = [:]
     var lensWorksDocumentPlanes: [String: LWFloatPlane] = [:]
@@ -21,6 +21,8 @@ final class ProjectController {
     /// A durable capture may safely replace this exact canvas revision; later
     /// session edits must be saved/captured before Undo, Redo or checkpoint restore.
     private var capturedLensWorksCanvasRevision: UUID?
+    private var capturedLensWorksCanvasDocument: CanvasDocument?
+    private var representedCanvasStepIDs: Set<UUID> = []
 
     /// Protected history is never discarded merely to honor a limit; this is surfaced by the editor controls instead.
     var lensWorksHistoryWarning: String?
@@ -61,7 +63,9 @@ final class ProjectController {
         document.versions[index].content = content
         lensWorksDocument = document
         selectedLensWorksVersionID = versionID
+        session.history.applyLimits(entryLimit: document.maxUndoSteps, protected: [], current: session.document)
         capturedLensWorksCanvasRevision = session.history.currentRevision
+        capturedLensWorksCanvasDocument = session.document
         lensWorksDocumentModified = true
     }
 
@@ -76,11 +80,17 @@ final class ProjectController {
         lensWorksDocument = document
         lensWorksDocumentAssets = assets; lensWorksDocumentPlanes = planes
         selectedLensWorksVersionID = versionID
+        session.history.reset()
+        session.history.applyLimits(entryLimit: document.maxUndoSteps, protected: [], current: session.document)
+        representedCanvasStepIDs = []
         capturedLensWorksCanvasRevision = session.history.currentRevision
+        capturedLensWorksCanvasDocument = session.document
         lensWorksDocumentModified = true
     }
 
     func duplicateLensWorksVersion(_ id: UUID, named name: String) throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        if selectedLensWorksVersionID == id { try captureLensWorksComposition(in: id) }
         guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
         // Duplicate the chosen record, but do not replace a different canvas or lose
         // uncaptured edits merely by changing the selection as a side effect.
@@ -90,6 +100,11 @@ final class ProjectController {
         if selectedLensWorksVersionID == id {
             selectedLensWorksVersionID = copy
             lensWorksDocument?.selectedVersionID = copy
+            session.history.reset()
+            session.history.applyLimits(entryLimit: document.maxUndoSteps, protected: [], current: session.document)
+            representedCanvasStepIDs = []
+            capturedLensWorksCanvasRevision = session.history.currentRevision
+            capturedLensWorksCanvasDocument = session.document
         }
     }
 
@@ -141,12 +156,18 @@ final class ProjectController {
             retainedAssetIDs: projection.assets.keys.sorted(), planeReferences: references)
     }
 
+    private final class CanvasHistoryDecodeCache {
+        var images: [String: ImportedImage] = [:]
+        var masks: [String: ImportedImage] = [:]
+        let sources = LWSourcePackageArchive.HydrationCache()
+    }
+
     /// Puts a version's stored layer graph on the canvas, decoding its retained assets back into layers.
-    private func installLensWorksContent(_ content: LensWorksVersionContent) throws {
-        guard session.canStartProjectOperation, session.canEditLayers, session.opacityEditLayerID == nil else {
-            throw LensWorksCommandRefusal(reason: "Finish the current canvas edit before switching or restoring versions. Your edits and Undo history have been kept.")
-        }
-        guard let graph = content.layerGraph, let base = session.projectSnapshot() else { return }
+    private func decodedLensWorksContent(_ content: LensWorksVersionContent, package: ProjectSnapshot? = nil, cache suppliedCache: CanvasHistoryDecodeCache? = nil) throws -> ProjectSnapshot {
+        let cache = suppliedCache ?? CanvasHistoryDecodeCache()
+        let retainedAssets = package?.lensWorksDocumentAssets ?? lensWorksDocumentAssets
+        let retainedPlanes = package?.lensWorksDocumentPlanes ?? lensWorksDocumentPlanes
+        guard let graph = content.layerGraph, let base = package ?? session.projectSnapshot() else { throw ProjectError.invalid }
         var captured = graph.composition ?? base.manifest
         if graph.composition == nil, let active = captured.activeLayerID,
            !graph.layers.contains(where: { $0.id == active }) {
@@ -159,13 +180,13 @@ final class ProjectController {
         }
         captured.layers = graph.layers
         captured = try LWSourcePackageArchive.hydrate(captured, read: { id, maximum in
-            guard let bytes = self.lensWorksDocumentAssets[id], bytes.count <= maximum else { throw ProjectError.missingImage }
+            guard let bytes = retainedAssets[id], bytes.count <= maximum else { throw ProjectError.missingImage }
             return bytes
         }, readPlane: { id, reference in
-            guard let plane = self.lensWorksDocumentPlanes[id],
+            guard let plane = retainedPlanes[id],
                   try LWFloatPlaneArchive.reference(plane) == reference else { throw ProjectError.missingImage }
             return plane
-        })
+        }, cache: cache.sources)
         var records = captured.layers
         var images: [UUID: ImportedImage] = [:], masks: [UUID: ImportedImage] = [:]
         var pixels = 0, maskPixels = 0
@@ -174,20 +195,29 @@ final class ProjectController {
             else { try ProjectStore.checkSize(width: width, height: height, used: &pixels) }
         }
         func decode(_ id: String, name: String, isMask: Bool) throws -> ImportedImage {
+            if let asset = (isMask ? cache.masks : cache.images)[id] {
+                try admit(width: asset.image.width, height: asset.image.height, isMask: isMask)
+                return asset
+            }
+            let asset = try decodeUncached(id, name: name, isMask: isMask)
+            if isMask { cache.masks[id] = asset } else { cache.images[id] = asset }
+            return asset
+        }
+        func decodeUncached(_ id: String, name: String, isMask: Bool) throws -> ImportedImage {
             if let reference = graph.planeReferences?[id] {
-                guard let plane = lensWorksDocumentPlanes[id],
+                guard let plane = retainedPlanes[id],
                       try LWFloatPlaneArchive.reference(plane) == reference else { throw ProjectError.missingImage }
                 try admit(width: plane.width, height: plane.height, isMask: isMask)
                 return try isMask ? ImportedImage(maskPlane: plane, name: name) : ImportedImage(plane: plane, name: name)
             }
             if id.hasSuffix(".f32") {
-                guard !isMask, let bytes = lensWorksDocumentAssets[id] else { throw ProjectError.missingImage }
+                guard !isMask, let bytes = retainedAssets[id] else { throw ProjectError.missingImage }
                 let extent = try LWLinearSurface.packageExtent(bytes, maximumFileBytes: 512 * 1024 * 1024)
                 try admit(width: extent.width, height: extent.height, isMask: false)
                 let linear = try LWLinearSurface.package(bytes, maximumFileBytes: 512 * 1024 * 1024)
                 return try ImportedImage(linear: linear, name: name)
             }
-            guard let bytes = lensWorksDocumentAssets[id],
+            guard let bytes = retainedAssets[id],
                   let source = CGImageSourceCreateWithData(bytes as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
                   CGImageSourceGetType(source) as String? == UTType.png.identifier,
                   CGImageSourceGetCount(source) == 1,
@@ -216,9 +246,108 @@ final class ProjectController {
         }
         captured.layers = records
         try ProjectStore.validate(captured)
+        return ProjectSnapshot(manifest: captured, images: images, masks: masks)
+    }
+
+    private func isCanvasStep(_ step: LensWorksHistoryStep) -> Bool {
+        guard step.content.layerGraph != nil,
+              step.oppositeContent == nil || step.oppositeContent?.layerGraph != nil else { return false }
+        switch step.command {
+        case .replaceLayerGraph, .replaceLiveSource, nil: return true
+        default: return false // Legacy scalar metadata has separate version-control Undo ownership.
+        }
+    }
+
+    /// Decode every retained state before touching the live canvas. Corrupt history
+    /// must fail the whole replacement, not partially install a version.
+    private func decodedCanvasHistory(_ version: LensWorksPhotoVersion, package: ProjectSnapshot? = nil) throws -> (past: [DocumentHistory.Entry], future: [DocumentHistory.Entry], revision: UUID, snapshot: ProjectSnapshot) {
+        let ids = (version.undo + version.redo).map(\.id)
+        guard Set(ids).count == ids.count else { throw ProjectError.invalid }
+        let cache = CanvasHistoryDecodeCache()
+        let present = try decodedLensWorksContent(version.content, package: package, cache: cache)
+        var current = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(present),
+            activeLayerID: present.manifest.activeLayerID, revision: version.canvasRevision ?? UUID())
+        let revision = current.revision
+        var past: [DocumentHistory.Entry] = [], future: [DocumentHistory.Entry] = []
+        for step in version.undo.reversed() {
+            guard isCanvasStep(step) else { break } // Legacy scalar history stays on the version controls.
+            let decoded = try decodedLensWorksContent(step.content, package: package, cache: cache)
+            let before = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(decoded), activeLayerID: decoded.manifest.activeLayerID, revision: step.canvasBeforeRevision ?? UUID())
+            let after: DocumentHistory.Snapshot
+            if let opposite = step.oppositeContent {
+                let decoded = try decodedLensWorksContent(opposite, package: package, cache: cache)
+                let canvas = EditorSession.canvasDocument(decoded)
+                after = DocumentHistory.Snapshot(document: canvas, activeLayerID: decoded.manifest.activeLayerID,
+                    revision: step.canvasAfterRevision ?? (canvas == current.document ? current.revision : UUID()))
+            } else { after = current }
+            past.append(DocumentHistory.Entry(id: step.id, name: step.name, origin: step.attributedToAgent ? .agent : .user, before: before, after: after))
+            current = before
+        }
+        past.reverse()
+        current = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(present),
+            activeLayerID: present.manifest.activeLayerID, revision: revision)
+        for step in version.redo.reversed() {
+            guard isCanvasStep(step) else { break }
+            let decoded = try decodedLensWorksContent(step.content, package: package, cache: cache)
+            let after = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(decoded), activeLayerID: decoded.manifest.activeLayerID, revision: step.canvasAfterRevision ?? UUID())
+            let before: DocumentHistory.Snapshot
+            if let opposite = step.oppositeContent {
+                let decoded = try decodedLensWorksContent(opposite, package: package, cache: cache)
+                let canvas = EditorSession.canvasDocument(decoded)
+                before = DocumentHistory.Snapshot(document: canvas, activeLayerID: decoded.manifest.activeLayerID,
+                    revision: step.canvasBeforeRevision ?? (canvas == current.document ? current.revision : UUID()))
+            } else { before = current }
+            future.append(DocumentHistory.Entry(id: step.id, name: step.name, origin: step.attributedToAgent ? .agent : .user, before: before, after: after))
+            current = after
+        }
+        future.reverse()
+        return (past, future, revision, present)
+    }
+
+    private func installLensWorksVersion(_ version: LensWorksPhotoVersion, limit: Int) throws {
+        guard session.canStartProjectOperation, session.canEditLayers, session.opacityEditLayerID == nil else {
+            throw LensWorksCommandRefusal(reason: "Finish the current canvas edit before switching or restoring versions. Your edits and Undo history have been kept.")
+        }
+        guard version.content.layerGraph != nil else {
+            // A legacy metadata operation is its own Undo owner. End the native
+            // suffix at that boundary; its older steps remain in version history
+            // in their original order, not moved before/after later metadata.
+            session.history.reset()
+            session.history.applyLimits(entryLimit: limit, protected: [], current: session.document)
+            representedCanvasStepIDs = []
+            capturedLensWorksCanvasRevision = session.history.currentRevision
+            capturedLensWorksCanvasDocument = session.document
+            return
+        }
+        let history = try decodedCanvasHistory(version)
         let url = session.projectURL
-        session.installProject(ProjectSnapshot(manifest: captured, images: images, masks: masks), from: url ?? URL(fileURLWithPath: "/"))
+        session.installProject(history.snapshot, from: url ?? URL(fileURLWithPath: "/"))
         session.projectURL = url
+        session.history.install(past: history.past, future: history.future, currentRevision: history.revision,
+            limit: limit, protected: Set(version.checkpoints.compactMap(\.pinnedStepID)))
+        representedCanvasStepIDs = Set((history.past + history.future).map(\.id))
+        capturedLensWorksCanvasRevision = session.history.currentRevision
+        capturedLensWorksCanvasDocument = session.document
+    }
+
+    /// Prepared off to the side, then installed along with a successfully loaded package.
+    func prepareLensWorksCanvasHistory(_ snapshot: ProjectSnapshot) throws -> (() -> Void) {
+        guard let document = snapshot.lensWorksDocument,
+              let version = document.versions.first(where: { $0.id == (document.selectedVersionID ?? document.versions.first?.id) }),
+              version.content.layerGraph != nil else { return { [self] in
+                  representedCanvasStepIDs = []
+                  capturedLensWorksCanvasRevision = session.history.currentRevision
+                  capturedLensWorksCanvasDocument = session.document
+                  session.history.applyLimits(entryLimit: snapshot.lensWorksDocument?.maxUndoSteps ?? 100, protected: [], current: session.document)
+              } }
+        let history = try decodedCanvasHistory(version, package: snapshot)
+        return { [self] in
+            session.history.install(past: history.past, future: history.future, currentRevision: history.revision,
+                limit: document.maxUndoSteps, protected: Set(version.checkpoints.compactMap(\.pinnedStepID)))
+            representedCanvasStepIDs = Set((history.past + history.future).map(\.id))
+            capturedLensWorksCanvasRevision = session.history.currentRevision
+            capturedLensWorksCanvasDocument = session.document
+        }
     }
 
     /// Selects a version and shows its stored composition on the canvas.
@@ -229,7 +358,8 @@ final class ProjectController {
         guard !session.isModified else {
             throw LensWorksCommandRefusal(reason: "Save your canvas edits before switching versions. Your edits and Undo history have been kept.")
         }
-        try installLensWorksContent(version.content)
+        if let departing = selectedLensWorksVersionID { try captureLensWorksComposition(in: departing) }
+        try installLensWorksVersion(version, limit: lensWorksDocument?.maxUndoSteps ?? 100)
         selectedLensWorksVersionID = id
         lensWorksDocument?.selectedVersionID = id
         lensWorksDocumentModified = true
@@ -240,31 +370,105 @@ final class ProjectController {
         guard !session.isModified || capturedLensWorksCanvasRevision == session.history.currentRevision else {
             throw LensWorksCommandRefusal(reason: "Save or capture your canvas edits before restoring version history. Your edits and Undo history have been kept.")
         }
-        if let content = document.versions.first(where: { $0.id == id })?.content { try installLensWorksContent(content) }
+        if let version = document.versions.first(where: { $0.id == id }) { try installLensWorksVersion(version, limit: document.maxUndoSteps) }
         lensWorksDocument = document
         selectedLensWorksVersionID = id
         lensWorksDocument?.selectedVersionID = id
         capturedLensWorksCanvasRevision = session.history.currentRevision
+        capturedLensWorksCanvasDocument = session.document
         pruneRetainedLensWorksAssets()
         lensWorksDocumentModified = true
     }
 
-    /// Records the current native layer/RAW graph as a durable, independently undoable version edit.
+    /// Serializes the central editor transaction log, not a tool-specific subset.
+    /// Both stacks keep their identities, labels, origin and exact compositions.
+    /// All encoding completes in local values before any controller state changes.
     func captureLensWorksComposition(in id: UUID) throws {
-        guard var document = lensWorksDocument, let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        guard selectedLensWorksVersionID == id, var document = lensWorksDocument,
+              let index = document.versions.firstIndex(where: { $0.id == id }),
+              let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        let history = try session.history.entries()
         var assets = lensWorksDocumentAssets, planes = lensWorksDocumentPlanes
-        let graph = try retainedGraph(snapshot, assets: &assets, planes: &planes)
-        guard document.versions.first(where: { $0.id == id })?.content.layerGraph != graph else {
-            capturedLensWorksCanvasRevision = session.history.currentRevision
-            return
+        let previous = document.versions[index]
+        let allSteps = previous.undo + previous.redo
+        guard Set(allSteps.map(\.id)).count == allSteps.count else { throw ProjectError.invalid }
+        let oldSteps = Dictionary(uniqueKeysWithValues: allSteps.map { ($0.id, $0) })
+        struct SnapshotKey: Hashable { let revision: UUID; let selection: UUID? }
+        var graphs: [SnapshotKey: LensWorksLayerGraph] = [:]
+        func graph(_ state: DocumentHistory.Snapshot) throws -> LensWorksLayerGraph {
+            let key = SnapshotKey(revision: state.revision, selection: state.activeLayerID)
+            if let cached = graphs[key] { return cached }
+            guard let snapshot = session.projectSnapshot(document: state.document, selection: state.activeLayerID) else { throw ProjectError.invalid }
+            let value = try retainedGraph(snapshot, assets: &assets, planes: &planes)
+            graphs[key] = value
+            return value
         }
-        record(try document.perform(.replaceLayerGraph(graph), on: id))
-        lensWorksDocumentAssets = assets
-        lensWorksDocumentPlanes = planes
+        func step(_ entry: DocumentHistory.Entry, redo: Bool) throws -> LensWorksHistoryStep {
+            let value = try graph(redo ? entry.after : entry.before)
+            var content = oldSteps[entry.id]?.content ?? previous.content
+            content.layerGraph = value
+            var opposite = oldSteps[entry.id]?.oppositeContent ?? previous.content
+            opposite.layerGraph = try graph(redo ? entry.before : entry.after)
+            let command: LensWorksDocumentCommand?
+            if let original = oldSteps[entry.id] { command = original.command }
+            else { command = .replaceLayerGraph(try graph(entry.after)) }
+            return LensWorksHistoryStep(id: entry.id, name: entry.name, command: command, content: content,
+                oppositeContent: opposite, canvasBeforeRevision: entry.before.revision, canvasAfterRevision: entry.after.revision,
+                attributedToAgent: entry.origin == .agent)
+        }
+        // Initial import/create entries may start with no document; they are not
+        // edits of this photo. Every completed edit of its document is retained.
+        let past = history.past.filter { $0.before.document?.id == snapshot.manifest.documentID && $0.after.document?.id == snapshot.manifest.documentID }
+        let future = history.future.filter { $0.before.document?.id == snapshot.manifest.documentID && $0.after.document?.id == snapshot.manifest.documentID }
+        let canvasIDs = Set((past + future).map(\.id))
+        let pinned = Set(previous.checkpoints.compactMap(\.pinnedStepID))
+        // Scalar-only legacy commands and protected steps trimmed from the native
+        // in-memory byte budget remain independently available in the version UI.
+        let prefix = previous.undo.filter { !canvasIDs.contains($0.id) && (!representedCanvasStepIDs.contains($0.id) || pinned.contains($0.id)) }
+        document.versions[index].undo = prefix + (try past.map { try step($0, redo: false) })
+        let legacyRedo = previous.redo.filter { !representedCanvasStepIDs.contains($0.id) && !canvasIDs.contains($0.id) }
+        document.versions[index].redo = legacyRedo + (try future.map { try step($0, redo: true) })
+        let current = try retainedGraph(snapshot, assets: &assets, planes: &planes)
+        var capturedReplacement: (LensWorksHistoryStep, ProjectSnapshot)?
+        // Explicit captures also handle programmatic document replacements that
+        // have no editor transaction. Normal edits already have one entry each.
+        let recordedCurrent = [past.last?.after, future.last?.before].compactMap { $0 }.contains {
+            $0.revision == session.history.currentRevision && $0.document == session.document
+        }
+        // Loading may migrate compact floats to bounded planes without an edit.
+        // Do not turn that backing-only normalization into an extra Undo step.
+        let visibleChanged = capturedLensWorksCanvasDocument != session.document
+        if previous.content.layerGraph != nil && current != previous.content.layerGraph && !recordedCurrent && visibleChanged {
+            let before = try decodedLensWorksContent(previous.content)
+            let command = LensWorksDocumentCommand.replaceLayerGraph(current)
+            let beforeContent = previous.content
+            var afterContent = previous.content; afterContent.layerGraph = current
+            let step = LensWorksHistoryStep(name: command.label, command: command, content: beforeContent, oppositeContent: afterContent,
+                canvasBeforeRevision: previous.canvasRevision ?? session.history.currentRevision, canvasAfterRevision: UUID())
+            document.versions[index].undo.append(step)
+            document.versions[index].redo = []
+            document.versions[index].content.layerGraph = current
+            capturedReplacement = (step, before)
+        } else { document.versions[index].content.layerGraph = current }
+        document.versions[index].canvasRevision = capturedReplacement?.0.canvasAfterRevision ?? session.history.currentRevision
+        let report = document.setMaxUndoSteps(document.maxUndoSteps)
+        let changed = document != lensWorksDocument
+        lensWorksDocumentAssets = assets; lensWorksDocumentPlanes = planes
         lensWorksDocument = document
+        if let (step, before) = capturedReplacement, let beforeRevision = step.canvasBeforeRevision, let afterRevision = step.canvasAfterRevision {
+            session.history.appendCaptured(id: step.id, name: step.name, before: EditorSession.canvasDocument(before),
+                selection: before.manifest.activeLayerID, after: session.document, afterSelection: session.activeLayerID,
+                beforeRevision: beforeRevision, afterRevision: afterRevision)
+            representedCanvasStepIDs.insert(step.id)
+        }
         capturedLensWorksCanvasRevision = session.history.currentRevision
+        capturedLensWorksCanvasDocument = session.document
+        representedCanvasStepIDs.formUnion(canvasIDs)
+        session.history.entryLimit = document.maxUndoSteps
+        session.history.protectedEntryIDs = pinned
+        record(report)
         pruneRetainedLensWorksAssets()
-        lensWorksDocumentModified = true
+        if changed { lensWorksDocumentModified = true }
     }
 
     func undoLensWorksVersion(_ id: UUID) throws {
@@ -281,9 +485,16 @@ final class ProjectController {
     }
 
     func addLensWorksCheckpoint(named name: String, to id: UUID) throws {
-        guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        guard selectedLensWorksVersionID == id else { throw LensWorksCommandRefusal(reason: "Select the version before naming a checkpoint of its canvas.") }
+        guard session.canStartProjectOperation, session.canEditLayers, session.opacityEditLayerID == nil else {
+            throw LensWorksCommandRefusal(reason: "Finish the current canvas edit before naming a checkpoint. Your edits and Undo history have been kept.")
+        }
+        try captureLensWorksComposition(in: id)
+        guard var document = lensWorksDocument else { throw ProjectError.invalid }
         _ = try document.addCheckpoint(named: name, to: id)
         lensWorksDocument = document
+        session.history.protectedEntryIDs = Set(document.versions.first(where: { $0.id == id })?.checkpoints.compactMap(\.pinnedStepID) ?? [])
         lensWorksDocumentModified = true
     }
 
@@ -295,8 +506,12 @@ final class ProjectController {
     }
 
     func setLensWorksMaxUndoSteps(_ limit: Int) throws {
+        guard limit > 0 else { throw ProjectError.invalid }
+        if let id = selectedLensWorksVersionID { try captureLensWorksComposition(in: id) }
         guard var document = lensWorksDocument, limit > 0 else { throw ProjectError.invalid }
         record(document.setMaxUndoSteps(limit))
+        session.history.applyLimits(entryLimit: limit,
+            protected: Set(document.versions.first(where: { $0.id == selectedLensWorksVersionID })?.checkpoints.compactMap(\.pinnedStepID) ?? []), current: session.document)
         lensWorksDocument = document
         pruneRetainedLensWorksAssets()
         lensWorksDocumentModified = true
@@ -540,7 +755,7 @@ final class ProjectController {
     private func prepareSave(asNew: Bool, suppliedDestination: URL? = nil) async -> (snapshot: ProjectSnapshot, destination: URL, revision: UUID, workingVersion: LensWorksWorkingVersion?)? {
         // Saving is the safe bridge from session edits to the selected durable version.
         // Otherwise a subsequent (now clean) version switch would still lose saved edits.
-        if session.isModified, let id = selectedLensWorksVersionID {
+        if let id = selectedLensWorksVersionID {
             do { try captureLensWorksComposition(in: id) }
             catch { await showError("Couldn’t capture the current version", error: error); return nil }
         }
@@ -652,7 +867,9 @@ final class ProjectController {
                 snapshot = try await ProjectStore.shared.load(from: source)
                 try agentRequest?.admit(snapshot)
             }
+            let installHistory = try prepareLensWorksCanvasHistory(snapshot)
             session.installProject(snapshot, from: source)
+            installHistory()
             workingVersion = snapshot.workingVersion
             lensWorksDocument = snapshot.lensWorksDocument
             lensWorksDocumentAssets = snapshot.lensWorksDocumentAssets
@@ -715,6 +932,8 @@ final class ProjectController {
             try await Task.sleep(for: .milliseconds(25))
         }
         try await session.releaseConfirmedSourceProject(deadline: deadline)
+        capturedLensWorksCanvasDocument = nil
+        capturedLensWorksCanvasRevision = nil
         workingVersion = nil
     }
 

@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+import Darwin
 
 extension UTType {
     static let compositorProject = UTType(exportedAs: "com.compositor.project", conformingTo: .package)
@@ -93,7 +94,7 @@ nonisolated enum ProjectError: LocalizedError {
         case .invalid: "This is not a valid Compositor project, or its metadata is damaged."
         case .version(let version): "This project uses format version \(version). This app supports versions \(ProjectManifest.supported.lowerBound)–\(ProjectManifest.supported.upperBound)."
         case .missingImage: "An image inside the project is missing or damaged. The current document has not been replaced."
-        case .tooLarge: "This project exceeds the supported canvas, layer, file-size, or \(DocumentLimits.documentBudgetMegapixels)-megapixel document limit."
+        case .tooLarge: "This project exceeds the supported canvas, layer, file-size, retained-history storage, or \(DocumentLimits.documentBudgetMegapixels)-megapixel document limit."
         case .encode: "An image could not be saved. The previous project has not been replaced."
         }
     }
@@ -101,6 +102,14 @@ nonisolated enum ProjectError: LocalizedError {
 
 actor ProjectStore {
     static let shared = ProjectStore()
+    /// History keeps encoded assets while the selected version hydrates. Use the existing
+    /// document policy in bytes; tiled samples have a separate disk (not RAM) allowance.
+    private let historyResidentLimit: Int
+    private let historyPlaneDiskLimit: Int
+    init(historyResidentLimit: Int? = nil, historyPlaneDiskLimit: Int? = nil) {
+        self.historyResidentLimit = historyResidentLimit ?? ((try? LWSourceMetadataStorage.product(DocumentLimits.documentPixelBudget, 4)) ?? 0)
+        self.historyPlaneDiskLimit = historyPlaneDiskLimit ?? ((try? LWSourceMetadataStorage.product(DocumentLimits.documentPixelBudget, 16)) ?? 0)
+    }
     /// Any field or file kind that only version 13 can express.
     static func usesVersion13(_ manifest: ProjectManifest) -> Bool {
         manifest.workingSpace != nil || manifest.workingSample != nil || manifest.layers.contains { layer in
@@ -117,6 +126,14 @@ actor ProjectStore {
 
     func save(_ snapshot: ProjectSnapshot, to url: URL, quickLook: QuickLookImages? = nil, workingVersion: LensWorksWorkingVersion? = nil) throws {
         try Self.validate(snapshot.manifest)
+        if let document = snapshot.lensWorksDocument {
+            let current = try Self.currentBackingCost(snapshot)
+            try admitHistory(document, currentResident: current, inspect: { id in
+                guard let data = snapshot.lensWorksDocumentAssets[id] else { throw ProjectError.missingImage }
+                return try Self.historyCost(id: id, bytes: data.count, header: Data(data.prefix(33)),
+                    metadata: id.hasSuffix(".json") ? data : nil)
+            })
+        }
         let sourceProtection = try LWSourceDestinationAuthority(snapshot)
         try sourceProtection.validate(url)
         let version = workingVersion ?? snapshot.workingVersion
@@ -177,6 +194,21 @@ actor ProjectStore {
         defer { withExtendedLifetime(publicationOwners) {} }
         manifest=sourceProjection.manifest
         try Self.validate(manifest)
+        if let document = snapshot.lensWorksDocument {
+            var current = try Self.currentBackingCost(snapshot)
+            for data in sourceProjection.assets.values {
+                current = try LWSourceMetadataStorage.sum(current,
+                    LWSourceMetadataStorage.sum(LWSourceMetadataStorage.product(data.count, 2), 4096))
+            }
+            for asset in sourceProjection.planes.values {
+                current = try LWSourceMetadataStorage.sum(current, Self.planeMetadataCost(asset.reference))
+            }
+            try admitHistory(document, currentResident: current, inspect: { id in
+                guard let data = snapshot.lensWorksDocumentAssets[id] else { throw ProjectError.missingImage }
+                return try Self.historyCost(id: id, bytes: data.count, header: Data(data.prefix(33)),
+                    metadata: id.hasSuffix(".json") ? data : nil)
+            })
+        }
         let encodedManifest=try LWSourceMetadataStorage.encode(manifest,maximumBytes:4*1024*1024,formatting:[.prettyPrinted,.sortedKeys])
         publicationOwners.append(encodedManifest.owner)
         let metadata=try encodedManifest.copyData(ownedBy:encodedManifest.owner)
@@ -328,29 +360,80 @@ actor ProjectStore {
             guard directoryValues.isDirectory == true, directoryValues.isSymbolicLink != true else { throw ProjectError.invalid }
             let documentURL = documentDirectory.appendingPathComponent("document.json")
             try checkFile(documentURL, inside: url, maximumBytes: 4 * 1024 * 1024)
-            do { lensWorksDocument = try JSONDecoder().decode(LensWorksPhotoDocument.self, from: Data(contentsOf: documentURL)) }
+            do {
+                let data = try Self.readBounded(documentURL, maximumBytes: 4 * 1024 * 1024)
+                lensWorksDocument = try LWSourceMetadataStorage.withDecodeCharge(from: data) {
+                    try JSONDecoder().decode(LensWorksPhotoDocument.self, from: data)
+                }
+            }
             catch { throw ProjectError.invalid }
             guard workingVersion.map({ $0.photoID == lensWorksDocument?.photoID }) ?? true else { throw ProjectError.invalid }
+            // The package's current canvas coexists with the separately hydrated history.
+            // Probe its raster headers too, before retaining any history asset bytes.
+            var currentResident = 0
+            for layer in manifest.layers {
+                for filename in [layer.imageFile, layer.maskFile].compactMap({ $0 }) {
+                    let reference = filename == layer.maskFile ? layer.maskPlaneArchiveReference : layer.planeArchiveReference
+                    if let reference {
+                        currentResident = try LWSourceMetadataStorage.sum(currentResident, Self.planeMetadataCost(reference))
+                    } else {
+                        let file = url.appendingPathComponent("images").appendingPathComponent(filename)
+                        let size = try checkFile(file, inside: url, maximumBytes: 512 * 1024 * 1024)
+                        let cost = try Self.historyCost(id: filename, bytes: size,
+                            header: Self.readBounded(file, maximumBytes: 33, prefixOnly: true), metadata: nil)
+                        currentResident = try LWSourceMetadataStorage.sum(currentResident, cost.hydrated)
+                    }
+                }
+            }
+            for entry in currentSources.values {
+                currentResident = try LWSourceMetadataStorage.sum(currentResident, entry.owner.capacity)
+            }
+            for plane in currentSourcePlanes.values {
+                currentResident = try LWSourceMetadataStorage.sum(currentResident, plane.retainedMetadataBytes)
+            }
             let assetsDirectory = documentDirectory.appendingPathComponent("assets", isDirectory: true)
             if FileManager.default.fileExists(atPath: assetsDirectory.path) {
                 let assetDirectoryValues = try assetsDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard assetDirectoryValues.isDirectory == true, assetDirectoryValues.isSymbolicLink != true else { throw ProjectError.invalid }
-                let names = try FileManager.default.contentsOfDirectory(atPath: assetsDirectory.path)
-                guard names.count <= 10_000 else { throw ProjectError.tooLarge }
-                for name in names {
-                    guard LensWorksPhotoDocument.isValidAssetID(name) else { throw ProjectError.invalid }
+                guard let document = lensWorksDocument else { throw ProjectError.invalid }
+                let names = document.reachableAssets
+                let references = document.reachablePlaneReferences
+                // Inspect only reachable members, and admit the complete inventory before
+                // any full asset read or private plane copy. Unreferenced junk is not input.
+                var admittedSizes: [String: Int] = [:]
+                try admitHistory(document, currentResident: currentResident, inspect: { name in
+                    let file = assetsDirectory.appendingPathComponent(name)
+                    let size = try checkFile(file, inside: url, maximumBytes: 512 * 1024 * 1024)
+                    admittedSizes[name] = size
+                    let isMetadata = name.hasSuffix(".json")
+                    if isMetadata {
+                        guard size <= 4 * 1024 * 1024,
+                              try LWSourceMetadataStorage.sum(size, size) <= historyResidentLimit else { throw ProjectError.tooLarge }
+                    }
+                    let probe = try Self.readBounded(file, maximumBytes: isMetadata ? size : 33, prefixOnly: !isMetadata)
+                    return try Self.historyCost(id: name, bytes: size, header: Data(probe.prefix(33)), metadata: isMetadata ? probe : nil)
+                })
+                for name in names.sorted() {
                     let assetURL = assetsDirectory.appendingPathComponent(name)
-                    if let reference = lensWorksDocument?.reachablePlaneReferences[name] {
+                    if let reference = references[name] {
                         let workspace = try LWFloatWorkspace(workingSet: .sourceGraphs)
                         lensWorksDocumentPlanes[name] = try LWFloatPlaneArchive.read(from: assetURL, reference: reference, workspace: workspace)
                     } else {
-                        try checkFile(assetURL, inside: url, maximumBytes: 512 * 1024 * 1024)
-                        lensWorksDocumentAssets[name] = try Data(contentsOf: assetURL)
+                        guard let size = admittedSizes[name] else { throw ProjectError.invalid }
+                        try checkFile(assetURL, inside: url, maximumBytes: size)
+                        lensWorksDocumentAssets[name] = try Self.readBounded(assetURL, maximumBytes: size)
                     }
                 }
             }
             guard let document = lensWorksDocument,
                   document.reachableAssets.isSubset(of: Set(lensWorksDocumentAssets.keys).union(lensWorksDocumentPlanes.keys)) else { throw ProjectError.missingImage }
+            // Recheck the immutable bytes actually retained: a same-size file edit between
+            // the header probe and the bounded read must not bypass decoded admission.
+            try admitHistory(document, currentResident: currentResident, inspect: { id in
+                guard let data = lensWorksDocumentAssets[id] else { throw ProjectError.missingImage }
+                return try Self.historyCost(id: id, bytes: data.count, header: Data(data.prefix(33)),
+                    metadata: id.hasSuffix(".json") ? data : nil)
+            })
         }
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
@@ -515,11 +598,139 @@ actor ProjectStore {
         used += width * height
     }
 
-    private func checkFile(_ file: URL, inside package: URL, maximumBytes: Int) throws {
+    /// Application admission allowances, not allocator/RSS measurements. The controller
+    /// shares decoded backings/source hydration across a version's current and history graphs.
+    private struct HistoryCost {
+        var encoded: Int
+        var hydrated: Int
+    }
+
+    private static func planeMetadataCost(_ reference: LWFloatPlaneArchive.Reference) throws -> Int {
+        try reference.validate()
+        let side = LWFloatPlane.tileSide
+        let tiles = try LWSourceMetadataStorage.product((reference.width + side - 1) / side, (reference.height + side - 1) / side)
+        return try LWSourceMetadataStorage.product(tiles,
+            LWSourceMetadataStorage.sum(MemoryLayout<LWFloatPlane.Entry>.stride * 2, 256))
+    }
+
+    private static func currentBackingCost(_ snapshot: ProjectSnapshot) throws -> Int {
+        var result = 0
+        for asset in Array(snapshot.images.values) + Array(snapshot.masks.values) {
+            let bytes: Int
+            if let plane = asset.linearPlane { bytes = plane.retainedMetadataBytes }
+            else {
+                let pixels = try LWSourceMetadataStorage.product(asset.image.width, asset.image.height)
+                bytes = try LWSourceMetadataStorage.sum(LWSourceMetadataStorage.product(pixels, asset.linear == nil ? 8 : 32), 96 * 96 * 4)
+            }
+            result = try LWSourceMetadataStorage.sum(result, bytes)
+        }
+        return result
+    }
+
+    private func admitHistory(_ document: LensWorksPhotoDocument, currentResident: Int,
+        inspect: (String) throws -> HistoryCost) throws {
+        let ids = document.reachableAssets
+        let references = document.reachablePlaneReferences
+        guard ids.count <= 10_000 else { throw ProjectError.tooLarge }
+        var costs: [String: HistoryCost] = [:]
+        var encoded = 0, planeMetadata = 0, disk = 0, staging = 0
+        for id in ids.sorted() {
+            guard LensWorksPhotoDocument.isValidAssetID(id) else { throw ProjectError.invalid }
+            if let reference = references[id] {
+                try reference.validate()
+                let pixels = try LWSourceMetadataStorage.product(reference.width, reference.height)
+                disk = try LWSourceMetadataStorage.sum(disk, LWSourceMetadataStorage.product(pixels, 16))
+                guard disk <= historyPlaneDiskLimit else { throw ProjectError.tooLarge }
+                planeMetadata = try LWSourceMetadataStorage.sum(planeMetadata, Self.planeMetadataCost(reference))
+                // Archive JSON and one tile are bounded separately by .sourceGraphs;
+                // they are sequential scratch, never the full plane's logical pixels.
+                staging = max(staging, LWFloatPlaneArchive.maximumManifestBytes * 3)
+            } else {
+                let cost = try inspect(id)
+                encoded = try LWSourceMetadataStorage.sum(encoded, cost.encoded)
+                guard encoded <= LWFloatWorkingSet.maximumBytes else { throw ProjectError.tooLarge }
+                staging = max(staging, cost.encoded)
+                costs[id] = cost
+            }
+            guard try LWSourceMetadataStorage.sum(encoded, planeMetadata) <= historyResidentLimit else { throw ProjectError.tooLarge }
+        }
+        var maximumHydrated = 0
+        for version in document.versions {
+            var hydrated = 0
+            for id in version.reachableAssets {
+                hydrated = try LWSourceMetadataStorage.sum(hydrated, costs[id]?.hydrated ?? 0)
+            }
+            maximumHydrated = max(maximumHydrated, hydrated)
+        }
+        let retained = try LWSourceMetadataStorage.sum(currentResident,
+            LWSourceMetadataStorage.sum(encoded, LWSourceMetadataStorage.sum(planeMetadata, maximumHydrated)))
+        guard try LWSourceMetadataStorage.sum(retained, staging) <= historyResidentLimit else { throw ProjectError.tooLarge }
+    }
+
+    private static func historyCost(id: String, bytes: Int, header: Data, metadata: Data?) throws -> HistoryCost {
+        guard bytes <= 512 * 1024 * 1024, metadata == nil || bytes <= 4 * 1024 * 1024 else { throw ProjectError.tooLarge }
+        let pngMagic: [UInt8] = [137,80,78,71,13,10,26,10]
+        let isPNG = header.starts(with: pngMagic) || id.lowercased().hasSuffix(".png")
+        if isPNG || id.hasSuffix(".f32") {
+            let h = Array(header)
+            let width: Int, height: Int, bytesPerPixel: Int
+            if isPNG {
+                guard h.count >= 33, Array(h[0..<8]) == [137,80,78,71,13,10,26,10],
+                      Array(h[8..<16]) == [0,0,0,13,73,72,68,82], h[24] <= 8 else { throw ProjectError.missingImage }
+                func big(_ i: Int) -> Int { h[i..<i+4].reduce(0) { ($0 << 8) | Int($1) } }
+                width = big(16); height = big(20)
+                // RGBA8 output and decode/copy allowance; ImageIO still validates the file.
+                bytesPerPixel = 8
+            } else {
+                guard h.count >= 24, Array(h[0..<8]) == Array("LWRA32F1".utf8) else { throw ProjectError.missingImage }
+                func little(_ i: Int) -> Int { h[i..<i+4].reversed().reduce(0) { ($0 << 8) | Int($1) } }
+                width = little(8); height = little(12)
+                // Float samples and the CGDataProvider copy are both resident.
+                bytesPerPixel = 32
+            }
+            guard (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { throw ProjectError.tooLarge }
+            let raster = try LWSourceMetadataStorage.product(LWSourceMetadataStorage.product(width, height), bytesPerPixel)
+            return HistoryCost(encoded: bytes, hydrated: try LWSourceMetadataStorage.sum(raster, 96 * 96 * 4))
+        }
+        if let metadata {
+            guard bytes <= 4 * 1024 * 1024 else { throw ProjectError.tooLarge }
+            return HistoryCost(encoded: bytes, hydrated: try LWSourceMetadataStorage.decodingBytes(metadata))
+        }
+        // Source payloads keep their encoded input and admit owned hydration copies.
+        // The source metadata owner additionally bounds repeated references/typed objects.
+        return HistoryCost(encoded: bytes, hydrated: try LWSourceMetadataStorage.sum(LWSourceMetadataStorage.product(bytes, 2), 1024))
+    }
+
+    private static func readBounded(_ file: URL, maximumBytes: Int, prefixOnly: Bool = false) throws -> Data {
+        let parent = try LWFloatDirectoryChain(file.deletingLastPathComponent())
+        let fd = openat(parent.fd, file.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { throw ProjectError.missingImage }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw ProjectError.invalid }
+        try parent.check()
+        var result = Data()
+        while result.count < maximumBytes {
+            try Task.checkCancellation()
+            let part = try handle.read(upToCount: min(64 * 1024, maximumBytes - result.count)) ?? Data()
+            if part.isEmpty { break }
+            result.append(part)
+        }
+        if !prefixOnly {
+            guard (try handle.read(upToCount: 1) ?? Data()).isEmpty else { throw ProjectError.tooLarge }
+        }
+        try parent.check()
+        return result
+    }
+
+    @discardableResult
+    private func checkFile(_ file: URL, inside package: URL, maximumBytes: Int) throws -> Int {
         let root = package.resolvingSymlinksInPath().standardizedFileURL.path + "/"
         guard file.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root) else { throw ProjectError.invalid }
         let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true,
-              let size = values.fileSize, size <= maximumBytes else { throw ProjectError.tooLarge }
+              let size = values.fileSize, size >= 0, size <= maximumBytes else { throw ProjectError.tooLarge }
+        return size
     }
 }

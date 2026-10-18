@@ -336,6 +336,139 @@ extension ProjectTests {
         #expect(image.width == 64 && image.height == 32)
     }
 
+    private func historySnapshot(assets: [String: Data]) -> ProjectSnapshot {
+        var document = LensWorksPhotoDocument(photoID: "budget-photo")
+        let graph = LensWorksLayerGraph(layers: [], retainedAssetIDs: Array(assets.keys))
+        var content = LensWorksVersionContent(); content.layerGraph = graph
+        document.versions = [LensWorksPhotoVersion(name: "A", content: content)]
+        return ProjectSnapshot(manifest: ProjectManifest(documentID: UUID(), width: 1, height: 1,
+            activeLayerID: nil, layers: []), images: [:], lensWorksDocument: document, lensWorksDocumentAssets: assets)
+    }
+
+    @Test func historyLoadIgnoresUnreferencedMaliciousAndOversizedAssets() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshot = historySnapshot(assets: ["reachable": Data([1, 2])])
+        let url = root.appendingPathComponent("Reachable.comp")
+        try await ProjectStore.shared.save(snapshot, to: url)
+        let assets = url.appendingPathComponent("LensWorksDocument/assets")
+        try FileManager.default.createSymbolicLink(at: assets.appendingPathComponent("unreferenced-link"),
+            withDestinationURL: root.appendingPathComponent("missing"))
+        let oversized = assets.appendingPathComponent("unreferenced-huge")
+        #expect(FileManager.default.createFile(atPath: oversized.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: oversized)
+        try handle.truncate(atOffset: 513 * 1024 * 1024) // Sparse; no giant Data allocation.
+        try handle.close()
+        let loaded = try await ProjectStore.shared.load(from: url)
+        #expect(loaded.lensWorksDocumentAssets == snapshot.lensWorksDocumentAssets)
+    }
+
+    @Test func cumulativeHistoryAdmissionRejectsLoadAndPreservesAtomicSave() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = historySnapshot(assets: ["a.data": Data(repeating: 1, count: 64)])
+        var two = historySnapshot(assets: ["a.data": Data(repeating: 1, count: 64), "b.data": Data(repeating: 2, count: 64)])
+        two.lensWorksDocument?.versions[0].content.layerGraph?.retainedAssetIDs = ["a.data"]
+        var checkpoint = LensWorksVersionContent()
+        checkpoint.layerGraph = LensWorksLayerGraph(layers: [], retainedAssetIDs: ["b.data"])
+        two.lensWorksDocument?.versions[0].checkpoints = [.init(name: "Retained", content: checkpoint, pinnedStepID: nil)]
+        let limited = ProjectStore(historyResidentLimit: 2_000)
+        let url = root.appendingPathComponent("Budget.comp")
+        try await limited.save(one, to: url) // Each member fits alone.
+        let original = try Data(contentsOf: url.appendingPathComponent("LensWorksDocument/document.json"))
+        do { try await limited.save(two, to: url); Issue.record("Cumulative save budget bypassed") }
+        catch ProjectError.tooLarge {}
+        #expect(try Data(contentsOf: url.appendingPathComponent("LensWorksDocument/document.json")) == original)
+        #expect(try await limited.load(from: url).lensWorksDocumentAssets == one.lensWorksDocumentAssets)
+        try await ProjectStore.shared.save(two, to: url)
+        do { _ = try await limited.load(from: url); Issue.record("Cumulative load budget bypassed") }
+        catch ProjectError.tooLarge {}
+    }
+
+    @Test func compressedHistoryRastersAreAdmittedByDecodedDimensions() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = try ImageImportTests().fixture(.png)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let png = try Data(contentsOf: fixture) // 64 x 32, tiny encoded bytes.
+        // History hydration accepts PNG content under arbitrary valid asset IDs.
+        let snapshot = historySnapshot(assets: ["a.data": png, "b.PNG": png])
+        let url = root.appendingPathComponent("RasterBudget.comp")
+        try await ProjectStore.shared.save(snapshot, to: url)
+        let limited = ProjectStore(historyResidentLimit: 90_000)
+        do { _ = try await limited.load(from: url); Issue.record("Decoded raster budget bypassed") }
+        catch ProjectError.tooLarge {}
+        do { try await limited.save(snapshot, to: url); Issue.record("Save published unreadable raster history") }
+        catch ProjectError.tooLarge {}
+        // An adversarial IHDR declares enormous pixels in the same tiny encoded file.
+        var forged = png
+        forged.replaceSubrange(16..<24, with: [0, 0, 117, 48, 0, 0, 117, 48])
+        try forged.write(to: url.appendingPathComponent("LensWorksDocument/assets/a.data"))
+        do { _ = try await ProjectStore.shared.load(from: url); Issue.record("Huge header bypassed admission") }
+        catch ProjectError.tooLarge {}
+    }
+
+    @Test func currentCanvasAndHistoryShareTheResidentAllowance() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = try ImageImportTests().fixture(.png)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let session = EditorSession()
+        await session.importImages([fixture])
+        var snapshot = try #require(session.projectSnapshot())
+        let history = historySnapshot(assets: ["retained.data": Data(repeating: 1, count: 64)])
+        snapshot.lensWorksDocument = history.lensWorksDocument
+        snapshot.lensWorksDocumentAssets = history.lensWorksDocumentAssets
+        let url = root.appendingPathComponent("CombinedBudget.comp")
+        try await ProjectStore.shared.save(snapshot, to: url)
+        // The 64x32 current raster fits alone, as does the tiny history asset;
+        // together they exceed this injected limit.
+        let limited = ProjectStore(historyResidentLimit: 54_000)
+        do { _ = try await limited.load(from: url); Issue.record("Current canvas excluded from resident budget") }
+        catch ProjectError.tooLarge {}
+        do { try await limited.save(snapshot, to: url); Issue.record("Save excluded current canvas") }
+        catch ProjectError.tooLarge {}
+    }
+
+    @Test func sourceMetadataTokenAllowancesParticipateInHistoryAdmission() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let metadata = Data("{\"items\":[1,2,3,4,5,6,7,8]}".utf8)
+        let snapshot = historySnapshot(assets: ["a.json": metadata, "b.json": metadata])
+        let url = root.appendingPathComponent("MetadataBudget.comp")
+        let limited = ProjectStore(historyResidentLimit: 12_000)
+        try await limited.save(historySnapshot(assets: ["a.json": metadata]), to: url)
+        try await ProjectStore.shared.save(snapshot, to: url)
+        do { _ = try await limited.load(from: url); Issue.record("Metadata token budget bypassed") }
+        catch ProjectError.tooLarge {}
+        do { try await limited.save(snapshot, to: url); Issue.record("Save bypassed metadata budget") }
+        catch ProjectError.tooLarge {}
+    }
+
+    @Test func tiledHistoryParticipatesInCumulativeDiskAdmissionNotLogicalRAM() async throws {
+        let root = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try LWFloatWorkspace(workingSet: LWFloatWorkingSet())
+        let builder = try workspace.makeBuilder(width: 1, height: 1)
+        try builder.append(LWLinearSurface(width: 1, height: 1, pixels: [SIMD4<Float>(1, 0, 0, 1)], maximumBytes: 16),
+            at: .init(x: 0, y: 0, width: 1, height: 1))
+        let plane = try builder.finish(), reference = try LWFloatPlaneArchive.reference(plane)
+        var snapshot = historySnapshot(assets: [:])
+        snapshot.lensWorksDocument?.versions[0].content.layerGraph?.planeReferences = ["a.plane": reference, "b.plane": reference]
+        snapshot.lensWorksDocumentPlanes = ["a.plane": plane, "b.plane": plane]
+        let url = root.appendingPathComponent("Planes.comp")
+        try await ProjectStore.shared.save(snapshot, to: url)
+        // Each plane is 16 bytes on disk; 31 admits one, not both. RAM accounting
+        // is tile metadata plus bounded archive scratch, not full float extents.
+        let limited = ProjectStore(historyPlaneDiskLimit: 31)
+        do { _ = try await limited.load(from: url); Issue.record("Cumulative plane copy budget bypassed") }
+        catch ProjectError.tooLarge {}
+        do { try await limited.save(snapshot, to: url); Issue.record("Save bypassed plane budget") }
+        catch ProjectError.tooLarge {}
+        let loaded = try await ProjectStore.shared.load(from: url)
+        #expect(loaded.lensWorksDocumentPlanes.count == 2)
+    }
+
     /// Saving keeps the version-12 format unless the document actually uses version-13 content.
     @Test func integerOnlySavesKeepWritingVersion12() async throws {
         let root = try temporaryFolder()

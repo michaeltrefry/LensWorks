@@ -155,6 +155,12 @@ nonisolated struct LensWorksHistoryStep: Codable, Sendable, Equatable, Identifia
     var command: LensWorksDocumentCommand?
     /// The content the step restores when it is undone (or redone).
     var content: LensWorksVersionContent
+    /// The other endpoint of an ordinary editor transaction. Pruning may leave
+    /// nonadjacent entries, so this cannot be inferred from a neighboring step.
+    /// Nil retains the historic scalar/explicit-command behavior.
+    var oppositeContent: LensWorksVersionContent? = nil
+    var canvasBeforeRevision: UUID? = nil
+    var canvasAfterRevision: UUID? = nil
     var attributedToAgent = false
 }
 
@@ -169,6 +175,7 @@ nonisolated struct LensWorksCheckpoint: Codable, Sendable, Equatable, Identifiab
 nonisolated struct LensWorksPhotoVersion: Codable, Sendable, Equatable, Identifiable {
     var id = UUID()
     var name: String
+    var canvasRevision: UUID? = nil
     var content = LensWorksVersionContent()
     var undo: [LensWorksHistoryStep] = []
     var redo: [LensWorksHistoryStep] = []
@@ -176,10 +183,15 @@ nonisolated struct LensWorksPhotoVersion: Codable, Sendable, Equatable, Identifi
 
     /// Assets that current content, checkpoints and the retained undo/redo steps still need.
     var reachableAssets: Set<String> {
-        var assets = content.assetIDs
-        for step in undo + redo { assets.formUnion(step.content.assetIDs) }
-        for checkpoint in checkpoints { assets.formUnion(checkpoint.content.assetIDs) }
-        return assets
+        retainedContents.reduce(into: Set<String>()) { $0.formUnion($1.assetIDs) }
+    }
+
+    /// One authoritative traversal for retention, reader admission and original
+    /// destination protection, including both sides of noncontiguous history.
+    var retainedContents: [LensWorksVersionContent] {
+        [content] + (undo + redo).flatMap { step in
+            [step.content] + (step.oppositeContent.map { [$0] } ?? [])
+        } + checkpoints.map(\.content)
     }
 }
 
@@ -237,6 +249,7 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
         copy.name = name
         copy.undo = []
         copy.redo = []
+        copy.canvasRevision = nil
         copy.checkpoints = copy.checkpoints.map { var c = $0; c.id = UUID(); c.pinnedStepID = nil; return c }
         versions.append(copy)
         return copy.id
@@ -247,8 +260,11 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
         let i = try index(id)
         var next = versions[i].content
         try command.apply(to: &next)
-        versions[i].undo.append(LensWorksHistoryStep(name: command.label, command: command, content: versions[i].content, attributedToAgent: agent))
+        let afterRevision = UUID()
+        versions[i].undo.append(LensWorksHistoryStep(name: command.label, command: command, content: versions[i].content,
+            oppositeContent: next, canvasBeforeRevision: versions[i].canvasRevision, canvasAfterRevision: afterRevision, attributedToAgent: agent))
         versions[i].content = next
+        versions[i].canvasRevision = afterRevision
         versions[i].redo = []
         return prune(i)
     }
@@ -256,8 +272,9 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
     mutating func undo(_ id: UUID) throws {
         let i = try index(id)
         guard let step = versions[i].undo.popLast() else { throw LensWorksDocumentError.nothingToUndo }
-        versions[i].redo.append(LensWorksHistoryStep(id: step.id, name: step.name, command: step.command, content: versions[i].content, attributedToAgent: step.attributedToAgent))
+        versions[i].redo.append(LensWorksHistoryStep(id: step.id, name: step.name, command: step.command, content: step.oppositeContent ?? versions[i].content, oppositeContent: step.content, canvasBeforeRevision: step.canvasBeforeRevision, canvasAfterRevision: step.canvasAfterRevision, attributedToAgent: step.attributedToAgent))
         versions[i].content = step.content
+        versions[i].canvasRevision = step.canvasBeforeRevision
     }
 
     /// Returns pruning warnings because redoing can grow the retained undo stack after its limit changed.
@@ -265,8 +282,9 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
     mutating func redo(_ id: UUID) throws -> LensWorksPruneReport {
         let i = try index(id)
         guard let step = versions[i].redo.popLast() else { throw LensWorksDocumentError.nothingToRedo }
-        versions[i].undo.append(LensWorksHistoryStep(id: step.id, name: step.name, command: step.command, content: versions[i].content, attributedToAgent: step.attributedToAgent))
+        versions[i].undo.append(LensWorksHistoryStep(id: step.id, name: step.name, command: step.command, content: step.oppositeContent ?? versions[i].content, oppositeContent: step.content, canvasBeforeRevision: step.canvasBeforeRevision, canvasAfterRevision: step.canvasAfterRevision, attributedToAgent: step.attributedToAgent))
         versions[i].content = step.content
+        versions[i].canvasRevision = step.canvasAfterRevision
         return prune(i)
     }
 
@@ -283,8 +301,11 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
     mutating func restoreCheckpoint(_ checkpoint: UUID, in id: UUID) throws -> LensWorksPruneReport {
         let i = try index(id)
         guard let saved = versions[i].checkpoints.first(where: { $0.id == checkpoint }) else { throw LensWorksDocumentError.unknownCheckpoint }
-        versions[i].undo.append(LensWorksHistoryStep(name: "Restore “\(saved.name)”", command: nil, content: versions[i].content))
+        let afterRevision = UUID()
+        versions[i].undo.append(LensWorksHistoryStep(name: "Restore “\(saved.name)”", command: nil, content: versions[i].content,
+            oppositeContent: saved.content, canvasBeforeRevision: versions[i].canvasRevision, canvasAfterRevision: afterRevision))
         versions[i].content = saved.content
+        versions[i].canvasRevision = afterRevision
         versions[i].redo = []
         return prune(i)
     }
@@ -325,7 +346,7 @@ nonisolated extension LensWorksPhotoDocument {
     var reachablePlaneReferences: [String: LWFloatPlaneArchive.Reference] {
         var result: [String: LWFloatPlaneArchive.Reference] = [:]
         for version in versions {
-            let contents = [version.content] + (version.undo + version.redo).map(\.content) + version.checkpoints.map(\.content)
+            let contents = version.retainedContents
             for content in contents {
                 for (name, reference) in content.layerGraph?.planeReferences ?? [:] { result[name] = reference }
             }

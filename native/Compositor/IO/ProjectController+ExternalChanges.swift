@@ -89,7 +89,9 @@ extension ProjectController {
         // mid-sync, leaves the open document alone; the next change on disk is checked afresh.
         guard let snapshot = try? await ProjectStore.shared.load(from: url) else { return }
         guard !sourceCloseRequested, !Task.isCancelled, session.projectURL == url, session.document != nil else { return }
+        guard let installHistory = try? prepareLensWorksCanvasHistory(snapshot) else { return }
         session.reloadProject(snapshot)
+        installHistory()
         // A relink applied in this session outranks the location recorded in the package on disk.
         if let relinked = relinkedOriginal, let loaded = snapshot.workingVersion, loaded.id == relinked.version {
             workingVersion = loaded.relinked(originalPath: relinked.path, native: relinked.native)

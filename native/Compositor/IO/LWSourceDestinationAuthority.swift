@@ -33,7 +33,7 @@ nonisolated final class LWSourceDestinationAuthority: @unchecked Sendable {
         // the primary catalog original or the source still visible on the canvas.
         let cache = LWSourcePackageArchive.HydrationCache(workingSet: workingSet)
         for version in snapshot.lensWorksDocument?.versions ?? [] {
-            let contents = [version.content] + (version.undo + version.redo).map(\.content) + version.checkpoints.map(\.content)
+            let contents = version.retainedContents
             for content in contents {
                 guard let graph = content.layerGraph else { continue }
                 var manifest = graph.composition ?? snapshot.manifest

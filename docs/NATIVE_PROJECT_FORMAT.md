@@ -37,8 +37,14 @@ Each catalog photo has independently-valued named versions. Duplicating one
 copies its current content and checkpoints but starts separate undo/redo
 history, so edits cannot mutate a sibling version. Every history step and
 checkpoint stores the complete version content, and document commands are
-Codable. Schema migration fixtures include commands in undo and redo history
-and verify their re-encoded roundtrip.
+Codable. Ordinary editor steps additionally retain an optional `oppositeContent`
+endpoint and before/after revision UUIDs; the version retains its current canvas
+revision UUID. These backward-compatible schema-3 fields preserve exact Redo and
+saved/modified identity when pruning leaves gaps—even when distinct revisions
+have identical pixels. Older steps without these fields retain their legacy
+semantics. Asset retention and source-destination protection visit both endpoints.
+Schema migration fixtures include commands in undo and redo history and verify
+their re-encoded roundtrip.
 
 The configurable `maxUndoSteps` (default 100; minimum 1) bounds retained undo
 steps per version. The oldest unprotected undo steps are pruned first after an
@@ -57,13 +63,36 @@ archives; live-source metadata, payloads and source planes are retained
 transitively, not reduced to an integer preview. A missing reachable asset is
 an error, not a partially restorable save.
 
+Loading visits only reachable asset IDs, not every member of the asset directory.
+It admits the complete inventory before full asset reads or plane copies: at most
+10,000 reachable IDs and 512 MiB of aggregate encoded non-plane assets. PNG/F32
+headers account for decoded backings before allocation; source JSON uses the
+existing token-aware metadata allowance. Encoded assets, the selected version's
+unique hydrated backings, plane tile metadata, sequential staging and the
+coexisting current canvas must fit `DocumentLimits.documentPixelBudget * 4`
+bytes. Disk-backed plane samples have a separate cumulative logical-copy bound
+of `documentPixelBudget * 16` bytes; they are not charged as resident raster RAM.
+These are admission allowances, not measured RSS; the source/tile working-set
+owners still enforce their own allocation bounds. Save applies corresponding
+admission before publication. Previously unbounded oversized histories are
+refused atomically rather than allocating until exhaustion or replacing an
+existing readable package.
+
 Newly captured graphs also keep canvas dimensions, resolution, guides, active
 layer and working color/sample state. Older schema-2 graphs lacking this
 optional composition record keep the legacy canvas fallback. Selecting another
 version refuses unsaved canvas edits with an actionable Save message, leaving
-both edits and session Undo intact. Save captures those edits into the selected
-persistent version before publication. The selected version is saved with the
-document so reopening the canvas and its history controls agree.
+both edits and Undo intact. Save serializes the central editor transaction log
+into the selected version: each completed ordinary edit retains its own stable
+step identity, label, user/agent origin and before/after composition. The pending
+Redo stack is retained too; repeated saves neither coalesce edits nor add steps.
+Opening a package or selecting a version reconstructs its ordinary Edit-menu
+Undo/Redo timeline, independently of sibling versions. Legacy scalar-only
+commands remain available through the version history controls. Naming a
+checkpoint first captures the visible selected canvas and its completed edits;
+an unfinished gesture is refused without changing the canvas, version or assets.
+The selected version is saved with the document so reopening the canvas and its
+history controls agree.
 
 Saving a catalog working version under a different project path creates a new
 working-version UUID while retaining photo/source links; normal Save preserves
