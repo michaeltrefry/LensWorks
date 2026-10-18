@@ -121,11 +121,3 @@ nonisolated enum HDRMergePublisher {
         try FileManager.default.moveItem(at: temp, to: url)
     }
 }
-
-/// Catalog registration through the existing folder import: the merged DNG becomes a new catalog photo.
-struct LensWorksHDRMergeRegistrar: HDRMergeCatalogRegistering {
-    let catalog: LensWorksCatalog
-    func registerMerged(_ publication: HDRMergePublication) async throws {
-        await catalog.importFolder(publication.dng.deletingLastPathComponent().path)
-    }
-}

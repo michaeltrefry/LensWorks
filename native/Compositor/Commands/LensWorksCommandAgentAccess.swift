@@ -20,6 +20,7 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case newCanvasSheet = "It picks a preset in the New Canvas sheet the person has open; file.newCanvas takes width and height directly."
     case shortcutEditor = "It is the Save or Cancel button of the Keyboard Shortcuts window the person has open."
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
+    case hdrMerge = "It decodes the person’s selected bracket frames and writes a new DNG beside them, which the person starts from the Photo menu after choosing the frames."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
 }
 
@@ -133,6 +134,7 @@ extension LensWorksCommandID {
         case .saveShortcuts, .cancelShortcuts: .notRunnable(.shortcutEditor)
         case .beginRename: .notRunnable(.nameEditor)
         case .opacityDigit: .notRunnable(.opacityKeys)
+        case .mergeToHDR: .notRunnable(.hdrMerge)
         }
     }
 

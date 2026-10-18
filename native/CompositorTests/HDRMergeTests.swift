@@ -65,6 +65,46 @@ final class HDRMergeTests: XCTestCase {
         XCTAssertEqual(shift.y, 2)
     }
 
+    /// The merged DNG is a live RAW source in the editor: RAW development controls apply and layers stack above it.
+    @MainActor
+    func testMergedDNGOpensInEditorWithRawControlsAndAcceptsLayers() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("hdr-editor-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let root = try XCTUnwrap(temp.physicalFileURL)
+        let sources = try (0..<3).map { i -> URL in
+            let url = root.appendingPathComponent("bracket-\(i + 1).bin")
+            try Data([UInt8(i), 1, 2, 3]).write(to: url)
+            return url
+        }
+        let options = HDRMergeOptions()
+        let merged = try HDRMerge.merge(try bracket(), options: options)
+        let publication = try HDRMergePublisher.publish(merged, sources: sources, into: root, name: "merged-hdr", options: options)
+
+        let session = EditorSession()
+        await session.importImages([publication.dng])
+        XCTAssertNil(session.importError)
+        let layer = try XCTUnwrap(session.activeLayer)
+        XCTAssertNotNil(layer.liveSource)
+        XCTAssertNotNil(layer.asset?.linearPlane)
+
+        session.beginFilter(.cameraRaw)
+        let edit = try XCTUnwrap(session.filterEdit)
+        XCTAssertNotNil(edit.liveSource)
+        var settings = edit.settings
+        settings.cameraRaw.exposure = 0.5
+        session.updateFilter(settings, preview: false)
+        await session.commitFilter()
+        XCTAssertNil(session.brushError)
+        XCTAssertEqual(session.activeLayer?.liveSource?.settings.exposure, 0.5)
+
+        let rawID = layer.id
+        session.addBlankLayer()
+        XCTAssertEqual(session.document?.layers.count, 2)
+        XCTAssertEqual(session.document?.layers.first?.id, rawID)
+        try await LWSourceDeveloper.shared.drainRetainedSessions()
+    }
+
     private final class FakeCatalog: HDRMergeCatalogRegistering {
         var items: [HDRMergePublication] = []
         func registerMerged(_ publication: HDRMergePublication) async throws { items.append(publication) }

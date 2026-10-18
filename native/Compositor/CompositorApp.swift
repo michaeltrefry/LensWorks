@@ -187,6 +187,13 @@ struct CompositorApp: App {
                         session.beginFilter(.contentAwareFill)
                     }
                 }
+                // The commands builder takes ten children, so the Photo menu rides in a group with Select.
+                Group {
+                CommandMenu("Photo") {
+                    LensWorksCommandButton(.mergeToHDR, reason: applicationDelegate.catalog.hdrMergeUnavailableReason) {
+                        Task { await applicationDelegate.catalog.mergeSelectionToHDR() }
+                    }
+                }
                 CommandMenu("Select") {
                     // A field being edited keeps its own Select All: offer it to the responder chain
                     // first, which covers every kind of text control rather than NSTextView alone,
@@ -213,6 +220,7 @@ struct CompositorApp: App {
                     LensWorksCommandButton(.expandSelection, reason: reason(.expandSelection)) { session.promptSelectionAmount(.expand) }
                     LensWorksCommandButton(.contractSelection, reason: reason(.contractSelection)) { session.promptSelectionAmount(.contract) }
                     LensWorksCommandButton(.featherSelection, reason: reason(.featherSelection)) { session.promptSelectionAmount(.feather) }
+                }
                 }
                 CommandMenu("Image") {
                     LensWorksCommandButton(.curves, reason: reason(.curves)) { session.beginFilter(.curves) }
