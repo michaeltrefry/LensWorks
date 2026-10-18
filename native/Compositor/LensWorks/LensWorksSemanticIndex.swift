@@ -89,6 +89,9 @@ actor LensWorksSemanticIndex {
     private let url: URL
     private var database: OpaquePointer?
     private var version: LWSemanticIndexVersion?
+    /// Bumped whenever stored vectors are invalidated (version change, reset, deletion). A sync
+    /// that suspended across such a change must not write vectors computed under the old state.
+    private var generation = 0
     private let applicationID: Int32 = 0x4c575349
 
     init(url: URL) { self.url = url }
@@ -171,6 +174,7 @@ actor LensWorksSemanticIndex {
         }
         self.version = newVersion
         if stored == newVersion.key { return false }
+        generation &+= 1
         let description = try JSONEncoder().encode(newVersion)
         try execute("BEGIN IMMEDIATE")
         do {
@@ -192,11 +196,13 @@ actor LensWorksSemanticIndex {
 
     /// Deletes every vector (user-initiated reset). Originals and catalog records are untouched.
     func reset() throws {
+        generation &+= 1
         try execute("DELETE FROM entries")
     }
 
     /// Deletes the index file entirely; the next `adopt` recreates it.
     func deleteIndexFiles() {
+        generation &+= 1
         discardFiles()
         version = nil
     }
@@ -209,6 +215,7 @@ actor LensWorksSemanticIndex {
     func sync(_ candidates: [LWSemanticCandidate], limit: Int = 256, embedder: any LWSemanticEmbedder,
               progress: @Sendable (Int, Int) -> Void = { _, _ in }) async throws -> LWSemanticSyncReport {
         guard let version else { throw LWSemanticError.storage("no index version has been adopted") }
+        let epoch = generation
         var report = LWSemanticSyncReport()
         var pending: [LWSemanticCandidate] = []
         for candidate in candidates {
@@ -233,6 +240,9 @@ actor LensWorksSemanticIndex {
             let vectors: LWSemanticVectors
             do { vectors = try await embedder.embedImages(loaded.map(\.1)) }
             catch is CancellationError { report.cancelled = true; report.remaining += pending.count - index + loaded.count; break }
+            // Both awaits are behind us and nothing below suspends: if the index was adopted anew,
+            // reset or deleted meanwhile, these vectors belong to the old state and are dropped.
+            guard generation == epoch else { report.cancelled = true; report.remaining += pending.count - index + loaded.count; break }
             try validate(vectors, count: loaded.count, against: version)
             try execute("BEGIN IMMEDIATE")
             do {
@@ -301,7 +311,9 @@ actor LensWorksSemanticIndex {
         guard let version else { throw LWSemanticError.storage("no index version has been adopted") }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.utf8.count <= Self.maximumQueryBytes else { return [] }
+        let epoch = generation
         let embedded = try await embedder.embedTexts([trimmed])
+        guard generation == epoch else { throw CancellationError() }
         try validate(embedded, count: 1, against: version)
         return try rank(Self.normalized(embedded.vectors[0]), within: within, limit: limit)
     }
@@ -348,11 +360,30 @@ actor LensWorksSemanticIndex {
 /// Embeds through admitted model-store jobs. Image and text providers must share one space; the
 /// space reported with each result is checked by the index against its version.
 nonisolated struct LWModelStoreEmbedder: LWSemanticEmbedder {
-    let store: LWModelStore
-    let runtime: any LWInferenceJobStarting
-    var modelID = "clip_vit_l14"
-    var imageProvider = "clip_vit_l14"
-    var textProvider = "clip_vit_l14_text"
+    /// Starts an admitted job on the model: (model id, pixels, inputs, request builder).
+    typealias Start = @Sendable (String, Int?, [LWInferenceImage], @escaping @Sendable (LWModelLease) -> LWInferenceRequest) async throws -> LWModelJob
+    static let defaultModelID = "clip_vit_l14"
+    static let defaultImageProvider = "clip_vit_l14"
+    static let defaultTextProvider = "clip_vit_l14_text"
+
+    let start: Start
+    var modelID = defaultModelID
+    var imageProvider = defaultImageProvider
+    var textProvider = defaultTextProvider
+
+    init(store: LWModelStore, runtime: any LWInferenceJobStarting) {
+        start = { id, pixels, inputs, request in try await store.runJob(id, pixels: pixels, inputs: inputs, runtime: runtime, request: request) }
+    }
+
+    init(start: @escaping Start) { self.start = start }
+
+    /// The application's embedder: jobs run through the shared AI Models center, so admission,
+    /// licence acknowledgement and memory leases apply and nothing is downloaded on its own.
+    static var application: LWModelStoreEmbedder {
+        LWModelStoreEmbedder { id, pixels, inputs, request in
+            try await LWModelCenter.shared.runJob(id, pixels: pixels, inputs: inputs, request: request)
+        }
+    }
 
     func embedImages(_ images: [LWInferenceImage]) async throws -> LWSemanticVectors {
         let pixels = images.map { $0.width * $0.height }.max()
@@ -370,9 +401,16 @@ nonisolated struct LWModelStoreEmbedder: LWSemanticEmbedder {
     }
 
     private func run(pixels: Int?, inputs: [LWInferenceImage], request: @escaping @Sendable (LWModelLease) -> LWInferenceRequest) async throws -> LWSemanticVectors {
-        let job = try await store.runJob(modelID, pixels: pixels, inputs: inputs, runtime: runtime, request: request)
-        return try await withTaskCancellationHandler {
-            for await event in job.events {
+        let job = try await start(modelID, pixels, inputs, request)
+        return try await LWSemanticJob.vectors(events: job.events, cancel: job.cancel)
+    }
+}
+
+nonisolated enum LWSemanticJob {
+    /// Reads one embedding job to its terminal event; cancelling the task cancels the job.
+    static func vectors(events: AsyncStream<LWInferenceEvent>, cancel: @escaping @Sendable () -> Void) async throws -> LWSemanticVectors {
+        try await withTaskCancellationHandler {
+            for await event in events {
                 switch event {
                 case .completed(let result):
                     guard let vectors = result.embeddings, let dimension = result.embeddingDim, let space = result.space else {
@@ -385,6 +423,6 @@ nonisolated struct LWModelStoreEmbedder: LWSemanticEmbedder {
                 }
             }
             throw Task.isCancelled ? CancellationError() : LWSemanticError.embedder("The embedding job ended without a result.")
-        } onCancel: { job.cancel() }
+        } onCancel: { cancel() }
     }
 }

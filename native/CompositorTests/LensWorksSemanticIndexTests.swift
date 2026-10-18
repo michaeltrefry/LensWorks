@@ -148,6 +148,18 @@ private nonisolated func tempIndexURL() -> URL {
         #expect(report.unavailable == ["offline"] && report.embedded == 1)
     }
 
+    @Test func adoptDuringSyncDiscardsVectorsOfTheOldVersion() async throws {
+        let index = LensWorksSemanticIndex(url: tempIndexURL())
+        try await index.adopt(version())
+        let adopting = AdoptingEmbedder(index: index, replacement: version(assets: ["clip@bbbb"]))
+        let report = try await index.sync(Self.library, embedder: adopting)
+        #expect(report.cancelled && report.embedded == 0, "the superseded batch is not written")
+        #expect(try await index.count() == 0)
+        // Nothing stamped as current was kept, so the new version rebuilds every photo.
+        let rebuilt = try await index.sync(Self.library, embedder: FixtureEmbedder())
+        #expect(rebuilt.embedded == 5 && rebuilt.upToDate == 0)
+    }
+
     @Test func foreignFileIsReplacedOnlyWhenItIsNotOurs() async throws {
         let url = tempIndexURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

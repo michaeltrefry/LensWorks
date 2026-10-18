@@ -900,6 +900,17 @@ final class LensWorksCatalog {
     private(set) var previewSettings: LWApplicationPreviewSettingsStatus?
     var showingCatalog = true
     var searchText = ""
+    /// Search by meaning instead of filename; combined with the active folder and metadata filters.
+    var semanticMode = false
+    /// The meaning query whose ranked results the grid shows (nil = ordinary browsing).
+    private(set) var semanticQuery: String?
+    private(set) var semanticStatus = ""
+    /// Builds the semantic search for a catalog path; nil leaves semantic search unavailable.
+    @ObservationIgnored var semanticFactory: (@MainActor (String) -> LensWorksSemanticSearch?)?
+    @ObservationIgnored private(set) var semantic: LensWorksSemanticSearch?
+    @ObservationIgnored private var semanticTask: Task<Void, Never>?
+    @ObservationIgnored private var semanticBlocked = false
+    @ObservationIgnored private var semanticRun = UUID()
     var recursive = true
     var selection: Set<String> = []
     var error: String?
@@ -992,6 +1003,7 @@ final class LensWorksCatalog {
         catalogEpoch &+= 1; folderEpoch &+= 1; groupEpoch &+= 1
         let epoch = catalogEpoch, previousSelection = selectionOwner, previousQuery = queryOwner, previousCatalog = catalogToken
         activeFolder = nil; searchText = ""; previewSettings = nil
+        semanticTask?.cancel(); semanticTask = nil; semantic = nil; semanticQuery = nil; semanticStatus = ""; semanticBlocked = false
         do {
             try await retireSettingsWork()
             guard !closingRequested, catalogEpoch == epoch else { return }
@@ -1022,6 +1034,7 @@ final class LensWorksCatalog {
             let (_, token) = try await service.context()
             guard !closingRequested, catalogEpoch == epoch else { return }
             catalogPath = result.catalog_path; catalogToken = token
+            semantic = semanticFactory?(result.catalog_path)
             if migrateLegacy {
                 let migrationErrors = await index.migrateLegacyDefaults(defaults: defaults)
                 guard !closingRequested, catalogEpoch == epoch else { return }
@@ -1223,6 +1236,7 @@ final class LensWorksCatalog {
         try Task.checkCancellation()
         try admitCatalogWork()
         queryEpoch &+= 1; previewGeneration &+= 1
+        semanticQuery = nil
         let epoch = catalogEpoch, query = queryEpoch, oldOwner = queryOwner
         // Retire one visible page and its cursor authorities as a single actor transition.
         // Disk-backed selection and the selected photo survive until fresh-page reconciliation.
@@ -1238,6 +1252,7 @@ final class LensWorksCatalog {
             throw CancellationError()
         }
         try await loadPage(cursor: nil)
+        scheduleSemanticIndexing()
     }
     private func loadPage(cursor: String?, window: LensWorksCursorWindow? = nil, ordinal requestedOrdinal: Int64? = nil) async throws {
         try Task.checkCancellation()
@@ -1289,6 +1304,7 @@ final class LensWorksCatalog {
         browseOptions.folder = folder?.id; browseOptions.collection = collection
         browseOptions.folder_recursive = recursive; browseOptions.text = text?.isEmpty == false ? text : nil
         self.recursive = recursive; searchText = text ?? ""
+        semanticQuery = nil
         showingCatalog = true
         try await refreshAssets()
     }
@@ -2879,6 +2895,140 @@ extension LensWorksCatalog {
                 tab.controller.relinkOriginal(path: path, native: native)
             }
         }
+    }
+}
+
+// MARK: - Semantic search
+
+extension LensWorksCatalog {
+    /// Photos scanned for one semantic pass; a larger catalog is indexed and searched over this prefix.
+    static let semanticScanLimit = 50_000
+    private static let semanticSyncLimit = LensWorksSemanticIndex.batchSize * 32
+
+    private static var allPhotosOptions: LWApplicationBrowseOptions {
+        LWApplicationBrowseOptions(text: nil, keyword: nil, keyword_direct: false, folder: nil, folder_recursive: true, collection: nil, date_from: nil, date_until: nil, camera_make: nil, camera: nil, lens: nil, format: nil, rating: nil, flag: nil, label: nil, only_conflicted: false, sort: .Sequence, direction: .Ascending)
+    }
+
+    private func semanticAsset(_ row: LWApplicationDtoGridImage) -> LensWorksCatalogAsset {
+        LensWorksCatalogAsset(sequence: row.sequence.value, id: row.image_id, originalPath: row.filename, state: row.state,
+            previewPath: nil, key: row.key, displayFilename: row.filename, metadataRevision: row.metadata_revision.value,
+            origin: row.origin, translationState: row.translation_state, rating: row.rating?.value, flag: row.flag, label: row.label)
+    }
+
+    /// A photo's index entry is valid for its variant and metadata revision; its pixels are the retained
+    /// thumbnail preview, so photos whose originals are offline stay searchable.
+    private func semanticCandidate(_ row: LWApplicationDtoGridImage) -> LWSemanticCandidate {
+        let asset = semanticAsset(row), service = self.service
+        return LWSemanticCandidate(id: row.image_id, stamp: "\(row.key.variant_id)@\(row.metadata_revision.value)") {
+            try LWInferenceImage(cgImage: try await service.preview(asset, tier: .Thumbnail).image)
+        }
+    }
+
+    /// Pages through the catalog for `options`, handing each page to `each`. Returns false when the
+    /// scan stopped at `semanticScanLimit` before reaching the end.
+    private func semanticScan(_ options: LWApplicationBrowseOptions, scope: LensWorksCatalogScope,
+                              each: ([LWApplicationDtoGridImage]) async throws -> Void) async throws -> Bool {
+        var cursor: String?
+        var seen = 0
+        while true {
+            try checkScope(scope)
+            let page = try await service.browse(options: options, cursor: cursor)
+            try checkScope(scope)
+            try await each(page.rows)
+            seen += page.rows.count
+            guard page.hasMore, let next = page.next, next != cursor else { return true }
+            if seen >= Self.semanticScanLimit { return false }
+            cursor = next
+        }
+    }
+
+    /// Starts the bounded background pass that embeds new and changed photos and prunes removed ones.
+    /// At most one runs; a catalog switch or close cancels it, and the next pass resumes from what the
+    /// index already holds.
+    func scheduleSemanticIndexing() {
+        guard let semantic, semanticTask == nil, !semanticBlocked, !closingRequested, catalogPath != nil else { return }
+        let scope = captureScope(), run = UUID()
+        semanticRun = run
+        semanticTask = Task { [weak self] in
+            await self?.indexCatalog(semantic, scope: scope)
+            if let self, self.semanticRun == run { self.semanticTask = nil }
+        }
+    }
+
+    private func indexCatalog(_ semantic: LensWorksSemanticSearch, scope: LensWorksCatalogScope) async {
+        var live = Set<String>()
+        var embedded = 0, unavailable = 0
+        do {
+            semanticStatus = "Indexing photos for semantic search…"
+            let complete = try await semanticScan(Self.allPhotosOptions, scope: scope) { rows in
+                live.formUnion(rows.map(\.image_id))
+                let report = try await semantic.sync(rows.map { self.semanticCandidate($0) }, limit: Self.semanticSyncLimit)
+                embedded += report.embedded; unavailable += report.unavailable.count
+                if report.cancelled { throw CancellationError() }
+            }
+            try checkScope(scope)
+            if complete { try await semantic.index.prune(keeping: live) }
+            let total = try await semantic.index.count()
+            semanticStatus = "Semantic index ready · \(total) photos" + (embedded > 0 ? " · \(embedded) new" : "") + (unavailable > 0 ? " · \(unavailable) without a preview" : "")
+        } catch is CancellationError {
+            if scopeIsCurrent(scope) { semanticStatus = "Semantic indexing paused; it resumes where it stopped." }
+        } catch {
+            guard scopeIsCurrent(scope) else { return }
+            semanticBlocked = true
+            semanticStatus = "Semantic search is not ready: \(error)"
+        }
+    }
+
+    /// Ranks the photos that pass the active folder, virtual-folder and metadata filters by how well
+    /// they match `query`, and shows them in that order. Photos not yet indexed are embedded first, a
+    /// bounded number per search; the rest are reported and continue in the background.
+    func semanticBrowse(_ query: String) async throws {
+        try admitCatalogWork()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { try await browse(folder: activeFolder, collection: browseOptions.collection, recursive: recursive); return }
+        guard let semantic else { throw LensWorksCatalogError.message("Semantic search is unavailable for this catalog.") }
+        let scope = captureScope()
+        semanticBlocked = false
+        var options = browseOptions
+        options.text = nil
+        var rows: [LWApplicationDtoGridImage] = []
+        _ = try await semanticScan(options, scope: scope) { rows += $0 }
+        var remaining = 0
+        let report = try await semantic.sync(rows.map { semanticCandidate($0) }, limit: LensWorksSemanticSearch.searchSyncBudget)
+        remaining = report.remaining
+        try checkScope(scope)
+        let matches = try await semantic.search(trimmed, within: Set(rows.map(\.image_id)), limit: Int(rowLimit))
+        try checkScope(scope)
+        let byID = Dictionary(rows.map { ($0.image_id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ranked = matches.compactMap { byID[$0.id] }.map(semanticAsset)
+
+        queryEpoch &+= 1; previewGeneration &+= 1
+        let epoch = catalogEpoch, queryAdmitted = queryEpoch, oldOwner = queryOwner
+        assets = []; selection = []; hasMore = false; pageStart = 0; pageComplete = false; scanned = 0
+        cursorWindow.reset(); pageOrdinal = 0; selectionAnchor = nil
+        try await index.clearVisits(owner: oldOwner)
+        guard catalogEpoch == epoch, queryEpoch == queryAdmitted else { throw CancellationError() }
+        queryOwner = UUID().uuidString
+        let admittedOwner = queryOwner
+        try await index.beginVisits(owner: admittedOwner)
+        guard catalogEpoch == epoch, queryEpoch == queryAdmitted, queryOwner == admittedOwner else {
+            try await index.clearVisits(owner: admittedOwner)
+            throw CancellationError()
+        }
+        try await index.rememberPage(owner: admittedOwner, page: 0, rows: ranked.compactMap { row in row.key.map { LensWorksSelectedRow(imageID: row.id, key: $0) } })
+        let owner = selectionOwner
+        let (projected, count) = try await index.selectionProjection(owner: owner, images: ranked.map(\.id))
+        guard catalogEpoch == epoch, queryEpoch == queryAdmitted, queryOwner == admittedOwner, selectionOwner == owner else { throw CancellationError() }
+        assets = ranked; selection = projected; selectionCount = count
+        rowsHighWater = max(rowsHighWater, assets.count)
+        pageComplete = true; scanned = UInt32(clamping: rows.count)
+        pagePublication &+= 1
+        pageStart = assets.first?.sequence ?? 0
+        semanticQuery = trimmed; searchText = trimmed; showingCatalog = true
+        if !assets.contains(where: { $0.id == selectedPhotoID }) { selectedPhotoID = assets.first?.id }
+        status = "Showing \(assets.count) photos matching “\(trimmed)”" + (remaining > 0 ? " · \(remaining) photos still being indexed" : "")
+        await refreshVersions()
+        scheduleSemanticIndexing()
     }
 }
 
