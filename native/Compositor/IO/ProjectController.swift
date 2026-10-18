@@ -11,6 +11,12 @@ final class ProjectController {
     /// Package-persisted LensWorks versions, checkpoints and bounded history. Canvas undo remains session-only.
     var lensWorksDocument: LensWorksPhotoDocument?
     var lensWorksDocumentAssets: [String: Data] = [:]
+    /// The version selected by the LensWorks history controls for this open photo.
+    var selectedLensWorksVersionID: UUID?
+    /// Kept separate from canvas history so changing a persisted LensWorks record still prompts to save.
+    var lensWorksDocumentModified = false
+    /// Protected history is never discarded merely to honor a limit; this is surfaced by the editor controls instead.
+    var lensWorksHistoryWarning: String?
     /// The original location a catalog relink assigned to the open working version this session.
     /// It is recorded by the next save and survives reloads of a package written elsewhere.
     var relinkedOriginal: (version: UUID, path: String, native: LWCatalogNativePath?)?
@@ -29,6 +35,84 @@ final class ProjectController {
         session.canStartProjectOperation && workspace?.isManaging != true
     }
     init(session: EditorSession) { self.session = session }
+
+    /// Starts the persisted native record for a catalog working version. The initial graph is copied out of the editor,
+    /// so later version changes do not share mutable state with its siblings.
+    func initializeLensWorksDocument(photoID: String, named name: String, sourceReference: LensWorksSourceReference? = nil) {
+        guard lensWorksDocument == nil, !photoID.isEmpty else { return }
+        var document = LensWorksPhotoDocument(photoID: photoID)
+        let versionID = document.addVersion(named: name)
+        var content = LensWorksVersionContent()
+        content.layerGraph = session.projectSnapshot().map { LensWorksLayerGraph(layers: $0.manifest.layers) }
+        if let sourceReference { content.sourceReferences = [sourceReference] }
+        guard let index = document.versions.firstIndex(where: { $0.id == versionID }) else { return }
+        document.versions[index].content = content
+        lensWorksDocument = document
+        selectedLensWorksVersionID = versionID
+        lensWorksDocumentModified = true
+    }
+
+    func addLensWorksVersion(named name: String) throws {
+        guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        let versionID = document.addVersion(named: name)
+        lensWorksDocument = document
+        selectedLensWorksVersionID = versionID
+        lensWorksDocumentModified = true
+    }
+
+    func duplicateLensWorksVersion(_ id: UUID, named name: String) throws {
+        guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        selectedLensWorksVersionID = try document.duplicateVersion(id, named: name)
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    /// Records the current native layer/RAW graph as a durable, independently undoable version edit.
+    func captureLensWorksComposition(in id: UUID) throws {
+        guard var document = lensWorksDocument, let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+        record(try document.perform(.replaceLayerGraph(LensWorksLayerGraph(layers: snapshot.manifest.layers)), on: id))
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    func undoLensWorksVersion(_ id: UUID) throws {
+        guard var document = lensWorksDocument else { throw ProjectError.invalid }
+        try document.undo(id)
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    func redoLensWorksVersion(_ id: UUID) throws {
+        guard var document = lensWorksDocument else { throw ProjectError.invalid }
+        record(try document.redo(id))
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    func addLensWorksCheckpoint(named name: String, to id: UUID) throws {
+        guard var document = lensWorksDocument, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProjectError.invalid }
+        _ = try document.addCheckpoint(named: name, to: id)
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    func restoreLensWorksCheckpoint(_ checkpoint: UUID, in id: UUID) throws {
+        guard var document = lensWorksDocument else { throw ProjectError.invalid }
+        record(try document.restoreCheckpoint(checkpoint, in: id))
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    func setLensWorksMaxUndoSteps(_ limit: Int) throws {
+        guard var document = lensWorksDocument, limit > 0 else { throw ProjectError.invalid }
+        record(document.setMaxUndoSteps(limit))
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
+    private func record(_ report: LensWorksPruneReport) {
+        lensWorksHistoryWarning = report.warnings.isEmpty ? nil : report.warnings.joined(separator: "\n")
+    }
 
     private func begin() -> Bool {
         guard session.canStartProjectOperation else { return false }
@@ -296,6 +380,9 @@ final class ProjectController {
                 }
                 session.projectURL = destination
                 session.history.markSaved(revision)
+                if lensWorksDocument == snapshot.lensWorksDocument, lensWorksDocumentAssets == snapshot.lensWorksDocumentAssets {
+                    lensWorksDocumentModified = false
+                }
                 saveGeneration += 1
                 if recordsRecentProjects { RecentProjects.shared.note(destination) }
                 await rememberProjectDigest(for: destination)
@@ -357,6 +444,9 @@ final class ProjectController {
             workingVersion = snapshot.workingVersion
             lensWorksDocument = snapshot.lensWorksDocument
             lensWorksDocumentAssets = snapshot.lensWorksDocumentAssets
+            selectedLensWorksVersionID = lensWorksDocument?.versions.first?.id
+            lensWorksDocumentModified = false
+            lensWorksHistoryWarning = nil
             if recordsRecentProjects { RecentProjects.shared.note(source) }
             await rememberProjectDigest(for: source)
             watchProject(at: source)
@@ -424,7 +514,7 @@ final class ProjectController {
     private func confirmReplacement() async -> Bool {
         // A save still writing finishes before the project can be closed or replaced, so its file is never cut short.
         await finishWriting()
-        guard session.isModified, session.document != nil else { return true }
+        guard (session.isModified || lensWorksDocumentModified), session.document != nil else { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to \(session.projectURL?.lastPathComponent ?? "Untitled")?"
         alert.informativeText = "Your changes will be lost if you don’t save them."

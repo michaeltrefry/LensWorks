@@ -20,6 +20,10 @@ struct LensWorksCatalogWorkspace: View {
     @State private var keywordEdit: KeywordEdit?
     @State private var relinkFocus: LensWorksRelinkFocus = .general
     @State private var showingRelink = false
+    @State private var documentVersionName = "Version"
+    @State private var documentCheckpointName = "Checkpoint"
+    @State private var documentUndoLimit = "100"
+    @State private var documentHistoryRevision = 0
     enum KeywordEdit: String, Identifiable { case rename = "Rename Keyword", move = "Move Keyword", synonym = "Add Synonym"; var id: String { rawValue } }
     static let labels = ["Red", "Yellow", "Green", "Blue", "Purple"]
 
@@ -51,6 +55,7 @@ struct LensWorksCatalogWorkspace: View {
                             // A container element, so the editor's own control identifiers are not overwritten.
                             .accessibilityElement(children: .contain)
                             .accessibilityIdentifier("LensWorks.editorContent")
+                        lensWorksDocumentHistoryControls
                         if let identity = loadedEditorIdentity() {
                             Text(identity)
                                 .accessibilityIdentifier("LensWorks.loadedEditorDocument")
@@ -125,6 +130,70 @@ struct LensWorksCatalogWorkspace: View {
         .sheet(isPresented: Binding(get: { movingGroup != nil }, set: { if !$0 { movingGroup = nil } })) { if let group = movingGroup { LensWorksGroupParentPicker(catalog: catalog, group: group) } }
         .sheet(item: $largePhoto) { asset in LensWorksLargePreview(asset: asset, catalog: catalog) }
         .sheet(isPresented: $showingRelink) { LensWorksRelinkSheet(catalog: catalog, window: workspace.window, focus: relinkFocus) }
+    }
+
+    @ViewBuilder private var lensWorksDocumentHistoryControls: some View {
+        let _ = documentHistoryRevision
+        let controller = workspace.current.controller
+        if let document = controller.lensWorksDocument {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Photo Versions").font(.headline)
+                    Picker("Version", selection: Binding(get: { controller.selectedLensWorksVersionID }, set: { controller.selectedLensWorksVersionID = $0 })) {
+                        ForEach(document.versions) { version in
+                            Text(version.name).tag(Optional(version.id))
+                        }
+                    }.labelsHidden().frame(maxWidth: 180)
+                    TextField("Version name", text: $documentVersionName).frame(width: 120)
+                    Button("New") { updateDocumentHistory { try controller.addLensWorksVersion(named: documentVersionName) } }
+                    Button("Duplicate") {
+                        guard let version = controller.selectedLensWorksVersionID else { return }
+                        updateDocumentHistory { try controller.duplicateLensWorksVersion(version, named: documentVersionName) }
+                    }
+                    Button("Capture Composition") {
+                        guard let version = controller.selectedLensWorksVersionID else { return }
+                        updateDocumentHistory { try controller.captureLensWorksComposition(in: version) }
+                    }
+                }
+                if let versionID = controller.selectedLensWorksVersionID,
+                   let version = document.versions.first(where: { $0.id == versionID }) {
+                    HStack {
+                        Button("Undo") { updateDocumentHistory { try controller.undoLensWorksVersion(versionID) } }
+                            .disabled(version.undo.isEmpty)
+                        Button("Redo") { updateDocumentHistory { try controller.redoLensWorksVersion(versionID) } }
+                            .disabled(version.redo.isEmpty)
+                        TextField("Checkpoint name", text: $documentCheckpointName).frame(width: 140)
+                        Button("Checkpoint") { updateDocumentHistory { try controller.addLensWorksCheckpoint(named: documentCheckpointName, to: versionID) } }
+                        Menu("Restore Checkpoint") {
+                            ForEach(version.checkpoints) { checkpoint in
+                                Button(checkpoint.name) { updateDocumentHistory { try controller.restoreLensWorksCheckpoint(checkpoint.id, in: versionID) } }
+                            }
+                        }.disabled(version.checkpoints.isEmpty)
+                        TextField("Undo limit", text: $documentUndoLimit).frame(width: 68)
+                        Button("Set Limit") {
+                            guard let limit = Int(documentUndoLimit) else { catalog.error = "Undo limit must be a positive whole number."; return }
+                            updateDocumentHistory { try controller.setLensWorksMaxUndoSteps(limit) }
+                        }
+                    }.font(.caption)
+                }
+                if let warning = controller.lensWorksHistoryWarning {
+                    Text(warning).font(.caption).foregroundStyle(.orange)
+                        .accessibilityIdentifier("LensWorks.documentHistoryWarning")
+                }
+            }
+            .padding(8)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .accessibilityIdentifier("LensWorks.documentHistory")
+        }
+    }
+
+    private func updateDocumentHistory(_ operation: () throws -> Void) {
+        do {
+            try operation()
+            documentHistoryRevision &+= 1
+        } catch {
+            catalog.error = error.localizedDescription
+        }
     }
 
     private func locate(_ focus: LensWorksRelinkFocus) { relinkFocus = focus; showingRelink = true }

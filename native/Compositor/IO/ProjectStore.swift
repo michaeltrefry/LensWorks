@@ -194,6 +194,7 @@ actor ProjectStore {
             let encoded = try encoder.encode(document)
             guard encoded.count <= 4 * 1024 * 1024 else { throw ProjectError.tooLarge }
             var documentContents = ["document.json": FileWrapper(regularFileWithContents: encoded)]
+            guard snapshot.lensWorksDocumentAssets.count <= 10_000 else { throw ProjectError.tooLarge }
             var assets: [String: FileWrapper] = [:]
             for (id, data) in snapshot.lensWorksDocumentAssets {
                 guard LensWorksDocumentStore.isValidAssetID(id), data.count <= 512 * 1024 * 1024 else { throw ProjectError.invalid }

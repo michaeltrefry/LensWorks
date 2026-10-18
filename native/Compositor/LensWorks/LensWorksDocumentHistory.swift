@@ -13,9 +13,10 @@ nonisolated struct LensWorksSourceReference: Codable, Sendable, Equatable, Hasha
         self.assetID = assetID
     }
 
-    init(legacyValue: String) {
-        let parts = legacyValue.split(separator: "@", maxSplits: 1).map(String.init)
-        self.init(photoID: parts[0], revision: parts.count == 2 ? parts[1] : nil)
+    init(legacyValue: String) throws {
+        let parts = legacyValue.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard let photoID = parts.first, !photoID.isEmpty else { throw LensWorksDocumentError.invalidSourceReference }
+        self.init(photoID: photoID, revision: parts.count == 2 ? parts[1] : nil)
     }
 }
 
@@ -70,8 +71,9 @@ nonisolated struct LensWorksVersionContent: Codable, Sendable, Equatable {
         if let references = try? c.decode([LensWorksSourceReference].self, forKey: .sourceReferences) {
             sourceReferences = references
         } else {
-            sourceReferences = try c.decodeIfPresent([String].self, forKey: .sourceReferences)?.map(LensWorksSourceReference.init(legacyValue:)) ?? []
+            sourceReferences = try c.decodeIfPresent([String].self, forKey: .sourceReferences)?.map { try LensWorksSourceReference(legacyValue: $0) } ?? []
         }
+        guard sourceReferences.allSatisfy({ !$0.photoID.isEmpty }) else { throw LensWorksDocumentError.invalidSourceReference }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -116,9 +118,10 @@ nonisolated enum LensWorksDocumentCommand: Codable, Sendable, Equatable {
             guard content.layers.contains(where: { $0.id == id }) else { throw LensWorksDocumentError.missingLayer }
             content.layers.removeAll { $0.id == id }
         case .addSourceReference(let reference):
-            let record = LensWorksSourceReference(legacyValue: reference)
+            let record = try LensWorksSourceReference(legacyValue: reference)
             if !content.sourceReferences.contains(record) { content.sourceReferences.append(record) }
         case .addSourceReferenceRecord(let reference):
+            guard !reference.photoID.isEmpty else { throw LensWorksDocumentError.invalidSourceReference }
             if !content.sourceReferences.contains(reference) { content.sourceReferences.append(reference) }
         case .replaceLayerGraph(let graph): content.layerGraph = graph
         case .replaceLiveSource(let layerID, let source):
@@ -133,7 +136,7 @@ nonisolated enum LensWorksDocumentCommand: Codable, Sendable, Equatable {
 }
 
 nonisolated enum LensWorksDocumentError: Error, Equatable {
-    case duplicateLayer, missingLayer, unknownVersion, unknownCheckpoint, unsupportedSchema(Int), nothingToUndo, nothingToRedo
+    case duplicateLayer, missingLayer, invalidSourceReference, unknownVersion, unknownCheckpoint, unsupportedSchema(Int), nothingToUndo, nothingToRedo
 }
 
 nonisolated struct LensWorksHistoryStep: Codable, Sendable, Equatable, Identifiable {

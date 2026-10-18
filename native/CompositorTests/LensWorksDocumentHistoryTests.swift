@@ -96,6 +96,36 @@ struct LensWorksDocumentHistoryTests {
         #expect(doc.versions[0].undo.count == 1)
     }
 
+    @Test func legacySourceReferencesRejectEmptyPhotoIDs() throws {
+        for legacy in ["", "@"] {
+            #expect(throws: LensWorksDocumentError.invalidSourceReference) {
+                try LensWorksSourceReference(legacyValue: legacy)
+            }
+            #expect(throws: LensWorksDocumentError.invalidSourceReference) {
+                try JSONDecoder().decode(LensWorksVersionContent.self, from: Data(("{\"sourceReferences\":[\"" + legacy + "\"]}").utf8))
+            }
+        }
+        var document = LensWorksPhotoDocument(photoID: "p")
+        let version = document.addVersion(named: "A")
+        #expect(throws: LensWorksDocumentError.invalidSourceReference) {
+            try document.perform(.addSourceReference(""), on: version)
+        }
+        #expect(throws: LensWorksDocumentError.invalidSourceReference) {
+            try document.perform(.addSourceReferenceRecord(.init(photoID: "")), on: version)
+        }
+    }
+
+    @Test func packageSaveRejectsTooManyLensWorksAssets() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LWProject-\(UUID().uuidString).comp")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manifest = ProjectManifest(documentID: UUID(), width: 10, height: 10, activeLayerID: nil, layers: [])
+        let assets = Dictionary(uniqueKeysWithValues: (0...10_000).map { ("asset-\($0)", Data([0])) })
+        let snapshot = ProjectSnapshot(manifest: manifest, images: [:], lensWorksDocument: LensWorksPhotoDocument(photoID: "p"),
+            lensWorksDocumentAssets: assets)
+        await #expect(throws: ProjectError.self) { try await ProjectStore.shared.save(snapshot, to: directory) }
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
+    }
+
     @Test func schemaOneDocumentsUpgradeAndCommandsRoundtripThroughHistory() throws {
         let legacyLayer = layer("L", asset: "z")
         let graph = LensWorksLayerGraph(layers: [ProjectLayerRecord(id: UUID(), name: "Live", isVisible: true,
