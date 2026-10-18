@@ -91,7 +91,10 @@ nonisolated enum LensWorksPanoramaStitcher {
         let minX = positions.map(\.x).min()!, maxX = zip(positions, rasters).map { $0.0.x + $0.1.width }.max()!
         let minY = positions.map(\.y).min()!, maxY = zip(positions, rasters).map { $0.0.y + $0.1.height }.max()!
         let worldWidth = maxX - minX, worldHeight = maxY - minY
-        let mappedX = (0...worldWidth).map { project(Double($0) / Double(max(1, worldWidth)), projection: projection) }
+        // Projected coordinates are normalised, so rescale them to span the world's pixel width.
+        let projected = (0...worldWidth).map { project(Double($0) / Double(max(1, worldWidth)), projection: projection) }
+        let projectedLow = projected.first!, projectedSpan = max(1e-9, projected.last! - projectedLow)
+        let mappedX = projected.map { ($0 - projectedLow) / projectedSpan * Double(worldWidth) }
         // Keep one unpainted projection column on each side. Auto Crop removes it; Fill Edges retains it and extends
         // the adjacent projected samples, which makes the chosen boundary policy explicit in the published rectangle.
         let outputWidth = max(1, Int((mappedX.max()! - mappedX.min()!).rounded()) + 3)

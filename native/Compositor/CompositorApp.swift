@@ -144,14 +144,14 @@ struct CompositorApp: App {
                     CommandMenu("Photo") {
                         let catalog = applicationDelegate.catalog
                         Menu("Merge to Panorama") {
-                            LensWorksCommandButton(.mergePanorama, argument: "spherical", title: "Spherical", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
-                                Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: .spherical, boundary: .autoCrop) }
-                            }
-                            LensWorksCommandButton(.mergePanorama, argument: "cylindrical", title: "Cylindrical", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
-                                Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: .cylindrical, boundary: .autoCrop) }
-                            }
-                            LensWorksCommandButton(.mergePanorama, argument: "perspective", title: "Perspective", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
-                                Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: .perspective, boundary: .autoCrop) }
+                            ForEach(LensWorksPanoramaBoundary.allCases, id: \.self) { boundary in
+                                let boundaryTitle = boundary == .autoCrop ? "Auto Crop" : "Fill Edges"
+                                ForEach(LensWorksPanoramaProjection.allCases, id: \.self) { projection in
+                                    LensWorksCommandButton(.mergePanorama, argument: "\(projection.rawValue) \(boundary.rawValue)", title: "\(projection.rawValue.capitalized) – \(boundaryTitle)", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
+                                        Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: projection, boundary: boundary) }
+                                    }
+                                }
+                                if boundary == .autoCrop { Divider() }
                             }
                         }
                     }

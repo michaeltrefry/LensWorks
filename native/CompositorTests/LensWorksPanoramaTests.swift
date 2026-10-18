@@ -46,11 +46,26 @@ import Testing
         #expect(stride(from: 3, to: filled.rgba.count, by: 4).allSatisfy { filled.rgba[$0] == 255 })
     }
 
+    @Test(arguments: LensWorksPanoramaProjection.allCases)
+    func projectionKeepsMeaningfulDimensions(projection: LensWorksPanoramaProjection) throws {
+        let step = width - overlap, world = step * 2 + width
+        let result = try LensWorksPanoramaStitcher.stitch([frame(start: 0), frame(start: step), frame(start: step * 2)], projection: projection, boundary: .autoCrop)
+        #expect(result.width >= world - 4 && result.height == height)
+        var distinct = Set<UInt32>()
+        for offset in stride(from: 0, to: result.rgba.count, by: 4) {
+            let red = UInt32(result.rgba[offset]), green = UInt32(result.rgba[offset + 1]), blue = UInt32(result.rgba[offset + 2])
+            distinct.insert(red << 16 | green << 8 | blue)
+        }
+        #expect(distinct.count > 1000)
+    }
+
     @Test func sourceLinksRoundTripWithEditableWorkingVersion() throws {
-        let source = LensWorksPanoramaSource(photoID: "one", variantID: "master", originalPath: "/Photos/one.png", nativeOriginal: nil)
-        let version = LensWorksWorkingVersion(id: UUID(), photoID: "result", catalogPath: "/Catalog", originalPath: "/Photos/result.png", projectPath: "/Edits/result.comp", name: "Result", sourceLinks: [source])
+        let assets = (1...3).map { LensWorksCatalogAsset(sequence: Int64($0), id: "a\($0)", originalPath: "/Photos/\($0).png", state: "ready", previewPath: nil) }
+        let sources = assets.map(LensWorksPanoramaSource.init)
+        #expect(sources.map(\.photoID) == ["a1", "a2", "a3"])
+        let version = LensWorksWorkingVersion(id: UUID(), photoID: "result", catalogPath: "/Catalog", originalPath: "/Photos/result.png", projectPath: "/Edits/result.comp", name: "Result", sourceLinks: sources)
         let decoded = try JSONDecoder().decode(LensWorksWorkingVersion.self, from: version.encoded())
-        #expect((decoded.sourceLinks ?? []) == [source])
+        #expect((decoded.sourceLinks ?? []) == sources)
         #expect(decoded.photoID == "result")
     }
 }
