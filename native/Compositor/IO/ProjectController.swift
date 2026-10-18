@@ -1,4 +1,6 @@
 import AppKit
+import CryptoKit
+import ImageIO
 import UniformTypeIdentifiers
 import SwiftUI
 
@@ -43,7 +45,12 @@ final class ProjectController {
         var document = LensWorksPhotoDocument(photoID: photoID)
         let versionID = document.addVersion(named: name)
         var content = LensWorksVersionContent()
-        content.layerGraph = session.projectSnapshot().map { LensWorksLayerGraph(layers: $0.manifest.layers) }
+        // A live RAW photo's source stays in the working version's own package; only byte-retainable graphs are copied.
+        var assets = lensWorksDocumentAssets
+        if let snapshot = session.projectSnapshot(), let graph = try? retainedGraph(snapshot, assets: &assets) {
+            content.layerGraph = graph
+            lensWorksDocumentAssets = assets
+        }
         if let sourceReference { content.sourceReferences = [sourceReference] }
         guard let index = document.versions.firstIndex(where: { $0.id == versionID }) else { return }
         document.versions[index].content = content
@@ -67,10 +74,89 @@ final class ProjectController {
         lensWorksDocumentModified = true
     }
 
+    /// Copies the snapshot's layer pixels into content-addressed document assets and returns the graph that names them,
+    /// so every captured composition keeps the bytes it needs however the canvas changes afterwards.
+    /// Float-backed (live RAW) layers have no byte form here and are refused.
+    private func retainedGraph(_ snapshot: ProjectSnapshot, assets: inout [String: Data]) throws -> LensWorksLayerGraph {
+        var records = snapshot.manifest.layers
+        for i in records.indices {
+            let layerID = records[i].id
+            for isMask in [false, true] {
+                guard (isMask ? records[i].maskFile : records[i].imageFile) != nil else { continue }
+                guard let asset = (isMask ? snapshot.masks : snapshot.images)[layerID] else { throw ProjectError.missingImage }
+                guard asset.linear == nil, asset.linearPlane == nil else {
+                    throw LensWorksCommandRefusal(reason: "Versions of floating-point or live RAW layers can’t retain their pixels yet.")
+                }
+                let data = NSMutableData()
+                guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw ProjectError.encode }
+                CGImageDestinationAddImage(destination, asset.image, nil)
+                guard CGImageDestinationFinalize(destination) else { throw ProjectError.encode }
+                let digest = SHA256.hash(data: data as Data).map { String(format: "%02x", $0) }.joined()
+                let id = digest + (isMask ? ".mask.png" : ".png")
+                assets[id] = data as Data
+                if isMask { records[i].maskFile = id } else { records[i].imageFile = id }
+            }
+            records[i].liveSourceFile = nil
+        }
+        return LensWorksLayerGraph(layers: records)
+    }
+
+    /// Puts a version's stored layer graph on the canvas, decoding its retained assets back into layers.
+    private func installLensWorksContent(_ content: LensWorksVersionContent) throws {
+        guard let graph = content.layerGraph, let base = session.projectSnapshot() else { return }
+        var records = graph.layers
+        var images: [UUID: ImportedImage] = [:], masks: [UUID: ImportedImage] = [:]
+        func decode(_ id: String, name: String, isMask: Bool) throws -> ImportedImage {
+            guard let bytes = lensWorksDocumentAssets[id],
+                  let source = CGImageSourceCreateWithData(bytes as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
+                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 96,
+                      kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
+                  !isMask || LayerMask.isValid(image) else { throw ProjectError.missingImage }
+            return ImportedImage(image: image, thumbnail: thumbnail, name: name)
+        }
+        for i in records.indices {
+            let layer = records[i]
+            if let file = layer.imageFile {
+                images[layer.id] = try decode(file, name: layer.name, isMask: false)
+                records[i].imageFile = "\(layer.id.uuidString).png"
+            }
+            if let file = layer.maskFile {
+                masks[layer.id] = try decode(file, name: layer.name, isMask: true)
+                records[i].maskFile = "\(layer.id.uuidString).mask.png"
+            }
+        }
+        let old = base.manifest
+        let active = old.activeLayerID.flatMap { id in records.contains { $0.id == id } ? id : nil }
+        let manifest = ProjectManifest(resolution: old.resolution, documentID: old.documentID, width: old.width, height: old.height,
+            activeLayerID: active, layers: records, guides: old.guides, metadataStorage: old.metadataStorage)
+        let url = session.projectURL
+        session.installProject(ProjectSnapshot(manifest: manifest, images: images, masks: masks), from: url ?? URL(fileURLWithPath: "/"))
+        session.projectURL = url
+    }
+
+    /// Selects a version and shows its stored composition on the canvas.
+    func selectLensWorksVersion(_ id: UUID) throws {
+        guard let version = lensWorksDocument?.versions.first(where: { $0.id == id }) else { throw ProjectError.invalid }
+        try installLensWorksContent(version.content)
+        selectedLensWorksVersionID = id
+    }
+
+    /// Commits a changed document only after the version's content is on the canvas.
+    private func commit(_ document: LensWorksPhotoDocument, showing id: UUID) throws {
+        if let content = document.versions.first(where: { $0.id == id })?.content { try installLensWorksContent(content) }
+        lensWorksDocument = document
+        lensWorksDocumentModified = true
+    }
+
     /// Records the current native layer/RAW graph as a durable, independently undoable version edit.
     func captureLensWorksComposition(in id: UUID) throws {
         guard var document = lensWorksDocument, let snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
-        record(try document.perform(.replaceLayerGraph(LensWorksLayerGraph(layers: snapshot.manifest.layers)), on: id))
+        var assets = lensWorksDocumentAssets
+        let graph = try retainedGraph(snapshot, assets: &assets)
+        record(try document.perform(.replaceLayerGraph(graph), on: id))
+        lensWorksDocumentAssets = assets
         lensWorksDocument = document
         lensWorksDocumentModified = true
     }
@@ -78,15 +164,13 @@ final class ProjectController {
     func undoLensWorksVersion(_ id: UUID) throws {
         guard var document = lensWorksDocument else { throw ProjectError.invalid }
         try document.undo(id)
-        lensWorksDocument = document
-        lensWorksDocumentModified = true
+        try commit(document, showing: id)
     }
 
     func redoLensWorksVersion(_ id: UUID) throws {
         guard var document = lensWorksDocument else { throw ProjectError.invalid }
         record(try document.redo(id))
-        lensWorksDocument = document
-        lensWorksDocumentModified = true
+        try commit(document, showing: id)
     }
 
     func addLensWorksCheckpoint(named name: String, to id: UUID) throws {
@@ -99,8 +183,7 @@ final class ProjectController {
     func restoreLensWorksCheckpoint(_ checkpoint: UUID, in id: UUID) throws {
         guard var document = lensWorksDocument else { throw ProjectError.invalid }
         record(try document.restoreCheckpoint(checkpoint, in: id))
-        lensWorksDocument = document
-        lensWorksDocumentModified = true
+        try commit(document, showing: id)
     }
 
     func setLensWorksMaxUndoSteps(_ limit: Int) throws {

@@ -139,7 +139,10 @@ struct LensWorksCatalogWorkspace: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Photo Versions").font(.headline)
-                    Picker("Version", selection: Binding(get: { controller.selectedLensWorksVersionID }, set: { controller.selectedLensWorksVersionID = $0 })) {
+                    Picker("Version", selection: Binding(get: { controller.selectedLensWorksVersionID }, set: { id in
+                        guard let id else { return }
+                        updateDocumentHistory { try controller.selectLensWorksVersion(id) }
+                    })) {
                         ForEach(document.versions) { version in
                             Text(version.name).tag(Optional(version.id))
                         }
