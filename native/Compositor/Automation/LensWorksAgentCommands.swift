@@ -858,15 +858,15 @@ struct LensWorksAgentProjectCommands {
             let prior = catalog.error, files = originals + [outputURL]
             catalog.error = nil
             defer { catalog.error = prior }
-            func runWithAccess(_ index: Int) async throws {
+            func runWithAccess(_ index: Int) async throws -> LWLinearMediaRecoveryError? {
                 if index == files.count {
-                    await catalog.mergeSelectionToPanorama(workspace: workspace, projection: projection, boundary: boundary,
+                    return await catalog.mergeSelectionToPanorama(workspace: workspace, projection: projection, boundary: boundary,
                         admitted: (originals.map(\.path), outputURL.path))
                 } else {
-                    try await folders.withAccess(to: files[index]) { try await runWithAccess(index + 1) }
+                    return try await folders.withAccess(to: files[index]) { try await runWithAccess(index + 1) }
                 }
             }
-            try await runWithAccess(0)
+            if let recovery = try await runWithAccess(0) { throw recovery }
             if let error = catalog.error { throw refuse(error) }
             try Task.checkCancellation()
             guard workspace.current.controller.workingVersion?.sourceLinks?.map(\.photoID) == selected.map(\.photoID) else {

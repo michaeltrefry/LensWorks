@@ -124,6 +124,21 @@ struct LensWorksCatalogBrowserTests {
         }
     }
 
+    @Test func mediaRecoveryWarningSurvivesScopedErrorResetAndCatalogReconnectUntilAcknowledged() async throws {
+        let fixture = try Fixture(images: 0)
+        try await fixture.run { model in
+            let preserved = fixture.root.appendingPathComponent("preserved-original.dng")
+            let recovery = LWLinearMediaRecoveryError(reason: "The publication changed; rollback was refused.", recoveryPaths: [preserved])
+            model.reportMediaRecovery(recovery)
+            model.error = nil // A command restores its prior scoped error, but cannot dismiss file recovery.
+            #expect(model.presentedError?.contains(preserved.path) == true)
+            await model.connect(fixture.catalog.path)
+            #expect(model.error == nil && model.presentedError?.contains(preserved.path) == true)
+            model.dismissPresentedError()
+            #expect(model.error == nil && model.mediaRecovery == nil && model.presentedError == nil)
+        }
+    }
+
     #if DEBUG
     @Test(arguments: [LensWorksCatalogContinuationPoint.panoramaAdmission, .panoramaDocumentReady, .panoramaSaved])
     func cancellationRetiresWholePanoramaWithoutChangingTheOpenDocument(_ point: LensWorksCatalogContinuationPoint) async throws {
@@ -1469,7 +1484,7 @@ struct LensWorksCatalogBrowserTests {
             for waiter in owned { waiter.resume() }
         }
     }
-    private actor ContinuationGate {
+    actor ContinuationGate {
         private(set) var entered = false
         private(set) var released = false
         private var continuation: CheckedContinuation<Void, Never>?

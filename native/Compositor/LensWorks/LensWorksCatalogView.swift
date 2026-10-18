@@ -84,9 +84,9 @@ struct LensWorksCatalogWorkspace: View {
             }
         }
         .onChange(of: workspace.current.session.projectURL) { _, _ in Task { await catalog.refreshVersions() } }
-        .alert("LensWorks", isPresented: Binding(get: { catalog.error != nil }, set: { if !$0 { catalog.error = nil } })) {
-            Button("OK") { catalog.error = nil }
-        } message: { Text(catalog.error ?? "") }
+        .alert("LensWorks", isPresented: Binding(get: { catalog.presentedError != nil }, set: { if !$0 { catalog.dismissPresentedError() } })) {
+            Button("OK") { catalog.dismissPresentedError() }
+        } message: { Text(catalog.presentedError ?? "") }
         .alert(editingGroup == nil ? "New Virtual Folder" : "Rename Virtual Folder", isPresented: $groupPrompt) {
             TextField("Name", text: $groupName)
             Button("Cancel", role: .cancel) { }

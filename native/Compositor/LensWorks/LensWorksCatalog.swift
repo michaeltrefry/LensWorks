@@ -93,7 +93,7 @@ nonisolated struct LensWorksImportReport: Decodable, Sendable {
 #if DEBUG
 nonisolated enum LensWorksCatalogCloseFaultPoint: Sendable, Equatable { case beforeSubmit, beforeDecode, beforeRelease }
 nonisolated enum LensWorksPreviewDrainFaultPoint: Sendable, Equatable { case afterSubmit, beforeDecode, beforeRelease }
-nonisolated enum LensWorksCatalogContinuationPoint: Sendable, Equatable { case groupRead, membershipIdentity, organizationApplied, importMonitorTerminal, settingsStatus, catalogRecipeAdmission, catalogRecipeReply, originalResolved, panoramaAdmission, panoramaDocumentReady, panoramaSaved }
+nonisolated enum LensWorksCatalogContinuationPoint: Sendable, Equatable { case groupRead, membershipIdentity, organizationApplied, importMonitorTerminal, settingsStatus, catalogRecipeAdmission, catalogRecipeReply, originalResolved, panoramaAdmission, panoramaDocumentReady, panoramaSaved, panoramaPublished }
 @MainActor private final class LensWorksImportMonitorReceipt { var complete = false }
 #endif
 
@@ -833,7 +833,7 @@ final class LensWorksCatalog {
     private var busyOwner: UUID?
     var isBusy: Bool { busyOwner != nil }
     private(set) var isMergingPanorama = false
-    @ObservationIgnored private var panoramaTask: Task<Void, Never>?
+    @ObservationIgnored private var panoramaTask: Task<LWLinearMediaRecoveryError?, Never>?
     @ObservationIgnored private var panoramaOwner: UUID?
     func cancelPanorama() { if isMergingPanorama { panoramaTask?.cancel() } }
     private(set) var closingRequested = false
@@ -915,6 +915,28 @@ final class LensWorksCatalog {
     var recursive = true
     var selection: Set<String> = []
     var error: String?
+    @ObservationIgnored private(set) var mediaRecoveryRevision: UInt64 = 0
+    private(set) var mediaRecovery: LWLinearMediaRecoveryError?
+    var presentedError: String? {
+        guard let recovery = mediaRecovery?.localizedDescription else { return error }
+        guard let error, !error.contains(recovery) else { return error ?? recovery }
+        return error + "\n" + recovery
+    }
+    /// Recovery concerns preserved filesystem media, not one catalog's lifetime. Only explicit
+    /// acknowledgement dismisses it; opening a catalog or restoring a command's old error cannot.
+    func reportMediaRecovery(_ failure: LWLinearMediaRecoveryError) {
+        let prior = mediaRecovery?.localizedDescription
+        mediaRecoveryRevision &+= 1
+        if let previous = mediaRecovery {
+            var seen = Set<URL>()
+            let paths = (previous.recoveryPaths + failure.recoveryPaths).filter { seen.insert($0).inserted }
+            mediaRecovery = LWLinearMediaRecoveryError(reason: previous.reason == failure.reason ? failure.reason : previous.reason + "\n" + failure.reason, recoveryPaths: paths)
+        } else { mediaRecovery = failure }
+        let message = mediaRecovery!.localizedDescription
+        if error == nil || error == prior { error = message }
+        else { error = error! + "\n" + message }
+    }
+    func dismissPresentedError() { error = nil; mediaRecovery = nil }
     var status = "Open or create a catalog to begin."
     @ObservationIgnored let service: LensWorksCatalogService
     /// Locate Originals review and storage-operation custody for this catalog.
@@ -2575,25 +2597,28 @@ final class LensWorksCatalog {
     /// Publishes a generated panorama into the same user-chosen filesystem workflow as working versions, imports that
     /// published original through the ordinary catalog importer, then opens a normal editable project linked to every
     /// source. The selected originals are only read.
-    func mergeSelectionToPanorama(workspace: ProjectWorkspace, projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary,
-        admitted: (sources: [String], output: String)? = nil) async {
-        guard panoramaAvailability(workspace: workspace) == nil, panoramaTask == nil else { return }
+    @discardableResult func mergeSelectionToPanorama(workspace: ProjectWorkspace, projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary,
+        admitted: (sources: [String], output: String)? = nil) async -> LWLinearMediaRecoveryError? {
+        guard panoramaAvailability(workspace: workspace) == nil, panoramaTask == nil else { return nil }
         let owner = UUID()
         let task = Task { await performPanoramaMerge(workspace: workspace, projection: projection, boundary: boundary, admitted: admitted) }
         panoramaOwner = owner; panoramaTask = task; isMergingPanorama = true
-        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        let recovery = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         if panoramaOwner == owner { panoramaTask = nil; panoramaOwner = nil; isMergingPanorama = false }
+        return recovery
     }
 
     private func performPanoramaMerge(workspace: ProjectWorkspace, projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary,
-        admitted: (sources: [String], output: String)?) async {
-        guard panoramaAvailability(workspace: workspace) == nil, let catalogPath, let output = outputDirectory else { return }
+        admitted: (sources: [String], output: String)?) async -> LWLinearMediaRecoveryError? {
+        guard panoramaAvailability(workspace: workspace) == nil, let catalogPath, let output = outputDirectory else { return nil }
         let scope = captureScope(), selectionEpoch = catalogSelectionEpoch, visibleSelection = selection
         let busy = beginBusy(); defer { finishBusy(busy) }
+        var publication: (destination: LWLinearMediaDestination, name: String)?
         func checkAdmission() throws {
             try Task.checkCancellation(); try checkScope(scope)
             guard outputDirectory == output, catalogSelectionEpoch == selectionEpoch,
                   selection == visibleSelection, workspace.canSwitch else { throw CancellationError() }
+            if let publication { try publication.destination.validatePublication(named: publication.name) }
         }
         do {
             #if DEBUG
@@ -2615,7 +2640,7 @@ final class LensWorksCatalog {
                     throw LensWorksCommandRefusal(reason: "The panorama’s source originals or output folder changed after folder admission: nothing was merged.")
                 }
             }
-            let destination = try LensWorksPanoramaDestination(output: URL(fileURLWithPath: canonicalOutput))
+            let destination = try LWLinearMediaDestination(output: URL(fileURLWithPath: canonicalOutput), subdirectory: "Panoramas")
             let media = destination.directory
             let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
             let name = "Panorama – " + projection.rawValue.capitalized + " – " + nonce
@@ -2623,14 +2648,27 @@ final class LensWorksCatalog {
                 let result = try await LensWorksPanoramaLinear.stitch(urls, projection: projection, boundary: boundary)
                 try Task.checkCancellation()
                 let published = media.appendingPathComponent(name).appendingPathExtension("dng")
-                try LensWorksPanoramaLinear.writeDNG(result, to: published, destination: destination)
+                try LWLinearDNGWriter.writeDNG(result, to: published, destination: destination)
                 return published
             }
             let published = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            publication = (destination, published.lastPathComponent)
+            #if DEBUG
+            await continuationFixture?(.panoramaPublished)
+            #endif
             do {
                 guard !task.isCancelled else { throw CancellationError() }
                 try checkAdmission()
-            } catch { destination.removeUnimportedPublication(named: published.lastPathComponent); throw error }
+            } catch {
+                let primary = error
+                do { try destination.removeUnimportedPublication(named: published.lastPathComponent) }
+                catch let recovery as LWLinearMediaRecoveryError {
+                    throw LWLinearMediaRecoveryError(reason: "The panorama stopped before catalog import. " + recovery.reason, recoveryPaths: recovery.recoveryPaths)
+                } catch {
+                    throw LWLinearMediaRecoveryError(reason: "The panorama stopped and its publication could not be rolled back: " + error.localizedDescription, recoveryPaths: [published])
+                }
+                throw primary
+            }
             try destination.validate()
             _ = try await service.request(LensWorksCatalogRequest(op: "import", catalog_path: catalogPath, source_path: media.path, max_files: 1000), as: LensWorksImportReport.self)
             try checkAdmission()
@@ -2699,8 +2737,13 @@ final class LensWorksCatalog {
             await refreshVersions()
 
         } catch {
+            if let recovery = error as? LWLinearMediaRecoveryError {
+                reportMediaRecovery(recovery)
+                return recovery
+            }
             if !(error is CancellationError), scopeIsCurrent(scope) { self.error = error.localizedDescription }
         }
+        return nil
     }
 
     /// `admitted` is what an agent's request was checked against (the original it may read and the folder it may
@@ -2847,7 +2890,7 @@ final class LensWorksCatalog {
         closingRequested = true
         closeInFlight = true; defer { closeInFlight = false }
         panoramaTask?.cancel()
-        if let panoramaTask { await panoramaTask.value }
+        if let panoramaTask { _ = await panoramaTask.value }
         catalogEpoch &+= 1; folderEpoch &+= 1; groupEpoch &+= 1; previewGeneration &+= 1
         await service.beginRetirement()
         // Settings task retirement adds a separate, explicit 30-second observation bound.

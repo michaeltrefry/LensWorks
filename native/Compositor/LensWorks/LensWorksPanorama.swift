@@ -124,9 +124,9 @@ nonisolated enum LensWorksPanoramaStitcher {
             self.frameWidth = frameWidth; self.frameHeight = frameHeight
             var placed = [(x: 0, y: 0)], aligned: [LensWorksPanoramaAlignment] = []
             for index in 1..<rasters.count {
-                let match: (dx: Int, dy: Int, error: Double, comparisons: Int)
+                let match: Match
                 if let knownAlignments {
-                    let a = knownAlignments[index - 1]; match = (a.horizontalOffset, a.verticalOffset, a.meanSeamError, 0)
+                    let a = knownAlignments[index - 1]; match = .init(dx: a.horizontalOffset, dy: a.verticalOffset, error: a.meanSeamError, comparisons: 0, ambiguous: false)
                 } else { match = try LensWorksPanoramaStitcher.match(rasters[index - 1], rasters[index]) }
                 guard match.error <= declaredSeamErrorTolerance else {
                     throw LensWorksCatalogError.message("The selected photos do not have a reliable overlapping seam (mean error \(String(format: "%.2f", match.error)); tolerance \(declaredSeamErrorTolerance)).")
@@ -237,7 +237,13 @@ nonisolated enum LensWorksPanoramaStitcher {
     /// A coarse-to-fine translation beam. Coarse search is at most 96 pixels on the long
     /// edge, thirty-two candidates survive each level, and each score reads at most 2048 samples.
     /// Full-resolution work is linear to make the pyramid, never quadratic in photo width.
-    @_optimize(speed) static func match(_ left: Raster, _ right: Raster, maximumVertical: Int? = nil, minimumOverlap overrideOverlap: Int? = nil) throws -> (dx: Int, dy: Int, error: Double, comparisons: Int) {
+    struct Match: Sendable {
+        let dx: Int, dy: Int
+        let error: Double
+        let comparisons: Int
+        let ambiguous: Bool
+    }
+    @_optimize(speed) static func match(_ left: Raster, _ right: Raster, maximumVertical: Int? = nil, minimumOverlap overrideOverlap: Int? = nil) throws -> Match {
         var pyramid = [(left, right)], scale = 1
         while max(pyramid.last!.0.width, pyramid.last!.0.height) > 96 {
             try Task.checkCancellation()
@@ -280,7 +286,8 @@ nonisolated enum LensWorksPanoramaStitcher {
             beam = Array(scored.prefix(32)); scale = max(1, scale / 2)
         }
         guard let best = beam.first else { throw ProjectError.invalid }
-        return (best.dx, best.dy, best.error, comparisons)
+        return .init(dx: best.dx, dy: best.dy, error: best.error, comparisons: comparisons,
+            ambiguous: beam.dropFirst().contains { $0.error == best.error })
     }
     private struct Offset: Hashable { let x: Int, y: Int }
 
@@ -290,7 +297,63 @@ nonisolated enum LensWorksPanoramaStitcher {
         let sourceScale: Int
         private let workingSet: LWFloatWorkingSet?
         init(width: Int, height: Int, rgba: [UInt8], lease: LWFloatWorkingSet.Lease? = nil, sourceScale: Int = 1, workingSet: LWFloatWorkingSet? = nil) { self.width = width; self.height = height; self.rgba = rgba; self.lease = lease; self.sourceScale = sourceScale; self.workingSet = workingSet }
-        @_optimize(speed) init(plane: LWFloatPlane) throws {
+        /// A shared robust scene-linear contrast for one adjacent pair. Matching is not a
+        /// display conversion: signed, super-white and low-contrast detail all contribute.
+        struct MatchingRange: Sendable {
+            let low: SIMD3<Double>, high: SIMD3<Double>
+            /// Adjacent-pair contrast from a fixed 64 × 64 grid per source. Percentile bounds
+            /// prevent an isolated hot pixel from erasing the pair's texture or acceptance score;
+            /// unrelated sources never set this pair's scale. Samples and sorting stay bounded.
+            @_optimize(speed) static func measure(_ planes: [LWFloatPlane]) throws -> Self {
+                guard !planes.isEmpty, planes.count <= 2, let first = planes.first else { throw ProjectError.invalid }
+                let lease = try first.workingSet.reserve(1024 * 1024)
+                defer { withExtendedLifetime(lease) {} }
+                var values = [[Double]](repeating: [], count: 3)
+                for plane in planes {
+                    let sx = max(1, (plane.width + 63) / 64), sy = max(1, (plane.height + 63) / 64)
+                    for entry in plane.manifest.entries {
+                        try Task.checkCancellation()
+                        let firstX = (entry.range.x + sx - 1) / sx * sx, firstY = (entry.range.y + sy - 1) / sy * sy
+                        guard firstX < entry.range.x + entry.range.width, firstY < entry.range.y + entry.range.height else { continue }
+                        let tile = try plane.read(entry.range)
+                        for y in stride(from: firstY, to: entry.range.y + entry.range.height, by: sy) {
+                            for x in stride(from: firstX, to: entry.range.x + entry.range.width, by: sx) {
+                                let pixel = tile.surface.pixels[(y - entry.range.y) * entry.range.width + x - entry.range.x]
+                                guard pixel.w == 1 else { throw LensWorksCatalogError.message("Panorama source photos must be opaque.") }
+                                for channel in 0..<3 {
+                                    let value = Double(pixel[channel])
+                                    guard value.isFinite else { throw ProjectError.invalid }
+                                    values[channel].append(value)
+                                }
+                            }
+                        }
+                    }
+                }
+                var low = SIMD3<Double>.zero, high = SIMD3<Double>.zero
+                for channel in 0..<3 {
+                    let sorted = values[channel].sorted()
+                    guard !sorted.isEmpty else { throw ProjectError.invalid }
+                    low[channel] = sorted[(sorted.count - 1) / 100]
+                    high[channel] = sorted[(sorted.count - 1) * 99 / 100]
+                }
+                return .init(low: low, high: high)
+            }
+            func descriptor(_ value: Double, channel: Int) -> UInt8 {
+                let span = high[channel] - low[channel]
+                guard span > 0 else { return 0 }
+                return UInt8(clamping: Int((max(0, min(1, (value - low[channel]) / span)) * 255).rounded()))
+            }
+            func difference(_ a: Float, _ b: Float, channel: Int) -> Double {
+                let span = high[channel] - low[channel]
+                // A percentile-flat channel can still contain sparse detail. Unequal actual
+                // samples must disagree even when the robust descriptor has no usable span.
+                // Bound an isolated sensor outlier's contribution without ever turning a real
+                // mismatch into zero or allowing it to rescale all the other samples.
+                return span > 0 ? min(255, abs(Double(a) - Double(b)) / span * 255) : a == b ? 0 : 255
+            }
+        }
+        @_optimize(speed) init(plane: LWFloatPlane, matchingRange supplied: MatchingRange? = nil) throws {
+            let matchingRange = try supplied ?? MatchingRange.measure([plane])
             var scale = 1
             while (max(plane.width, plane.height) + scale - 1) / scale > 1536 { scale *= 2 }
             let width = (plane.width + scale - 1) / scale, height = (plane.height + scale - 1) / scale
@@ -310,16 +373,10 @@ nonisolated enum LensWorksPanoramaStitcher {
                 }
                 var bytes = [UInt8](repeating: 255, count: width * height * 4)
                 for index in sums.indices { for channel in 0..<3 {
-                    bytes[index * 4 + channel] = Self.descriptor(Float(sums[index][channel] / sums[index].w))
+                    bytes[index * 4 + channel] = matchingRange.descriptor(sums[index][channel] / sums[index].w, channel: channel)
                 } }
                 return bytes
             }
-        }
-        static func descriptor(_ value: Float) -> UInt8 {
-            guard value > 0 else { return 0 }
-            if value >= 1 { return 255 }
-            let linear = Double(value), encoded = linear <= 0.0031308 ? linear * 12.92 : 1.055 * pow(linear, 1 / 2.4) - 0.055
-            return UInt8(clamping: Int((min(1, encoded) * 255).rounded()))
         }
         @_optimize(speed) func reduced() throws -> Raster {
             let w = max(1, width / 2), h = max(1, height / 2)

@@ -1060,6 +1060,102 @@ struct LensWorksAgentCommandTests {
         }
     }
 
+    #if DEBUG
+    @Test(arguments: [false, true], [false, true])
+    func panoramaRecoveryReachesTheAgentAndSurvivesPriorErrorRestoration(_ clientCancelled: Bool, _ quarantineConflict: Bool) async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try LensWorksCatalogBrowserTests.Fixture(images: 3) { try LensWorksCatalogBrowserTests.panoramaPNG($0) }
+        try await catalog.run { model in
+            try await checkPanoramaRecovery(model: model, fixture: fixture, catalog: catalog,
+                clientCancelled: clientCancelled, quarantineConflict: quarantineConflict)
+        }
+    }
+
+    private func checkPanoramaRecovery(model: LensWorksCatalog, fixture: Fixture,
+        catalog: LensWorksCatalogBrowserTests.Fixture, clientCancelled: Bool, quarantineConflict: Bool) async throws {
+        try await catalog.importPhotos(model)
+        try fixture.harness.automation.folders.grant(catalog.photos)
+        let workspace = LensWorksCatalogBrowserTests.isolatedWorkspace()
+        let tools = LensWorksAgentTools(session: { workspace.current.session }, catalog: { model }, folders: fixture.harness.automation.folders)
+        tools.projects = { workspace.current.controller }; tools.workspace = { workspace }
+        let sources = model.assets
+        for (index, asset) in sources.enumerated() { await model.select(asset, extending: index > 0) }
+        let output = fixture.granted.appendingPathComponent("RecoveryVersions")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+        await model.setOutput(output.path)
+        let gate = LensWorksCatalogBrowserTests.ContinuationGate()
+        model.continuationFixture = { if $0 == .panoramaPublished { await gate.hold() } }
+        model.error = "A prior scoped warning"
+        let media = output.appendingPathComponent("Panoramas"), moved = fixture.outside.appendingPathComponent("preserved-original.dng")
+        let replacement = Data("A private replacement must be preserved".utf8), sibling = Data("A public sibling must not be overwritten".utf8)
+        let afterQuarantine: (@Sendable (URL, URL) -> Void)?
+        if quarantineConflict {
+            afterQuarantine = { publicURL, candidateURL in
+            do {
+                try FileManager.default.moveItem(at: candidateURL, to: moved)
+                try replacement.write(to: candidateURL, options: .withoutOverwriting)
+                try sibling.write(to: publicURL, options: .withoutOverwriting)
+                try FileManager.default.setAttributes([.posixPermissions: 0o640, .modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: candidateURL.path)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: publicURL.path)
+            } catch { Issue.record(error, "The scoped post-quarantine fixture could not mutate its own files") }
+            }
+        } else { afterQuarantine = nil }
+        final class ReplyBox { var value: [String: Any]? }
+        let reply = ReplyBox()
+        let request = Task { @MainActor in
+            await LWLinearMediaCleanupTestSeam.$afterQuarantine.withValue(afterQuarantine) {
+                reply.value = await tools.call("invoke_command", arguments: ["command": "photo.mergePanorama", "arguments": ["projection": "perspective", "boundary": "autoCrop"]])
+            }
+        }
+        let watchdog = Task { do { try await Task.sleep(for: .seconds(30)); await gate.release() } catch { } }
+        defer { watchdog.cancel(); request.cancel(); model.continuationFixture = nil; Task { await gate.release() } }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+        while !(await gate.entered) {
+            guard ContinuousClock.now < deadline else { throw LensWorksCatalogError.message("Panorama did not reach publication for recovery validation.") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let published = try #require(try FileManager.default.contentsOfDirectory(at: media, includingPropertiesForKeys: nil).first { $0.pathExtension == "dng" })
+        let original = try Data(contentsOf: published)
+        if !quarantineConflict {
+            try FileManager.default.moveItem(at: published, to: moved)
+            try replacement.write(to: published, options: .withoutOverwriting)
+        }
+        if clientCancelled { request.cancel() } else { model.cancelPanorama() }
+        await gate.release()
+        await request.value
+        let response = try #require(reply.value)
+        #expect(response["isError"] as? Bool == true)
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(text(response).utf8)) as? [String: Any])
+        let paths = try #require(payload["recoveryPaths"] as? [String])
+        #expect(paths.contains(where: { $0.hasSuffix("/preserved-original.dng") }), "Recovery locates the owned original, not only its replacement")
+        if quarantineConflict {
+            let recoveryPath = try #require(paths.first { $0.contains("/.linear-retire-") && $0.hasSuffix("/candidate") })
+            #expect(try Data(contentsOf: URL(fileURLWithPath: recoveryPath)) == replacement)
+            let metadata = try FileManager.default.attributesOfItem(atPath: recoveryPath)
+            #expect((metadata[.posixPermissions] as? NSNumber)?.intValue == 0o640)
+            #expect((metadata[.modificationDate] as? Date)?.timeIntervalSince1970 == 1_700_000_000)
+            #expect(try Data(contentsOf: published) == sibling)
+            #expect(model.presentedError?.contains(recoveryPath) == true)
+        } else {
+            #expect(paths.contains(where: { $0.hasSuffix("/preserved-original.dng") }))
+            #expect(try Data(contentsOf: published) == replacement)
+            #expect(model.presentedError?.contains("preserved-original.dng") == true)
+        }
+        #expect((payload["recoveryAccess"] as? String)?.contains("No filesystem access is granted") == true)
+        let denied = await tools.call("invoke_command", arguments: ["command": "file.openProject", "arguments": ["path": moved.path]])
+        #expect(denied["isError"] as? Bool == true && text(denied).contains("outside every folder granted to automation"), "Recovery metadata did not authorize accessing the moved original")
+        #expect(model.error == "A prior scoped warning")
+        #expect(model.mediaRecovery != nil && workspace.current.session.document == nil && model.assets.count == 3)
+        let stateReply = await tools.call("get_state", arguments: [:])
+        let state = try #require(try JSONSerialization.jsonObject(with: Data(text(stateReply).utf8)) as? [String: Any])
+        let pending = try #require(state["mediaRecovery"] as? [String: Any])
+        #expect((pending["recoveryPaths"] as? [String])?.contains(where: { $0.hasSuffix("/preserved-original.dng") }) == true)
+        #expect(pending["recoveryPathsTruncated"] as? Bool == false && (pending["recoveryAccess"] as? String)?.contains("No filesystem access is granted") == true)
+        #expect(try Data(contentsOf: moved) == original)
+        model.dismissPresentedError()
+    }
+    #endif
+
     /// Open in Editor names a photo, not a file: the original it reads and the working version it opens or writes are
     /// found and held to the granted folders, and the folder chooser never opens for an agent.
     @Test func openingACatalogPhotoInTheEditorIsHeldToTheGrantedFolders() async throws {
