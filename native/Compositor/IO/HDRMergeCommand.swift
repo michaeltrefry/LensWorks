@@ -1,5 +1,6 @@
-import Foundation
+import AppKit
 import CoreGraphics
+import Foundation
 import ImageIO
 
 /// Decodes a catalog photo into a linear frame and the exposure it was taken at.
@@ -62,7 +63,7 @@ nonisolated enum HDRFrameLoader {
 /// Catalog registration through the existing folder import: the merged DNG becomes a new catalog photo, and a
 /// virtual folder holds it together with every source photo so the merge stays linked to its sources.
 @MainActor
-struct LensWorksHDRMergeRegistrar: HDRMergeCatalogRegistering {
+struct LensWorksHDRMergeRegistrar {
     let catalog: LensWorksCatalog
     let sources: [LensWorksSelectedRow]
 
@@ -88,8 +89,24 @@ extension LensWorksCatalog {
         return nil
     }
 
-    /// Photo > Merge to HDR: aligns the selected frames, writes a linear floating-point DNG through the media folder
-    /// and registers it as a new catalog photo linked to its sources. The sources are only read.
+    /// Lets the person choose whether moving subjects are deghosted before Photo > Merge to HDR begins.
+    func promptMergeSelectionToHDR() async {
+        guard hdrMergeUnavailableReason == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Merge to HDR"
+        alert.informativeText = "Selected bracketed photos will be aligned and merged into a new linear DNG."
+        alert.addButton(withTitle: "Merge")
+        alert.addButton(withTitle: "Cancel")
+        let deghost = NSButton(checkboxWithTitle: "Deghost moving subjects", target: nil, action: nil)
+        alert.accessoryView = deghost
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var options = HDRMergeOptions()
+        options.deghost = deghost.state == .on
+        await mergeSelectionToHDR(options: options)
+    }
+
+    /// Aligns the selected frames, writes a linear floating-point DNG through the media folder and registers it as a
+    /// new catalog photo linked to its sources. The sources are only read.
     func mergeSelectionToHDR(options: HDRMergeOptions = HDRMergeOptions()) async {
         guard hdrMergeUnavailableReason == nil else { return }
         let picked = assets.filter { selection.contains($0.id) }

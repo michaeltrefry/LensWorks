@@ -84,11 +84,6 @@ nonisolated struct HDRMergePublication: Sendable {
     let record: HDRMergeLinkRecord
 }
 
-/// Registers a published merge as a catalog item. The production conformer imports the destination folder.
-protocol HDRMergeCatalogRegistering {
-    func registerMerged(_ publication: HDRMergePublication) async throws
-}
-
 nonisolated enum HDRMergePublisher {
     static func sha256(_ url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }

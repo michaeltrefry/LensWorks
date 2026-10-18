@@ -191,7 +191,7 @@ struct CompositorApp: App {
                 Group {
                 CommandMenu("Photo") {
                     LensWorksCommandButton(.mergeToHDR, reason: applicationDelegate.catalog.hdrMergeUnavailableReason) {
-                        Task { await applicationDelegate.catalog.mergeSelectionToHDR() }
+                        Task { await applicationDelegate.catalog.promptMergeSelectionToHDR() }
                     }
                 }
                 CommandMenu("Select") {
