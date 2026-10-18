@@ -406,6 +406,10 @@ final class LensWorksHeadlessSessions {
     private let attachedCatalog: () -> LensWorksCatalog?
     private var sessions: [String: Session] = [:]
     private var jobs: [String: Job] = [:]
+    #if DEBUG
+    /// Test-only observation after a real PNG exists, before its atomic publication.
+    var beforeExportPublication: (@MainActor (String, URL) async throws -> Void)?
+    #endif
     init(folders: LensWorksGrantedFolders, attachedCatalog: @escaping () -> LensWorksCatalog?) {
         self.folders = folders; self.attachedCatalog = attachedCatalog
     }
@@ -453,10 +457,20 @@ final class LensWorksHeadlessSessions {
         if let attached = attachedCatalog()?.catalogPath, (try? LensWorksGrantedFolders.realPath(attached)) == path.path {
             throw LensWorksCommandRefusal(reason: "That catalog is already open in attached mode, so it cannot also be opened headlessly.")
         }
-        guard !sessions.values.contains(where: { $0.catalog.catalogPath == path.path }) else { throw LensWorksCommandRefusal(reason: "That catalog is already open in another headless session.") }
+        guard !sessions.values.contains(where: { session in
+            session.catalog.catalogPath.flatMap { try? LensWorksGrantedFolders.realPath($0) } == path.path
+        }) else { throw LensWorksCommandRefusal(reason: "That catalog is already open in another headless session.") }
         let made = Session(folders: folders)
         try await folders.withAccess(to: path) { await made.catalog.connect(path.path) }
-        guard made.catalog.catalogPath == path.path else { throw LensWorksCommandRefusal(reason: made.catalog.error ?? "The catalog could not be opened.") }
+        // The catalog transport standardizes file URLs (including /private/var → /var on
+        // macOS); grants use physical realpath identity. Compare identities, not spellings.
+        guard let opened = made.catalog.catalogPath else {
+            throw LensWorksCommandRefusal(reason: made.catalog.error ?? "The catalog could not be opened.")
+        }
+        guard (try? LensWorksGrantedFolders.realPath(opened)) == path.path else {
+            try await made.catalog.close()
+            throw LensWorksCommandRefusal(reason: "The opened catalog does not match the granted catalog location.")
+        }
         sessions[made.id] = made
         return ["session": made.id, "catalog": path.path, "mode": "headless"]
     }
@@ -489,6 +503,11 @@ final class LensWorksHeadlessSessions {
         guard let asset = opened.catalog.selectedAsset else { throw LensWorksCommandRefusal(reason: "Select a catalog photo first.") }
         let original = try await opened.catalog.service.resolve(asset).originalURL
         _ = try folders.admit(original.path)
+        // There is no view task in a windowless session to observe source availability.
+        // Populate the same fresh availability authority the registry requires; never bypass it.
+        try await opened.catalog.requireFreshOriginal(asset)
+        guard opened.catalog.selectedAsset?.id == asset.id,
+              opened.catalog.selectedAsset?.key?.variant_id == asset.key?.variant_id else { throw CancellationError() }
     }
 
     private func query(_ values: [String: Any]) throws -> [String: Any] {
@@ -561,18 +580,32 @@ final class LensWorksHeadlessSessions {
                 let original = try await opened.catalog.service.resolve(asset).originalURL
                 _ = try self.folders.admit(original.path)
                 job.progress = 0.25; job.message = "Opening source."
-                let imported = try await opened.tools.invoke(["command": LensWorksCommandID.importImages.rawValue, "arguments": ["paths": [original.path]]])
+                // Each export owns its document. Import appends layers to an existing editor,
+                // so sharing the session editor would mix prior edits and sibling exports.
+                let editor = EditorSession()
+                let controller = ProjectController(session: editor)
+                controller.recordsRecentProjects = false
+                let tools = LensWorksAgentTools(session: { editor }, catalog: { opened.catalog }, folders: self.folders)
+                tools.projects = { controller }
+                let imported = try await tools.invoke(["command": LensWorksCommandID.importImages.rawValue, "arguments": ["paths": [original.path]]])
                 if imported["isError"] as? Bool == true { throw LensWorksCommandRefusal(reason: ((imported["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "The source could not be opened.") }
                 // Apply the recipe captured with the selected asset through the regular Camera Raw filter command.
-                let developed = try await opened.tools.invoke(["command": LensWorksCommandID.filter.rawValue, "arguments": ["kind": FilterKind.cameraRaw.rawValue, "settings": ["exposure": self.exposure(variant)]]])
+                let developed = try await tools.invoke(["command": LensWorksCommandID.filter.rawValue, "arguments": ["kind": FilterKind.cameraRaw.rawValue, "settings": ["exposure": self.exposure(variant)]]])
                 if developed["isError"] as? Bool == true { throw LensWorksCommandRefusal(reason: ((developed["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "The develop recipe could not be rendered.") }
                 try Task.checkCancellation()
                 job.progress = 0.6; job.message = "Rendering export."
-                let exported = try await opened.tools.invoke(["command": LensWorksCommandID.exportPNG.rawValue, "arguments": ["path": temporary.path]])
+                let exported = try await tools.invoke(["command": LensWorksCommandID.exportPNG.rawValue, "arguments": ["path": temporary.path]])
                 if exported["isError"] as? Bool == true { throw LensWorksCommandRefusal(reason: ((exported["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "The export could not be rendered.") }
+                #if DEBUG
+                try await self.beforeExportPublication?(job.id, temporary)
+                #endif
                 try Task.checkCancellation()
                 job.progress = 0.9; job.message = "Publishing export."
-                try FileManager.default.moveItem(at: temporary, to: destination)
+                let publication = try self.folders.admit(destination.path)
+                guard publication.path == destination.path else {
+                    throw LensWorksCommandRefusal(reason: "The export destination changed while rendering; nothing was published.")
+                }
+                try FileManager.default.moveItem(at: temporary, to: publication)
                 job.state = .completed; job.progress = 1; job.message = "Exported \(destination.lastPathComponent)."
             } catch is CancellationError {
                 job.state = .cancelled; job.message = "Cancelled; no output was published."
