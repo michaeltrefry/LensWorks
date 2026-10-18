@@ -463,9 +463,11 @@ final class LensWorksHeadlessSessions {
 
     private func close(_ values: [String: Any]) async throws -> [String: Any] {
         let opened = try session(values, ["session"], "headless_close")
-        let active = jobs.values.filter { $0.session == opened.id && [.queued, .running].contains($0.state) }
-        active.forEach { $0.task?.cancel() }
-        for job in active { await job.task?.value }
+        let sessionJobs = jobs.values.filter { $0.session == opened.id }
+        sessionJobs.filter { [.queued, .running].contains($0.state) }.forEach { $0.task?.cancel() }
+        // A cancellation request updates the visible state immediately, but its task can still be cleaning up.
+        // Join every task for this session before releasing the catalog it uses.
+        for job in sessionJobs { await job.task?.value }
         try await opened.catalog.close()
         sessions.removeValue(forKey: opened.id)
         return ["session": opened.id, "closed": true]
@@ -543,6 +545,9 @@ final class LensWorksHeadlessSessions {
         let destination = try folders.admit(try text("path", values))
         guard destination.pathExtension.lowercased() == "png" else { throw LensWorksCommandRefusal(reason: "headless_export currently writes PNG files; path must end in .png.") }
         guard !FileManager.default.fileExists(atPath: destination.path) else { throw LensWorksCommandRefusal(reason: "Headless export never overwrites an existing file; choose a new path.") }
+        // The job must export the selection and recipe admitted with this request, not a later edit.
+        guard let asset = opened.catalog.selectedAsset else { throw LensWorksCommandRefusal(reason: "Select a catalog photo before exporting.") }
+        let variant = try current(opened)
         let job = Job(session: opened.id, destination: destination); jobs[job.id] = job
         job.task = Task { @MainActor [weak self, weak opened, weak job] in
             guard let self, let opened, let job else { return }
@@ -553,15 +558,13 @@ final class LensWorksHeadlessSessions {
                 // Publish the job before it begins expensive work, so a client can reliably observe and cancel it.
                 try await Task.sleep(for: .milliseconds(10))
                 try Task.checkCancellation()
-                guard let asset = opened.catalog.selectedAsset else { throw LensWorksCommandRefusal(reason: "Select a catalog photo before exporting.") }
                 let original = try await opened.catalog.service.resolve(asset).originalURL
                 _ = try self.folders.admit(original.path)
                 job.progress = 0.25; job.message = "Opening source."
                 let imported = try await opened.tools.invoke(["command": LensWorksCommandID.importImages.rawValue, "arguments": ["paths": [original.path]]])
                 if imported["isError"] as? Bool == true { throw LensWorksCommandRefusal(reason: ((imported["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "The source could not be opened.") }
-                // The catalog recipe and headless export share the same selected variant. Apply its RAW exposure through
-                // the regular Camera Raw filter command before exporting the transient document.
-                let developed = try await opened.tools.invoke(["command": LensWorksCommandID.filter.rawValue, "arguments": ["kind": FilterKind.cameraRaw.rawValue, "settings": ["exposure": self.exposure(try self.current(opened))]]])
+                // Apply the recipe captured with the selected asset through the regular Camera Raw filter command.
+                let developed = try await opened.tools.invoke(["command": LensWorksCommandID.filter.rawValue, "arguments": ["kind": FilterKind.cameraRaw.rawValue, "settings": ["exposure": self.exposure(variant)]]])
                 if developed["isError"] as? Bool == true { throw LensWorksCommandRefusal(reason: ((developed["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "The develop recipe could not be rendered.") }
                 try Task.checkCancellation()
                 job.progress = 0.6; job.message = "Rendering export."
