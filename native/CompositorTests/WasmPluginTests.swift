@@ -90,11 +90,25 @@ struct WasmSandboxTests {
         #expect(Date().timeIntervalSince(started) < 5)
     }
 
+    @MainActor
     @Test func aRunawayPluginDoesNotBlockTheCaller() async {
         var limits = WasmLimits.default
-        limits.maxSeconds = 0.3
-        do { _ = try await WasmFilterRunner.runIsolated(WasmFixture.infiniteLoop, pixels: pixels, limits: limits); Issue.record("expected a timeout") }
-        catch { #expect(error as? WasmError == .timeout) }
+        limits.maxSeconds = 1.5
+        let input = pixels
+        var finished = false
+        let plugin = Task { @MainActor () -> WasmError? in
+            defer { finished = true }
+            do { _ = try await WasmFilterRunner.runIsolated(WasmFixture.infiniteLoop, pixels: input, limits: limits); return nil }
+            catch { return error as? WasmError }
+        }
+        // The main actor keeps running while the plugin spins.
+        var ticks = 0
+        for _ in 0..<5 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            ticks += 1
+        }
+        #expect(ticks == 5 && !finished, "main actor made progress while the plugin was still running")
+        #expect(await plugin.value == .timeout)
     }
 
     @Test func memoryIsCappedAtTheLimit() throws {
