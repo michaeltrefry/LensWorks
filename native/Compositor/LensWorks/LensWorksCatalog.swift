@@ -2529,6 +2529,67 @@ final class LensWorksCatalog {
         return resolved
     }
 
+    /// The current catalog selection in stable capture order, suitable for a multi-source operation.
+    var selectedPanoramaAssets: [LensWorksCatalogAsset] {
+        assets.filter { selection.contains($0.id) }.sorted { $0.sequence < $1.sequence }
+    }
+
+    func panoramaAvailability(workspace: ProjectWorkspace) -> String? {
+        guard catalogPath != nil else { return "Open a catalog first." }
+        guard selectedPanoramaAssets.count >= 2 else { return "Select at least two overlapping photos." }
+        guard outputDirectory != nil else { return "Choose a working-version folder first." }
+        guard !isBusy, !isImporting else { return "Finish the current catalog operation first." }
+        guard workspace.canSwitch else { return "Finish the current edit before creating a panorama." }
+        return nil
+    }
+
+    /// Publishes a generated panorama into the same user-chosen filesystem workflow as working versions, imports that
+    /// published original through the ordinary catalog importer, then opens a normal editable project linked to every
+    /// source. The selected originals are only read.
+    func mergeSelectionToPanorama(workspace: ProjectWorkspace, projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary) async {
+        guard panoramaAvailability(workspace: workspace) == nil, let catalogPath, let output = outputDirectory else { return }
+        let sources = selectedPanoramaAssets, scope = captureScope(), selectionEpoch = catalogSelectionEpoch
+        let busy = beginBusy(); defer { finishBusy(busy) }
+        do {
+            let canonicalOutput = try await LensWorksVersionStore.shared.canonicalPath(output, outside: catalogPath)
+            var resolved: [LensWorksCatalogAsset] = []
+            for source in sources { resolved.append(try await service.resolve(source)) }
+            try checkScope(scope)
+            guard catalogSelectionEpoch == selectionEpoch, selectedPanoramaAssets.map(\.id) == sources.map(\.id) else { throw CancellationError() }
+            let urls = try resolved.map { try $0.originalURL }
+            let result = try LensWorksPanoramaStitcher.stitch(urls, projection: projection, boundary: boundary)
+            let media = URL(fileURLWithPath: canonicalOutput).appendingPathComponent("Panoramas", isDirectory: true)
+            try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+            let name = "Panorama – " + projection.rawValue.capitalized + " – " + String(UUID().uuidString.prefix(8))
+            let published = media.appendingPathComponent(name).appendingPathExtension("png")
+            try result.pngData().write(to: published, options: .atomic)
+            _ = try await service.request(LensWorksCatalogRequest(op: "import", catalog_path: catalogPath, source_path: media.path, max_files: 1000), as: LensWorksImportReport.self)
+            try checkScope(scope)
+            try await refreshAssets()
+            try checkScope(scope)
+            // Browse rows retain only a display filename until their original is resolved. The UUID-bearing publication
+            // name is unique within this operation, so it is the stable row admission before resolution.
+            guard let imported = assets.first(where: { $0.filename == published.lastPathComponent }) else {
+                throw LensWorksCatalogError.message("The published panorama was not returned by the catalog importer.")
+            }
+            let resultAsset = try await service.resolve(imported)
+            let resultURL = try resultAsset.originalURL
+            let tab = workspace.addTab()
+            await tab.session.importImages([resultURL])
+            guard tab.session.document != nil else { throw LensWorksCatalogError.message(tab.session.importError ?? "The published panorama could not be opened for editing.") }
+            let id = UUID(), project = URL(fileURLWithPath: canonicalOutput).appendingPathComponent("\(name)-\(id.uuidString.prefix(8)).comp")
+            tab.controller.workingVersion = LensWorksWorkingVersion(id: id, photoID: resultAsset.photoID, catalogPath: catalogPath,
+                originalPath: resultAsset.originalPath, projectPath: project.path, name: name, originalNativePath: resultAsset.nativeOriginal,
+                originalVariantKey: resultAsset.key, sourceLinks: sources.map(LensWorksPanoramaSource.init))
+            tab.session.projectURL = project
+            guard await tab.controller.save() else { throw LensWorksCatalogError.message("The editable panorama project could not be saved.") }
+            selectedPhotoID = resultAsset.id; selection = [resultAsset.id]; noteSaved(project); showingCatalog = false
+            await refreshVersions()
+        } catch {
+            if !(error is CancellationError), scopeIsCurrent(scope) { self.error = error.localizedDescription }
+        }
+    }
+
     /// `admitted` is what an agent's request was checked against (the original it may read and the folder it may
     /// write into): with it, the folder chooser never opens and nothing is read or written anywhere else.
     func createWorkingVersion(workspace: ProjectWorkspace, admitted: (original: String, output: String)? = nil) async {

@@ -112,7 +112,7 @@ extension LensWorksCommandID {
              .automationCopyConfiguration, .automationAllow, .automationDecline, .automationGrantFolder, .automationRevokeFolder:
             .notRunnable(.automation)
         case .hideApp, .hideOthers, .showAll: .notRunnable(.appVisibility)
-        case .keyboardShortcuts, .aiModels: .notRunnable(.opensWindow)
+        case .keyboardShortcuts, .aiModels, .mergePanorama: .notRunnable(.opensWindow)
         case .clearRecent: .notRunnable(.recentList)
         case .fitCanvas, .actualPixels, .zoomIn, .zoomOut: .notRunnable(.canvasZoom)
         case .pixelGrid, .smartSnap, .transformControls, .showGrid, .showGuides, .rulers, .snap, .snapToGuides, .snapToGrid,

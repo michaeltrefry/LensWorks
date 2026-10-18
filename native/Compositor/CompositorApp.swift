@@ -141,6 +141,20 @@ struct CompositorApp: App {
                         LensWorksCommandButton(.hideOthers) { NSApp.hideOtherApplications(nil) }
                         LensWorksCommandButton(.showAll) { NSApp.unhideAllApplications(nil) }
                     }
+                    CommandMenu("Photo") {
+                        let catalog = applicationDelegate.catalog
+                        Menu("Merge to Panorama") {
+                            LensWorksCommandButton(.mergePanorama, argument: "spherical", title: "Spherical", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
+                                Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: .spherical, boundary: .autoCrop) }
+                            }
+                            LensWorksCommandButton(.mergePanorama, argument: "cylindrical", title: "Cylindrical", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
+                                Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: .cylindrical, boundary: .autoCrop) }
+                            }
+                            LensWorksCommandButton(.mergePanorama, argument: "perspective", title: "Perspective", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
+                                Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: .perspective, boundary: .autoCrop) }
+                            }
+                        }
+                    }
                 }
                 CommandGroup(replacing: .pasteboard) {
                     // Canvas pixels when the canvas has focus; text fields keep their own editing.
