@@ -142,4 +142,19 @@ final class LensWorksGrantedFolders {
         defer { scoped?.stopAccessingSecurityScopedResource() }
         return try await body()
     }
+    /// One implicit multi-source operation holds each distinct admitted bookmark.
+    func withAccess<T>(to urls: [URL], _ body: () async throws -> T) async throws -> T {
+        for url in urls { _ = try admit(url.path) }
+        var scoped: [URL] = [], seen: Set<String> = []
+        defer { for folder in scoped { folder.stopAccessingSecurityScopedResource() } }
+        for url in urls {
+            guard let grant = grant(containing: url.path), seen.insert(grant.path).inserted,
+                  let bookmark = grant.bookmark else { continue }
+            var stale = false
+            if let folder = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale),
+               folder.startAccessingSecurityScopedResource() { scoped.append(folder) }
+        }
+        return try await body()
+    }
+
 }

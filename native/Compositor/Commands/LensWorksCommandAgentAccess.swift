@@ -20,7 +20,6 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case newCanvasSheet = "It picks a preset in the New Canvas sheet the person has open; file.newCanvas takes width and height directly."
     case shortcutEditor = "It is the Save or Cancel button of the Keyboard Shortcuts window the person has open."
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
-    case hdrMerge = "It decodes the person’s selected bracket frames and writes a new DNG beside them, which the person starts from the Photo menu after choosing the frames."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
 }
 
@@ -107,7 +106,7 @@ extension LensWorksCommandID {
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
         case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
-             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder:
+             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder, .mergeToHDR:
             .runnable(.standalone)
         case .automationEnabled, .automationShowSecret, .automationCopySecret, .automationRegenerateSecret, .automationRevokeSecret,
              .automationCopyConfiguration, .automationAllow, .automationDecline, .automationGrantFolder, .automationRevokeFolder:
@@ -134,7 +133,6 @@ extension LensWorksCommandID {
         case .saveShortcuts, .cancelShortcuts: .notRunnable(.shortcutEditor)
         case .beginRename: .notRunnable(.nameEditor)
         case .opacityDigit: .notRunnable(.opacityKeys)
-        case .mergeToHDR: .notRunnable(.hdrMerge)
         }
     }
 
@@ -156,7 +154,7 @@ extension LensWorksCommandID {
             // Running it again with the previous value restores what it changed. A located folder goes back with the
             // review's own Undo in Locate Originals; the person is still asked, because it re-points originals.
             (.inverse, [.renameVirtualFolder, .moveVirtualFolder, .rating, .closeProject, .locateFolder]),
-            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor]),
+            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor, .mergeToHDR]),
             (.transient, [.firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
                           .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
                           .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors]),

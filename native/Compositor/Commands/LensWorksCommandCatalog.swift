@@ -290,7 +290,10 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .showAll, label: "Show All", menu: "App")
     ]
     private static let photoMenu: [LensWorksCommandDescriptor] = [
-        .init(id: .mergeToHDR, label: "Merge to HDR…", menu: "Photo")
+        .init(id: .mergeToHDR, label: "Merge to HDR…", menu: "Photo", parameters: [
+            .init(name: "output", type: .path, description: "An existing granted media folder; a new HDR child holds the floating-point DNG and source provenance.", required: true),
+            .init(name: "align", type: .boolean, description: "Align bracketed originals before merging (default true)."),
+            .init(name: "deghost", type: .boolean, description: "Suppress moving-subject disagreement against the middle exposure (default false).")])
     ]
     private static let fileMenu: [LensWorksCommandDescriptor] = [
         .init(id: .openCatalog, label: "Open Catalog…", menu: "File", parameters: [Argument.path("path", "The catalog folder to open. When the open catalog has organize changes Undo can still revert, the person is asked first.")], agentConfirmation: .whenDiscardingCatalogHistory),

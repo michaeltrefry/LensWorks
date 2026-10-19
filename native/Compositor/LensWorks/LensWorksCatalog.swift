@@ -85,7 +85,7 @@ nonisolated struct LensWorksImportReport: Decodable, Sendable {
 #if DEBUG
 nonisolated enum LensWorksCatalogCloseFaultPoint: Sendable, Equatable { case beforeSubmit, beforeDecode, beforeRelease }
 nonisolated enum LensWorksPreviewDrainFaultPoint: Sendable, Equatable { case afterSubmit, beforeDecode, beforeRelease }
-nonisolated enum LensWorksCatalogContinuationPoint: Sendable, Equatable { case groupRead, membershipIdentity, organizationApplied, importMonitorTerminal, settingsStatus, catalogRecipeAdmission, catalogRecipeReply, originalResolved }
+nonisolated enum LensWorksCatalogContinuationPoint: Sendable, Equatable { case groupRead, membershipIdentity, organizationApplied, importMonitorTerminal, settingsStatus, catalogRecipeAdmission, catalogRecipeReply, originalResolved, hdrInputsAdmitted, hdrImportStarted, hdrPublicationReady }
 @MainActor private final class LensWorksImportMonitorReceipt { var complete = false }
 #endif
 
@@ -823,7 +823,10 @@ final class LensWorksCatalog {
     var selectedPhotoID: String? { didSet { catalogSelectionEpoch &+= 1 } }
     private(set) var outputDirectory: String?
     private var busyOwner: UUID?
-    var isBusy: Bool { busyOwner != nil }
+    var isBusy: Bool {
+        busyOwner != nil || (isHDRMerging && !(LensWorksHDROperationOwner.current?.allows(
+            catalog: ObjectIdentifier(self), operation: hdrMergeOperation, scope: captureScope(), selectionOwner: selectionOwner) ?? false))
+    }
     private(set) var closingRequested = false
     private(set) var closeInFlight = false
     private(set) var hasMore = false
@@ -903,7 +906,33 @@ final class LensWorksCatalog {
     var recursive = true
     var selection: Set<String> = []
     var error: String?
+    @ObservationIgnored private(set) var mediaRecoveryRevision: UInt64 = 0
+    private(set) var mediaRecovery: LWLinearMediaRecoveryError?
+    var presentedError: String? {
+        guard let recovery = mediaRecovery?.localizedDescription else { return error }
+        guard let error, !error.contains(recovery) else { return error ?? recovery }
+        return error + "\n" + recovery
+    }
+    /// Recovery concerns preserved filesystem media, not one catalog's lifetime. Only explicit
+    /// acknowledgement dismisses it; opening a catalog or restoring a command's old error cannot.
+    func reportMediaRecovery(_ failure: LWLinearMediaRecoveryError) {
+        let prior = mediaRecovery?.localizedDescription
+        mediaRecoveryRevision &+= 1
+        if let previous = mediaRecovery {
+            var seen = Set<URL>()
+            let paths = (previous.recoveryPaths + failure.recoveryPaths).filter { seen.insert($0).inserted }
+            mediaRecovery = LWLinearMediaRecoveryError(reason: previous.reason == failure.reason ? failure.reason : previous.reason + "\n" + failure.reason, recoveryPaths: paths)
+        } else { mediaRecovery = failure }
+        let message = mediaRecovery!.localizedDescription
+        if error == nil || error == prior { error = message }
+        else { error = error! + "\n" + message }
+    }
+    func dismissPresentedError() { error = nil; mediaRecovery = nil }
     var status = "Open or create a catalog to begin."
+    var isHDRMerging = false
+    @ObservationIgnored var hdrMergeTask: Task<HDRMergePublication, Error>?
+    @ObservationIgnored var hdrMergeOperation: UUID?
+
     @ObservationIgnored let service: LensWorksCatalogService
     /// Locate Originals review and storage-operation custody for this catalog.
     @ObservationIgnored let relink = LensWorksRelinkReview()
@@ -968,6 +997,10 @@ final class LensWorksCatalog {
     func scopeIsCurrent(_ scope: LensWorksCatalogScope) -> Bool { !closingRequested && scope.epoch == catalogEpoch && scope.token == catalogToken && scope.path == catalogPath }
     func checkScope(_ scope: LensWorksCatalogScope) throws { if !scopeIsCurrent(scope) { throw CancellationError() } }
     func admitCatalogWork() throws {
+        if let lease = LensWorksHDROperationOwner.current {
+            guard lease.allows(catalog: ObjectIdentifier(self), operation: hdrMergeOperation,
+                               scope: captureScope(), selectionOwner: selectionOwner) else { throw CancellationError() }
+        }
         guard !closingRequested else { throw LensWorksManagedError.native(code: "draining", message: "The catalog is retiring. Retry Close Catalog before starting another action.") }
     }
     var hasImportCheckpoint: Bool { checkpointKey.map { defaults.data(forKey: $0) != nil } ?? false }
@@ -1089,8 +1122,8 @@ final class LensWorksCatalog {
     }
 
     private var checkpointKey: String? { catalogPath.map { "LensWorks.importSource." + $0 } }
-    func startImport(_ path: String? = nil, resume: Bool = false) async throws {
-        try admitCatalogWork()
+    func startImport(_ path: String? = nil, resume: Bool = false, authorize: @MainActor () throws -> Void = {}) async throws {
+        try admitCatalogWork(); try authorize()
         guard catalogPath != nil, !isImporting, !isBusy else { throw LensWorksCatalogError.message("Wait for the current catalog action to retire before starting another import.") }
         let busy = beginBusy(); defer { finishBusy(busy) }
         let source: LWCatalogNativePath
@@ -1103,6 +1136,7 @@ final class LensWorksCatalog {
         var started: LWApplicationDtoImportStatus
         while true {
             guard !closingRequested, catalogEpoch == epoch, catalogPath == path, catalogToken == token else { throw CancellationError() }
+            try authorize()
             do { started = try await service.beginImport(source, resume: resume); break }
             catch LensWorksManagedError.native(let code, _) where code == "busy" && resume && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
         }
@@ -1111,6 +1145,7 @@ final class LensWorksCatalog {
         if let key = checkpoint { defaults.set(try LWCatalogCodec.encode(source), forKey: key) }
         importProgress = started; importSamples = [started]
         importMonitor?.cancel()
+        try authorize() // The owned attempt is recorded before a refusal can require cancellation.
         let id = started.id
         let monitorScope = captureScope()
         #if DEBUG
@@ -1173,16 +1208,16 @@ final class LensWorksCatalog {
         importSamples.append(next)
         status = "Import " + next.phase.rawValue + " · added " + String(next.imported.value) + " · failed " + String(next.failed.value) + " · previews " + String(next.pending_previews)
     }
-    func waitImport(terminal: Bool, minimumImported: UInt64? = nil, phase: String? = nil, timeoutMilliseconds: UInt32 = 60000) async throws {
-        try admitCatalogWork()
+    func waitImport(terminal: Bool, minimumImported: UInt64? = nil, phase: String? = nil, timeoutMilliseconds: UInt32 = 60000, authorize: @MainActor () throws -> Void = {}) async throws {
+        try admitCatalogWork(); try authorize()
         guard let expected = importProgress?.id, timeoutMilliseconds > 0, timeoutMilliseconds <= 60000 else { throw LensWorksCatalogError.message("There is no owned import to observe.") }
         importWaiters += 1; defer { importWaiters -= 1 }
         let scope = captureScope()
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(Int64(timeoutMilliseconds)))
         while true {
-            try checkScope(scope)
+            try checkScope(scope); try authorize()
             let observed = try await service.importStatus()
-            try checkScope(scope)
+            try checkScope(scope); try authorize()
             guard let next = observed, next.id == expected else { throw LensWorksManagedError.protocolViolation("Import progress belongs to a different attempt.") }
             recordImport(next)
             if !isImporting { importMonitor?.cancel() }
@@ -1191,11 +1226,11 @@ final class LensWorksCatalog {
                 if terminal {
                     let parent = folderParent, groupsAfter = groupAfter
                     let navigation = folderEpoch, groupsNavigation = groupEpoch, refreshedQuery = queryEpoch &+ 1
-                    try await refreshAssets(); try checkScope(scope)
+                    try authorize(); try await refreshAssets(); try checkScope(scope); try authorize()
                     guard folderEpoch == navigation, groupEpoch == groupsNavigation, queryEpoch == refreshedQuery else { throw CancellationError() }
-                    try await loadFolders(parent: parent); try checkScope(scope)
+                    try authorize(); try await loadFolders(parent: parent); try checkScope(scope); try authorize()
                     guard folderEpoch == navigation &+ 1, groupEpoch == groupsNavigation, queryEpoch == refreshedQuery else { throw CancellationError() }
-                    try await loadGroups(after: groupsAfter); try checkScope(scope)
+                    try authorize(); try await loadGroups(after: groupsAfter); try checkScope(scope); try authorize()
                     guard importProgress?.id == expected else { throw CancellationError() }
                 }
                 return
@@ -1516,19 +1551,26 @@ final class LensWorksCatalog {
         return group
     }
     func createGroup(_ name: String) async throws {
-        try admitCatalogWork()
+        _ = try await createGroupReturningID(name)
+    }
+
+    /// Multi-source registration keeps the native created identity even when
+    /// the new group is outside the currently displayed collection page.
+    func createGroupReturningID(_ name: String, authorize: @MainActor () throws -> Void = {}) async throws -> String {
+        try admitCatalogWork(); try authorize()
         guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
         let busy = beginBusy(); defer { finishBusy(busy) }
         let scope = captureScope(), after = groupAfter, navigation = groupEpoch
         let (owner, token) = try await service.context()
-        try checkScope(scope)
+        try checkScope(scope); try authorize()
         guard token == scope.token else { throw CancellationError() }
         
-        guard case .Organization(.CollectionCreated) = try await owner.perform(.Organization(catalog: token, request: .CreateCollection(name: name))) else { throw LensWorksManagedError.protocolViolation("Expected a created virtual-folder identity.") }
-        try checkScope(scope)
+        guard case .Organization(.CollectionCreated(let createdID)) = try await owner.perform(.Organization(catalog: token, request: .CreateCollection(name: name))) else { throw LensWorksManagedError.protocolViolation("Expected a created virtual-folder identity.") }
+        try checkScope(scope); try authorize()
         
         guard groupEpoch == navigation else { throw CancellationError() }
-        try await loadGroups(after: after); try checkScope(scope)
+        try authorize(); try await loadGroups(after: after); try checkScope(scope); try authorize()
+        return createdID
     }
 
     private func currentGroup(_ id: String, owner: LWManagedSession, token: String) async throws -> LWApplicationOrganizationCollection {
@@ -1806,9 +1848,12 @@ final class LensWorksCatalog {
     /// exact per-photo inverses are recorded before anything is written, and the write
     /// is one sealed batch job compare-and-set against the revisions that read reported.
     /// The whole change is one undoable step.
-    func organize(_ change: LensWorksOrganizationChange, rows explicit: [LensWorksSelectedRow]? = nil, origin: LensWorksCommandOrigin = .user) async throws {
-        try admitCatalogWork()
+    func organize(_ change: LensWorksOrganizationChange, rows explicit: [LensWorksSelectedRow]? = nil, origin: LensWorksCommandOrigin = .user, authorize: @escaping @MainActor () throws -> Void = {}) async throws {
+        try admitCatalogWork(); try authorize()
         try change.validate()
+        if let lease = LensWorksHDROperationOwner.current {
+            guard let explicit, lease.permits(explicit) else { throw CancellationError() }
+        }
         guard !isBusy else { throw LensWorksCatalogError.message("A catalog action is already running.") }
         let busy = beginBusy(); isOrganizing = true; organizationCancelRequested = false
         defer { if busyOwner == busy { isOrganizing = false }; finishBusy(busy) }
@@ -1823,17 +1868,21 @@ final class LensWorksCatalog {
         let total = explicit.map { Int64($0.count) } ?? selectionCount
         guard total > 0 else { throw LensWorksCatalogError.message("Select photos to organize.") }
         let current = { [unowned self] in
-            try Task.checkCancellation(); try self.checkScope(scope)
+            try Task.checkCancellation(); try self.checkScope(scope); try authorize()
             guard !self.organizationCancelRequested, selectedOwner == self.selectionOwner, query == self.queryOwner else { throw CancellationError() }
         }
         let step = nextOrganizationStep()
+        var explicitOffset = 0
         var after = "", processed: Int64 = 0, outcome = LensWorksOrganizationOutcome()
         var failure: (any Error)?
         do {
             while true {
                 try current()
                 let page: [LensWorksSelectedRow]
-                if let explicit { page = after.isEmpty ? explicit : [] }
+                if let explicit {
+                    let end = min(explicit.count, explicitOffset + Int(rowLimit))
+                    page = Array(explicit[explicitOffset..<end]); explicitOffset = end
+                }
                 else { page = try await index.selection(owner: selectedOwner, after: after) }
                 try current()
                 if page.isEmpty { break }
@@ -1845,9 +1894,9 @@ final class LensWorksCatalog {
         // Even a partially applied change stays undoable as recorded.
         await pushOrganizationStep(LensWorksOrganizationStep(id: step, title: origin.historyName(change.title), photos: outcome.recorded, keywords: change.keywordTargets, collection: change.collection, origin: origin), history: history, scope: scope)
         if let failure { throw failure }
-        try checkScope(scope)
+        try checkScope(scope); try authorize()
         let refreshedQuery = queryEpoch &+ 1
-        try await refreshAssets(); try checkScope(scope)
+        try await refreshAssets(); try checkScope(scope); try authorize()
         guard queryEpoch == refreshedQuery else { throw CancellationError() }
         report(change.title + " · \(outcome.changed) of \(total) photos changed", outcome)
     }
@@ -2498,6 +2547,44 @@ final class LensWorksCatalog {
         } catch { if !(error is CancellationError), scopeIsCurrent(scope), outputEpoch == output { self.error = error.localizedDescription } }
     }
 
+    /// Snapshot the disk-backed selection, not merely the visible browse page.
+    /// Native resolution is the only authority for original paths; filenames are UI labels.
+    func admitHDRMerge(output: URL? = nil) async throws -> LensWorksHDRMergeAdmission {
+        try admitCatalogWork()
+        if let reason = hdrMergeUnavailableReason { throw LensWorksCommandRefusal(reason: reason) }
+        guard let count = Int(exactly: selectionCount) else { throw ProjectError.tooLarge }
+        let charge = try LWFloatWorkingSet.sourceGraphs.reserve(LWSourceMetadataStorage.product(count, 8192))
+        let admission = LensWorksHDRMergeAdmission(scope: captureScope(), selectionOwner: selectionOwner,
+            selectionEpoch: catalogSelectionEpoch, queryOwner: queryOwner, outputEpoch: outputEpoch,
+            output: output ?? outputDirectory.map { URL(fileURLWithPath: $0) }, ownership: charge)
+        var rows: [LensWorksSelectedRow] = [], originals: [URL] = [], after = ""
+        while true {
+            let page = try await index.selection(owner: admission.selectionOwner, after: after)
+            try validateHDRMerge(admission)
+            if page.isEmpty { break }
+            for row in page {
+                let unresolved = LensWorksCatalogAsset(sequence: 0, id: row.imageID, originalPath: "", state: "ready", previewPath: nil, key: row.key)
+                let resolved = try await service.resolve(unresolved)
+                try validateHDRMerge(admission)
+                let url = try resolved.originalURL
+                guard resolved.nativeOriginal != nil, resolved.originalPath == url.path else { throw ProjectError.invalid }
+                rows.append(row); originals.append(url)
+            }
+            after = page.last!.imageID
+        }
+        guard rows.count == count, count >= 2, Set(originals.map(\.path)).count == count else {
+            throw LensWorksCommandRefusal(reason: "Select two or more distinct bracketed originals, not several versions of one photo.")
+        }
+        var result = admission; result.rows = rows; result.originals = originals
+        return result
+    }
+
+    func validateHDRMerge(_ admission: LensWorksHDRMergeAdmission) throws {
+        try Task.checkCancellation(); try checkScope(admission.scope)
+        guard selectionOwner == admission.selectionOwner, catalogSelectionEpoch == admission.selectionEpoch,
+              queryOwner == admission.queryOwner, outputEpoch == admission.outputEpoch else { throw CancellationError() }
+    }
+
     func resolveSelectedOriginal() async throws -> LensWorksCatalogAsset {
         guard !closingRequested, let selected = selectedAsset, let key = selected.key else { throw CancellationError() }
         let scope = captureScope(), page = pageAuthority, epoch = catalogSelectionEpoch, owner = selectionOwner
@@ -2672,6 +2759,9 @@ final class LensWorksCatalog {
         guard !closeInFlight else { throw LensWorksManagedError.native(code: "busy", message: "Catalog retirement is already being observed.") }
         closingRequested = true
         closeInFlight = true; defer { closeInFlight = false }
+        let merging = hdrMergeTask
+        merging?.cancel()
+        if let merging { _ = try? await merging.value }
         catalogEpoch &+= 1; folderEpoch &+= 1; groupEpoch &+= 1; previewGeneration &+= 1
         await service.beginRetirement()
         // Settings task retirement adds a separate, explicit 30-second observation bound.

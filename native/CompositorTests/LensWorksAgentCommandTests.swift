@@ -681,7 +681,7 @@ struct LensWorksAgentCommandTests {
         try Data("secret".utf8).write(to: fixture.outside.appendingPathComponent("photo.png"))
         let pathed = LensWorksCommandRegistry.descriptors.filter { $0.agent.isRunnable && $0.parameters.contains { $0.type.namesPath } }
         // Each of these names a file: the registry types all of them as paths.
-        #expect(Set(pathed.map(\.id)) == [.openCatalog, .newCatalog, .addPhotos, .openProject, .openRecent, .importImages, .saveAs, .exportPNG, .exportJPEG, .locateFolder])
+        #expect(Set(pathed.map(\.id)) == [.openCatalog, .newCatalog, .addPhotos, .openProject, .openRecent, .importImages, .saveAs, .exportPNG, .exportJPEG, .locateFolder, .mergeToHDR])
         // No other admitted command takes free text that could be a path under another type.
         for descriptor in LensWorksCommandRegistry.descriptors where descriptor.agent.isRunnable {
             for parameter in descriptor.parameters where !parameter.type.namesPath {
@@ -1042,6 +1042,7 @@ struct LensWorksAgentCommandTests {
             }
             // The original is outside every granted folder: refused before the photo is even selected.
             #expect(model.outputDirectory == nil)
+            catalog.diagnosticStage = "agent: original grant refusal"
             let original = await first.invoke(photo.id)
             #expect(original["isError"] as? Bool == true && text(original).hasPrefix("The photo’s original: ") && text(original).contains("outside every folder granted to automation"), "\(text(original))")
             #expect(model.selectedPhotoID == selectedBefore && selectedBefore != photo.id)
@@ -1060,7 +1061,9 @@ struct LensWorksAgentCommandTests {
             try untouched("output outside")
             // Both inside: the photo opens as a new working version, saved in the granted folder.
             await model.setOutput(inside.path)
+            catalog.diagnosticStage = "agent: open real 1x1 original as a new working version"
             let opened = await first.invoke(photo.id)
+            catalog.diagnosticStage = "agent: returned from creating the working version"
             #expect(ok(opened) && workspace.current.session.document != nil && workspace.current.controller.workingVersion?.photoID == photo.photoID, "\(text(opened))")
             let written = try FileManager.default.contentsOfDirectory(atPath: inside.path)
             #expect(try written.count == 1 && written[0].hasSuffix(".comp") && FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
@@ -1090,7 +1093,9 @@ struct LensWorksAgentCommandTests {
             #expect(existing["isError"] as? Bool == true && text(existing).hasPrefix("The photo’s working version: ") && text(existing).contains("outside every folder granted to automation"), "\(text(existing)) versions \(model.selectedVersions.count)/\(model.versions.count)")
             #expect(second.workspace.tabs.count == 1 && second.workspace.current.session.document == nil && model.error == nil)
             try folders.grant(fixture.granted)
+            catalog.diagnosticStage = "agent: reopen saved working version"
             let reopened = await second.invoke(photo.id)
+            catalog.diagnosticStage = "agent: returned from reopening working version"
             #expect(ok(reopened) && second.workspace.current.controller.workingVersion?.id == version.id && second.workspace.current.session.document != nil, "\(text(reopened))")
             #expect(try FileManager.default.contentsOfDirectory(atPath: inside.path).count == 1)
 
