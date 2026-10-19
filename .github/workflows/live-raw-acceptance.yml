@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
+      - name: Pin the selected Xcode SDK and native compiler toolchain
+        id: native-toolchain
+        run: bash scripts/native-toolchain.sh --github
       - name: Select the provisioned Python 3.12.13 interpreter
         run: |
           test -x /opt/homebrew/opt/python@3.12/bin/python3.12

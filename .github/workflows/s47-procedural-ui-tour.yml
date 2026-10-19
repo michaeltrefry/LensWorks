@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
+      - name: Pin the selected Xcode SDK and native compiler toolchain
+        id: native-toolchain
+        run: bash scripts/native-toolchain.sh --github
       - name: Select the provisioned Python 3.12.13 interpreter
         run: |
           test -x /opt/homebrew/opt/python@3.12/bin/python3.12
@@ -69,10 +72,7 @@ jobs:
           # S40: the stdio MCP bridge the automation tests launch as an MCP client would.
           TEST_RUNNER_LW_MCP_BRIDGE: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-mcp
         run: |
-          # The 100k test seeds its catalog with the engine's organization_probe,
-          # which build-native.sh does not build; use the same target and SDK.
-          PHOTOCATALOG_DNG_SDK="$PWD/.build/deps/dng_sdk_1_7_1_2724/dng_sdk_1_7_1" CARGO_TARGET_DIR="$PWD/.build/rust-catalog" CARGO_BUILD_JOBS=4 MACOSX_DEPLOYMENT_TARGET=26.2 \
-            cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin organization_probe
+          # The shared catalog bootstrap built the 100k fixture probe alongside the helpers.
           test -x "$TEST_RUNNER_LW_CATALOG_TEST_ORGANIZATION_PROBE"
           # The S06 UI test opens a catalog whose source folder was disconnected (moved) after import;
           # the sandboxed UI runner cannot move files, so the fixture owner prepares it here.

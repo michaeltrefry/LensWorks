@@ -105,6 +105,7 @@
 				8F311F95304F03BB0017D14F /* Sources */,
 				8F311F96304F03BB0017D14F /* Frameworks */,
 				8F311F97304F03BB0017D14F /* Resources */,
+				D26560000000000000000001 /* Embed native helpers */,
 			);
 			buildRules = (
 			);
@@ -235,6 +236,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D26560000000000000000001 /* Embed native helpers */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/../scripts/install-native-helpers.sh",
+				"$(SRCROOT)/../.build/rust-catalog/release/photocatalog",
+				"$(SRCROOT)/../.build/rust-catalog/release/lensworks-decode-worker",
+				"$(SRCROOT)/../.build/rust-catalog/release/lensworks-mcp",
+			);
+			name = "Embed native helpers";
+			outputPaths = ("$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers",);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "/bin/bash \"$SRCROOT/../scripts/install-native-helpers.sh\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\" \"$SRCROOT/../.build/rust-catalog/release\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8F311F95304F03BB0017D14F /* Sources */ = {
