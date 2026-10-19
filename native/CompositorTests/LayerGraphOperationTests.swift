@@ -1395,49 +1395,20 @@ import CoreGraphics
         popup.menu?.delegate = picker; picker.menuDidClose(menu)
         await settle { !picker.tracking }
 
-        // Opacity: the percent field shows the active layer's, and the slider sets it as one undo step.
+        // Native field wiring remains a hosted-unit assertion. Real SwiftUI slider gestures and mask
+        // clicks belong to CompositorUITests.testS38OpacityLiveBurstCoalescesAndEscapePreservesStartingHistory:
+        // XCUITest is the external AX client; a unit process cannot scrape SwiftUI's lazy virtual AX tree.
         func percentField() -> NSTextField? { descendants(host).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "Opacity percent" } }
         s.selectLayer(base)
         await settle(host) { percentField()?.stringValue == "80" }
         #expect(percentField()?.stringValue == "80" && percentField()?.isEnabled == true)
-        let slider = try #require(descendants(host).compactMap { $0 as? NSSlider }.first)
-        slider.doubleValue = slider.minValue + (slider.maxValue - slider.minValue) * 0.35
-        #expect(slider.sendAction(slider.action, to: slider.target))
-        await settle(host) { percentField()?.stringValue == "35" }
-        #expect(abs((try fixture.layer("Base").opacity) - 0.35) < 1e-9 && s.history.undoCount == 1 && percentField()?.stringValue == "35")
-        s.undo()
-        await settle(host) { percentField()?.stringValue == "80" }
-        #expect(try fixture.layer("Base").opacity == 0.8 && percentField()?.stringValue == "80")
-        s.history.reset()
-
-        // The mask button, on its own so that its middle is where a click lands: a click adds a white mask, an
-        // Option-click a black one, and a layer that has a mask cannot be given another.
-        let button = NSHostingView(rootView: LayerMaskMenu(session: s))
-        button.frame = CGRect(origin: .zero, size: button.fittingSize)
-        let buttonWindow = NSWindow(contentRect: button.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        buttonWindow.contentView = button
-        defer { withExtendedLifetime(buttonWindow) {} }
-        buttonWindow.orderFrontRegardless()
-        defer { buttonWindow.orderOut(nil) }
-        func press(_ flags: NSEvent.ModifierFlags = []) async throws {
-            let middle = NSPoint(x: button.bounds.midX, y: button.bounds.midY)
-            NSApp.postEvent(try mouse(.leftMouseDown, at: middle, flags: flags, in: buttonWindow), atStart: false)
-            NSApp.postEvent(try mouse(.leftMouseUp, at: middle, flags: flags, in: buttonWindow), atStart: false)
-            while let event = NSApp.nextEvent(matching: [.leftMouseDown, .leftMouseUp], until: Date().addingTimeInterval(0.3), inMode: .default, dequeue: true) { NSApp.sendEvent(event) }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05)); try await Task.sleep(for: .milliseconds(30))
-        }
+        s.selectLayer(deep)
+        await settle(host) { percentField()?.stringValue == "100" }
+        #expect(percentField()?.stringValue == "100" && s.history.undoCount == 0)
+        // Set up the badge's mask through the controller; this is not the real-click proof above.
         s.selectLayer(top)
-        await settle(button) { button.fittingSize.width > 20 }
-        try await press()
-        let white = try #require(try fixture.layer("Top").mask, "a click on the mask button adds a mask")
-        #expect(LayerMask.background(of: white.asset.thumbnail) == 1 && s.history.undoCount == 1, "a white mask, one undo step")
-        try await press()
-        #expect(try fixture.layer("Top").mask == white && s.history.undoCount == 1, "a layer has one mask: the button is disabled")
-        s.undo()
-        try await press(.option)
-        let black = try #require(try fixture.layer("Top").mask, "an Option-click adds a mask too")
-        #expect(LayerMask.background(of: black.asset.thumbnail) == 0 && s.history.undoCount == 1, "a black mask with Option")
-        try setCurrentEventModifiers([])
+        s.addMask(revealing: false)
+        #expect(try fixture.layer("Top").mask != nil)
         // The footer's icons take an 8 pt by 12 pt margin as their hit area.
         let icon = NSHostingView(rootView: Color.clear.frame(width: 10, height: 10).footerHitArea())
         #expect(icon.fittingSize == CGSize(width: 26, height: 34))

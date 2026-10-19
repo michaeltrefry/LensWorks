@@ -2,6 +2,7 @@ import XCTest
 import Foundation
 import AppKit
 import CryptoKit
+import ImageIO
 
 final class CompositorUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
@@ -555,6 +556,34 @@ extension CompositorUITests {
         XCTAssertEqual(after.source, before.source, "Full working-version source, native path, VariantKey and identity must remain unchanged")
         XCTAssertEqual(after.imageHashes, before.imageHashes, "Every native image backing must retain whole bytes")
     }
+    /// Admit only a solid mask on the same layer. Decode the actual package PNG through ImageIO:
+    /// a filename or thumbnail alone is not evidence of white/black mask coverage.
+    private func s38Mask(_ context: S38UIContext, baseline: S38Package, saved: S38Package, pixel: UInt8) throws {
+        let filename = try XCTUnwrap(saved.layer["maskFile"] as? String)
+        XCTAssertEqual(filename, baseline.layerID + ".mask.png")
+        XCTAssertEqual(saved.layer["maskEnabled"] as? Bool, true)
+        XCTAssertEqual(saved.layer["maskLinked"] as? Bool, true)
+        var layers = saved.manifest["layers"] as! [[String: Any]]
+        for key in ["maskFile", "maskEnabled", "maskLinked"] { layers[0].removeValue(forKey: key) }
+        let withoutMask = saved.manifest.mutableCopy() as! NSMutableDictionary
+        withoutMask["layers"] = layers
+        XCTAssertEqual(withoutMask, baseline.manifest, "Adding a mask must change no other layer/document field or identity")
+        XCTAssertEqual(saved.source, baseline.source, "The original source record and working-version identity are untouched")
+        var images = saved.imageHashes
+        XCTAssertNotNil(images.removeValue(forKey: "images/" + filename))
+        XCTAssertEqual(images, baseline.imageHashes, "Only the new mask backing may be added; source image bytes are conserved")
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(context.project.appendingPathComponent("images/" + filename) as CFURL, nil))
+        XCTAssertEqual(CGImageSourceGetCount(source), 1)
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, 1); XCTAssertEqual(image.height, 1)
+        XCTAssertEqual(image.colorSpace?.model, .monochrome)
+        XCTAssertEqual(image.bitsPerComponent, 8); XCTAssertEqual(image.bitsPerPixel, 8)
+        XCTAssertEqual(image.alphaInfo, .none)
+        let bytes = try XCTUnwrap(image.dataProvider?.data)
+        XCTAssertGreaterThanOrEqual(CFDataGetLength(bytes), 1)
+        XCTAssertEqual(try XCTUnwrap(CFDataGetBytePtr(bytes)).pointee, pixel)
+        XCTAssertEqual(try s47FixtureHashes(context.fixture), context.originals)
+    }
     @MainActor
     private func s38Finish(_ context: S38UIContext, expected: S38Package) throws {
         XCTAssertEqual(context.editor.staticTexts["LensWorks.loadedEditorDocument"].value as? String, "single-harbor.png|master|160x120")
@@ -886,8 +915,69 @@ extension CompositorUITests {
         let redone = try s38Saved(context) { $0.opacity == 0.97 }
         s38Conserved(baseline, redone, field: "opacity", value: 0.97)
         s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
-        let final = try s38Saved(context) { $0.opacity == 1 }
-        s38Conserved(baseline, final); try s38Finish(context, expected: final)
+        let restored = try s38Saved(context) { $0.opacity == 1 }
+        s38Conserved(baseline, restored)
+
+        // Keep this proof inside the existing S47-selected S38 case. SwiftUI need not back its
+        // slider with NSSlider or materialize virtual AX children for its own unit-test process.
+        let sliders = context.editor.sliders
+        XCTAssertEqual(sliders.count, 1, "The layer appearance slider must be unambiguous")
+        let slider = sliders.element(boundBy: 0)
+        XCTAssertTrue(slider.isEnabled && slider.isHittable)
+        let thumb = slider.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -slider.frame.height / 2, dy: 0))
+        let destination = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5))
+        thumb.press(forDuration: 0.1, thenDragTo: destination)
+        let dragged = try s38Saved(context) { $0.opacity > 0.2 && $0.opacity < 0.5 }
+        XCTAssertEqual(percent.value as? String, String(Int((dragged.opacity * 100).rounded())))
+        s38Conserved(baseline, dragged, field: "opacity", value: dragged.opacity)
+        XCTAssertTrue(s38History(context).contains("Undo Layer Opacity"))
+        s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
+        let beforeDrag = try s38Saved(context) { $0.opacity == 1 }
+        s38Conserved(baseline, beforeDrag)
+        XCTAssertEqual(percent.value as? String, "100", "One Undo restores the whole real slider gesture")
+        s38Choose("Redo Layer Opacity", menu: "Edit", in: context)
+        let dragRedone = try s38Saved(context) { $0.opacity == dragged.opacity }
+        s38Conserved(baseline, dragRedone, field: "opacity", value: dragged.opacity)
+        s38Choose("Undo Layer Opacity", menu: "Edit", in: context)
+        let beforeMask = try s38Saved(context) { $0.opacity == 1 && $0.layer["maskFile"] == nil }
+        s38Conserved(baseline, beforeMask)
+        let beforeMaskHistory = s38History(context)
+
+        let mask = context.editor.buttons["Add layer mask"]
+        XCTAssertTrue(mask.exists && mask.isEnabled && mask.isHittable)
+        mask.click() // Exactly one ordinary click: reveal-all white, not a model/controller call.
+        let white = try s38Saved(context) { $0.layer["maskFile"] != nil }
+        try s38Mask(context, baseline: baseline, saved: white, pixel: 255)
+        let whiteHistory = s38History(context)
+        XCTAssertTrue(whiteHistory.contains("Undo Add Reveal-All Mask"))
+        XCTAssertFalse(mask.isEnabled)
+        // Coordinate click intentionally targets the disabled control; it must neither replace the
+        // mask nor append history. XCUIElement.click() on a disabled element may refuse the action.
+        mask.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        let disabled = try s38Saved(context) { $0.layer["maskFile"] != nil }
+        XCTAssertEqual(disabled.manifest, white.manifest); XCTAssertEqual(disabled.source, white.source)
+        XCTAssertEqual(disabled.imageHashes, white.imageHashes)
+        XCTAssertEqual(s38History(context), whiteHistory)
+        s38Choose("Undo Add Reveal-All Mask", menu: "Edit", in: context)
+        let maskUndone = try s38Saved(context) { $0.layer["maskFile"] == nil }
+        s38Conserved(baseline, maskUndone)
+        XCTAssertTrue(mask.isEnabled, "One Undo removes the mask and enables its button again")
+        XCUIElement.perform(withKeyModifiers: .option) { mask.click() }
+        let black = try s38Saved(context) { $0.layer["maskFile"] != nil }
+        try s38Mask(context, baseline: baseline, saved: black, pixel: 0)
+        XCTAssertFalse(mask.isEnabled)
+        XCTAssertTrue(s38History(context).contains("Undo Add Hide-All Mask"))
+        s38Choose("Undo Add Hide-All Mask", menu: "Edit", in: context)
+        let final = try s38Saved(context) { $0.layer["maskFile"] == nil }
+        s38Conserved(baseline, final)
+        XCTAssertTrue(mask.isEnabled)
+        // Both clicks are each one history step: after one Undo the prior opacity history is
+        // visible again, with the mask as the single redo (not another hidden mask undo).
+        let finalHistory = s38History(context)
+        XCTAssertEqual(finalHistory.filter { $0.hasPrefix("Undo") }, beforeMaskHistory.filter { $0.hasPrefix("Undo") })
+        XCTAssertTrue(finalHistory.contains("Redo Add Hide-All Mask"))
+        try s38Finish(context, expected: final)
     }
     @MainActor
     func testS38DisabledRegisteredLayerMenuDisplaysTransformReason() throws {
