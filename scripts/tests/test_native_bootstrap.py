@@ -1,5 +1,6 @@
 """Bounded toolchain/packaging contracts; no Rust, Xcode or GPU build runs here."""
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -96,6 +97,15 @@ esac''')
         encoded = self.github_selection(script)['CARGO_ENCODED_RUSTFLAGS']
         self.assertTrue(encoded.startswith('--cfg=lensworks_toolchain='))
 
+    def test_deployment_change_segregates_native_cache_and_reaches_cmake(self):
+        script = self.toolchain()
+        first = self.github_selection(script)
+        script.write_text(script.read_text().replace('export MACOSX_DEPLOYMENT_TARGET=26.2', 'export MACOSX_DEPLOYMENT_TARGET=26.3'))
+        second = self.github_selection(script)
+        self.assertNotEqual(first['LW_NATIVE_TOOLCHAIN_ID'], second['LW_NATIVE_TOOLCHAIN_ID'])
+        self.assertEqual(second['MACOSX_DEPLOYMENT_TARGET'], '26.3')
+        self.assertIn('CMAKE_OSX_DEPLOYMENT_TARGET 26.3', Path(second['CMAKE_TOOLCHAIN_FILE']).read_text())
+
     def test_repeated_sourcing_preserves_caller_flags_and_native_cache_identity(self):
         script = self.toolchain()
         self.env.update(CFLAGS='-Wall', CXXFLAGS='-Wextra')
@@ -141,50 +151,58 @@ esac''')
             path = release / name
             path.write_text('#!/bin/bash\necho source-bound-' + name + '\n')
             path.chmod(0o755)
+        helpers = app / 'Contents/Helpers'
+        helpers.mkdir()
+        for source, target in [('photocatalog', 'PhotoCatalogWorker'), ('lensworks-decode-worker', 'LensWorksDecodeWorker'), ('lensworks-mcp', 'LensWorksMCP')]:
+            shutil.copy2(release / source, helpers / target)
         self.stub('codesign', '''printf '%s\\n' "$*" >> "$CALLS"
 if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
         return app, release
 
-    def test_installs_source_binaries_in_actual_test_host_and_signs_each(self):
-        app, release = self.helpers()
-        result = self.run_script('scripts/install-native-helpers.sh', app, release)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for source, installed in [('photocatalog', 'PhotoCatalogWorker'),
-                                  ('lensworks-decode-worker', 'LensWorksDecodeWorker'),
-                                  ('lensworks-mcp', 'LensWorksMCP')]:
-            target = app / 'Contents/Helpers' / installed
-            self.assertEqual(target.read_bytes(), (release / source).read_bytes())
-            self.assertTrue(os.access(target, os.X_OK))
-            self.assertIn(str(target), self.log.read_text())
-        result = self.run_script('scripts/verify-native-helpers.sh', app)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('--verify --strict --deep ' + str(app), self.log.read_text())
-        self.assertFalse((self.root / 'xcode-app').exists())
+    def test_native_xcode_phase_copies_and_signs_every_helper_before_app_seal(self):
+        project = ROOT / 'native/Compositor.xcodeproj/project.pbxproj'
+        data = json.loads(subprocess.check_output(['plutil', '-convert', 'json', '-o', '-', str(project)], text=True))
+        objects = data['objects']
+        phase_id, phase = next((key, value) for key, value in objects.items() if value.get('name') == 'Embed native helpers')
+        self.assertEqual(phase['isa'], 'PBXCopyFilesBuildPhase')
+        self.assertEqual(str(phase['dstSubfolderSpec']), '1')  # Wrapper-relative, not another DerivedData app.
+        self.assertEqual(phase['dstPath'], 'Contents/Helpers')
+        self.assertEqual(len(phase['files']), 3)
+        sources = set()
+        for build_id in phase['files']:
+            build = objects[build_id]
+            self.assertIn('CodeSignOnCopy', build['settings']['ATTRIBUTES'])
+            path = objects[build['fileRef']]['path']
+            self.assertTrue(path.startswith('../.build/native-helpers/'))
+            sources.add(Path(path).name)
+        self.assertEqual(sources, {'PhotoCatalogWorker', 'LensWorksDecodeWorker', 'LensWorksMCP'})
+        app = next(value for value in objects.values() if value.get('productType') == 'com.apple.product-type.application')
+        self.assertEqual(app['buildPhases'][-1], phase_id)
 
     def test_missing_helper_or_signing_failure_is_not_accepted(self):
         app, release = self.helpers()
-        (release / 'lensworks-decode-worker').unlink()
-        result = self.run_script('scripts/install-native-helpers.sh', app, release)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Missing native helper', result.stderr)
-        self.assertFalse((app / 'Contents/Helpers').exists())
+        worker = app / 'Contents/Helpers/LensWorksDecodeWorker'
+        worker.unlink()
         result = self.run_script('scripts/verify-native-helpers.sh', app)
         self.assertNotEqual(result.returncode, 0)
-        (release / 'lensworks-decode-worker').write_text('helper')
-        (release / 'lensworks-decode-worker').chmod(0o755)
-        result = self.run_script('scripts/install-native-helpers.sh', app, release,
-                                 env=dict(self.env, FAIL_SIGN='1'))
+        self.assertIn('Missing native helper', result.stderr)
+        shutil.copy2(release / 'lensworks-decode-worker', worker)
+        result = self.run_script('scripts/verify-native-helpers.sh', app, env=dict(self.env, FAIL_SIGN='1'))
         self.assertNotEqual(result.returncode, 0)
 
     def test_test_wrapper_refuses_missing_or_unsigned_host_before_xcodebuild(self):
         app, release = self.helpers()
         self.stub('xcodebuild', 'echo launched >> "$CALLS"; exit 88')
+        shutil.rmtree(app / 'Contents/Helpers')
         derived = app.parents[3]
         result = self.run_script('scripts/ci/xcodebuild_test.sh', 'unused.xcresult',
                                  '-derivedDataPath', derived)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.log.exists())
-        self.assertEqual(self.run_script('scripts/install-native-helpers.sh', app, release).returncode, 0)
+        helpers = app / 'Contents/Helpers'
+        helpers.mkdir()
+        for source, target in [('photocatalog', 'PhotoCatalogWorker'), ('lensworks-decode-worker', 'LensWorksDecodeWorker'), ('lensworks-mcp', 'LensWorksMCP')]:
+            shutil.copy2(release / source, helpers / target)
         self.log.write_text('')
         result = self.run_script('scripts/ci/xcodebuild_test.sh', 'unused.xcresult',
                                  '-derivedDataPath', derived, env=dict(self.env, FAIL_SIGN='1'))
@@ -193,7 +211,6 @@ if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
 
     def test_test_wrapper_checks_helper_and_app_signatures_before_launch(self):
         app, release = self.helpers()
-        self.assertEqual(self.run_script('scripts/install-native-helpers.sh', app, release).returncode, 0)
         self.log.write_text('')
         self.stub('xcodebuild', 'echo launched >> "$CALLS"; exit 88')
         self.stub('xcrun', 'exit 1')  # No test result: this stub never pretends tests passed.
@@ -207,7 +224,6 @@ if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
 
     def test_release_test_run_verifies_release_host_not_stale_debug_host(self):
         app, release = self.helpers('Release')
-        self.assertEqual(self.run_script('scripts/install-native-helpers.sh', app, release).returncode, 0)
         self.log.write_text('')
         self.stub('xcodebuild', 'echo launched >> "$CALLS"; exit 88')
         self.stub('xcrun', 'exit 1')
@@ -223,7 +239,12 @@ if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
         self.toolchain()
         script = self.root / 'scripts/build-catalog-helpers.sh'
         shutil.copyfile(ROOT / 'scripts/build-catalog-helpers.sh', script)
-        self.stub('cargo', '''printf '%s | %s | %s | %s\\n' "$*" "$SDKROOT" "$CMAKE_TOOLCHAIN_FILE" "$CARGO_TARGET_DIR" >> "$CALLS"''')
+        self.stub('cargo', '''printf '%s | %s | %s | %s\\n' "$*" "$SDKROOT" "$CMAKE_TOOLCHAIN_FILE" "$CARGO_TARGET_DIR" >> "$CALLS"
+mkdir -p "$CARGO_TARGET_DIR/release"
+for name in photocatalog lensworks-decode-worker lensworks-mcp; do
+  printf 'source-bound-%s' "$name" > "$CARGO_TARGET_DIR/release/$name"
+  chmod 755 "$CARGO_TARGET_DIR/release/$name"
+done''')
         self.env['PHOTOCATALOG_DNG_SDK'] = str(self.root / 'pinned-adobe-sdk')
         result = subprocess.run(['/bin/bash', str(script)], env=self.env,
                                 capture_output=True, text=True, timeout=10)
@@ -237,6 +258,10 @@ if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
         self.assertIn('adapters/catalog/Cargo.toml', lines[0])
         self.assertIn('--bin photocatalog --bin organization_probe', lines[1])
         self.assertIn('adapters/mcp/Cargo.toml', lines[2])
+        for source, target in [('photocatalog', 'PhotoCatalogWorker'), ('lensworks-decode-worker', 'LensWorksDecodeWorker'), ('lensworks-mcp', 'LensWorksMCP')]:
+            staged = self.root / '.build/native-helpers' / target
+            self.assertEqual(staged.read_bytes(), (self.root / '.build/rust-catalog/release' / source).read_bytes())
+            self.assertTrue(os.access(staged, os.X_OK))
 
     def test_all_native_ci_paths_and_factory_share_bootstrap(self):
         workflows = ROOT / '.github/workflows'
@@ -252,9 +277,9 @@ if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
         self.assertIn('adapters/catalog/Cargo.toml', build)
         self.assertIn('adapters/mcp/Cargo.toml', build)
         project = (ROOT / 'native/Compositor.xcodeproj/project.pbxproj').read_text()
-        self.assertIn('scripts/install-native-helpers.sh', project)
-        self.assertIn('$TARGET_BUILD_DIR/$WRAPPER_NAME', project)
-        self.assertIn('$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers', project)
+        self.assertIn('PBXCopyFilesBuildPhase', project)
+        self.assertIn('CodeSignOnCopy', project)
+        self.assertIn('dstPath = Contents/Helpers', project)
 
 
 if __name__ == '__main__':

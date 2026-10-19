@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D26560000000000000000002 /* photocatalog in Embed native helpers */ = {isa = PBXBuildFile; fileRef = D26560000000000000000005 /* photocatalog */; settings = {ATTRIBUTES = (CodeSignOnCopy,); }; };
+		D26560000000000000000003 /* lensworks-decode-worker in Embed native helpers */ = {isa = PBXBuildFile; fileRef = D26560000000000000000006 /* lensworks-decode-worker */; settings = {ATTRIBUTES = (CodeSignOnCopy,); }; };
+		D26560000000000000000004 /* lensworks-mcp in Embed native helpers */ = {isa = PBXBuildFile; fileRef = D26560000000000000000007 /* lensworks-mcp */; settings = {ATTRIBUTES = (CodeSignOnCopy,); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -27,6 +30,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D26560000000000000000005 /* photocatalog */ = {isa = PBXFileReference; explicitFileType = compiled.mach-o.executable; path = "../.build/native-helpers/PhotoCatalogWorker"; sourceTree = SOURCE_ROOT; };
+		D26560000000000000000006 /* lensworks-decode-worker */ = {isa = PBXFileReference; explicitFileType = compiled.mach-o.executable; path = "../.build/native-helpers/LensWorksDecodeWorker"; sourceTree = SOURCE_ROOT; };
+		D26560000000000000000007 /* lensworks-mcp */ = {isa = PBXFileReference; explicitFileType = compiled.mach-o.executable; path = "../.build/native-helpers/LensWorksMCP"; sourceTree = SOURCE_ROOT; };
 		8F311F99304F03BB0017D14F /* Compositor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Compositor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8F311FA6304F03BC0017D14F /* CompositorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CompositorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8F311FB0304F03BC0017D14F /* CompositorUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CompositorUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -237,25 +243,21 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
+/* Begin PBXCopyFilesBuildPhase section */
 		D26560000000000000000001 /* Embed native helpers */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
+			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
-			inputPaths = (
-				"$(SRCROOT)/../scripts/install-native-helpers.sh",
-				"$(SRCROOT)/../.build/rust-catalog/release/photocatalog",
-				"$(SRCROOT)/../.build/rust-catalog/release/lensworks-decode-worker",
-				"$(SRCROOT)/../.build/rust-catalog/release/lensworks-mcp",
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				D26560000000000000000002 /* photocatalog in Embed native helpers */,
+				D26560000000000000000003 /* lensworks-decode-worker in Embed native helpers */,
+				D26560000000000000000004 /* lensworks-mcp in Embed native helpers */,
 			);
 			name = "Embed native helpers";
-			outputPaths = ("$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Helpers",);
 			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "/bin/bash \"$SRCROOT/../scripts/install-native-helpers.sh\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\" \"$SRCROOT/../.build/rust-catalog/release\"\n";
 		};
-/* End PBXShellScriptBuildPhase section */
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8F311F95304F03BB0017D14F /* Sources */ = {

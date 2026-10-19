@@ -16,7 +16,7 @@ compiler_version=$("$CC" --version)
 sdk_version=$(xcrun --sdk macosx --show-sdk-version)
 cmake_version=$(cmake --version)
 rust_version=$(rustc -Vv)
-LW_NATIVE_TOOLCHAIN_ID="$(printf '%s\n' "$DEVELOPER_DIR" "$SDKROOT" "$CC" "$CXX" "$xcode_version" "$compiler_version" "$sdk_version" "$cmake_version" "$rust_version" | shasum -a 256 | awk '{print $1}')"
+LW_NATIVE_TOOLCHAIN_ID="$(printf '%s\n' "$DEVELOPER_DIR" "$SDKROOT" "$CC" "$CXX" "$MACOSX_DEPLOYMENT_TARGET" "$xcode_version" "$compiler_version" "$sdk_version" "$cmake_version" "$rust_version" | shasum -a 256 | awk '{print $1}')"
 export LW_NATIVE_TOOLCHAIN_ID
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$root/.build/toolchains"
@@ -25,7 +25,7 @@ cat > "$CMAKE_TOOLCHAIN_FILE" <<EOF
 set(CMAKE_C_COMPILER [[$CC]] CACHE FILEPATH "" FORCE)
 set(CMAKE_CXX_COMPILER [[$CXX]] CACHE FILEPATH "" FORCE)
 set(CMAKE_OSX_SYSROOT [[$SDKROOT]] CACHE PATH "" FORCE)
-set(CMAKE_OSX_DEPLOYMENT_TARGET 26.2 CACHE STRING "" FORCE)
+set(CMAKE_OSX_DEPLOYMENT_TARGET $MACOSX_DEPLOYMENT_TARGET CACHE STRING "" FORCE)
 # cmake-rs joins cc-rs argv into flag strings without quoting SDK paths. Repair
 # only that generated sysroot argument; preserve every other caller/native flag.
 foreach(lang C CXX)
