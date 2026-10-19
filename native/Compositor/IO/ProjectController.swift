@@ -43,7 +43,15 @@ final class ProjectController {
     var canStart: Bool {
         session.canStartProjectOperation && workspace?.isManaging != true
     }
-    init(session: EditorSession) { self.session = session }
+    init(session: EditorSession) {
+        self.session = session
+        session.restoredVersionContent = { [weak self] content in
+            guard let self, let index = self.lensWorksDocument?.versions.firstIndex(where: { $0.id == self.selectedLensWorksVersionID }) else { return }
+            self.lensWorksDocument?.versions[index].content = content
+            self.lensWorksDocument?.versions[index].canvasRevision = self.session.history.currentRevision
+            self.lensWorksDocumentModified = true
+        }
+    }
 
     /// Starts the persisted native record for a catalog working version. The initial graph is copied out of the editor,
     /// so later version changes do not share mutable state with its siblings.
@@ -266,36 +274,36 @@ final class ProjectController {
         let cache = CanvasHistoryDecodeCache()
         let present = try decodedLensWorksContent(version.content, package: package, cache: cache)
         var current = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(present),
-            activeLayerID: present.manifest.activeLayerID, revision: version.canvasRevision ?? UUID())
+            activeLayerID: present.manifest.activeLayerID, revision: version.canvasRevision ?? UUID(), versionContent: version.content)
         let revision = current.revision
         var past: [DocumentHistory.Entry] = [], future: [DocumentHistory.Entry] = []
         for step in version.undo.reversed() {
             guard isCanvasStep(step) else { break } // Legacy scalar history stays on the version controls.
             let decoded = try decodedLensWorksContent(step.content, package: package, cache: cache)
-            let before = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(decoded), activeLayerID: decoded.manifest.activeLayerID, revision: step.canvasBeforeRevision ?? UUID())
+            let before = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(decoded), activeLayerID: decoded.manifest.activeLayerID, revision: step.canvasBeforeRevision ?? UUID(), versionContent: step.content)
             let after: DocumentHistory.Snapshot
             if let opposite = step.oppositeContent {
                 let decoded = try decodedLensWorksContent(opposite, package: package, cache: cache)
                 let canvas = EditorSession.canvasDocument(decoded)
                 after = DocumentHistory.Snapshot(document: canvas, activeLayerID: decoded.manifest.activeLayerID,
-                    revision: step.canvasAfterRevision ?? (canvas == current.document ? current.revision : UUID()))
+                    revision: step.canvasAfterRevision ?? (canvas == current.document ? current.revision : UUID()), versionContent: opposite)
             } else { after = current }
             past.append(DocumentHistory.Entry(id: step.id, name: step.name, origin: step.attributedToAgent ? .agent : .user, before: before, after: after))
             current = before
         }
         past.reverse()
         current = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(present),
-            activeLayerID: present.manifest.activeLayerID, revision: revision)
+            activeLayerID: present.manifest.activeLayerID, revision: revision, versionContent: version.content)
         for step in version.redo.reversed() {
             guard isCanvasStep(step) else { break }
             let decoded = try decodedLensWorksContent(step.content, package: package, cache: cache)
-            let after = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(decoded), activeLayerID: decoded.manifest.activeLayerID, revision: step.canvasAfterRevision ?? UUID())
+            let after = DocumentHistory.Snapshot(document: EditorSession.canvasDocument(decoded), activeLayerID: decoded.manifest.activeLayerID, revision: step.canvasAfterRevision ?? UUID(), versionContent: step.content)
             let before: DocumentHistory.Snapshot
             if let opposite = step.oppositeContent {
                 let decoded = try decodedLensWorksContent(opposite, package: package, cache: cache)
                 let canvas = EditorSession.canvasDocument(decoded)
                 before = DocumentHistory.Snapshot(document: canvas, activeLayerID: decoded.manifest.activeLayerID,
-                    revision: step.canvasBeforeRevision ?? (canvas == current.document ? current.revision : UUID()))
+                    revision: step.canvasBeforeRevision ?? (canvas == current.document ? current.revision : UUID()), versionContent: opposite)
             } else { before = current }
             future.append(DocumentHistory.Entry(id: step.id, name: step.name, origin: step.attributedToAgent ? .agent : .user, before: before, after: after))
             current = after
@@ -304,7 +312,7 @@ final class ProjectController {
         return (past, future, revision, present)
     }
 
-    private func installLensWorksVersion(_ version: LensWorksPhotoVersion, limit: Int) throws {
+    private func installLensWorksVersion(_ version: LensWorksPhotoVersion, limit: Int, package: ProjectSnapshot? = nil, admit: ((ProjectSnapshot) throws -> Void)? = nil) throws {
         guard session.canStartProjectOperation, session.canEditLayers, session.opacityEditLayerID == nil else {
             throw LensWorksCommandRefusal(reason: "Finish the current canvas edit before switching or restoring versions. Your edits and Undo history have been kept.")
         }
@@ -319,7 +327,8 @@ final class ProjectController {
             capturedLensWorksCanvasDocument = session.document
             return
         }
-        let history = try decodedCanvasHistory(version)
+        let history = try decodedCanvasHistory(version, package: package)
+        try admit?(history.snapshot)
         let url = session.projectURL
         session.installProject(history.snapshot, from: url ?? URL(fileURLWithPath: "/"))
         session.projectURL = url
@@ -366,11 +375,12 @@ final class ProjectController {
     }
 
     /// Commits a changed document only after the version's content is on the canvas.
-    private func commit(_ document: LensWorksPhotoDocument, showing id: UUID) throws {
+    private func commit(_ document: LensWorksPhotoDocument, showing id: UUID, package: ProjectSnapshot? = nil, admit: ((ProjectSnapshot) throws -> Void)? = nil) throws {
         guard !session.isModified || capturedLensWorksCanvasRevision == session.history.currentRevision else {
             throw LensWorksCommandRefusal(reason: "Save or capture your canvas edits before restoring version history. Your edits and Undo history have been kept.")
         }
-        if let version = document.versions.first(where: { $0.id == id }) { try installLensWorksVersion(version, limit: document.maxUndoSteps) }
+        if let version = document.versions.first(where: { $0.id == id }) { try installLensWorksVersion(version, limit: document.maxUndoSteps, package: package, admit: admit) }
+        if let package { lensWorksDocumentAssets = package.lensWorksDocumentAssets; lensWorksDocumentPlanes = package.lensWorksDocumentPlanes }
         lensWorksDocument = document
         selectedLensWorksVersionID = id
         lensWorksDocument?.selectedVersionID = id
@@ -405,9 +415,9 @@ final class ProjectController {
         }
         func step(_ entry: DocumentHistory.Entry, redo: Bool) throws -> LensWorksHistoryStep {
             let value = try graph(redo ? entry.after : entry.before)
-            var content = oldSteps[entry.id]?.content ?? previous.content
+            var content = (redo ? entry.after : entry.before).versionContent ?? oldSteps[entry.id]?.content ?? previous.content
             content.layerGraph = value
-            var opposite = oldSteps[entry.id]?.oppositeContent ?? previous.content
+            var opposite = (redo ? entry.before : entry.after).versionContent ?? oldSteps[entry.id]?.oppositeContent ?? previous.content
             opposite.layerGraph = try graph(redo ? entry.before : entry.after)
             let command: LensWorksDocumentCommand?
             if let original = oldSteps[entry.id] { command = original.command }
@@ -498,10 +508,42 @@ final class ProjectController {
         lensWorksDocumentModified = true
     }
 
-    func restoreLensWorksCheckpoint(_ checkpoint: UUID, in id: UUID) throws {
-        guard var document = lensWorksDocument else { throw ProjectError.invalid }
-        let report = try document.restoreCheckpoint(checkpoint, in: id)
-        try commit(document, showing: id)
+    /// The same reason disables the menu item and refuses an agent's exact target.
+    func checkpointRestoreAvailability(_ target: LensWorksCheckpointTarget? = nil) -> String? {
+        guard let canvas = session.document, let document = lensWorksDocument else { return "Open a LensWorks version document first." }
+        if let target {
+            guard canvas.id == target.document else { return "The document changed; read the current document from get_state again." }
+            guard let version = document.versions.first(where: { $0.id == target.version }) else { return "That version is not in the current document." }
+            guard selectedLensWorksVersionID == version.id else { return "Select that version before restoring its checkpoint." }
+            guard version.checkpoints.contains(where: { $0.id == target.checkpoint }) else { return "That checkpoint is not in the selected version." }
+            if let reason = version.checkpointRestoreCapacityReason(limit: document.maxUndoSteps) { return reason }
+        } else {
+            guard let version = document.versions.first(where: { $0.id == selectedLensWorksVersionID && !$0.checkpoints.isEmpty }) else { return "The selected version has no checkpoints." }
+            if let reason = version.checkpointRestoreCapacityReason(limit: document.maxUndoSteps) { return reason }
+        }
+        guard canStart, session.canEditLayers, session.opacityEditLayerID == nil else { return "Finish the current canvas edit before switching or restoring versions. Your edits and Undo history have been kept." }
+        guard !session.isModified || capturedLensWorksCanvasRevision == session.history.currentRevision else {
+            return "Save or capture your canvas edits before restoring version history. Your edits and Undo history have been kept."
+        }
+        return nil
+    }
+
+    func restoreLensWorksCheckpoint(_ checkpoint: UUID, in id: UUID, origin: LensWorksCommandOrigin = .user,
+                                   admit: ((ProjectSnapshot) throws -> Void)? = nil) throws {
+        guard var document = lensWorksDocument,
+              let version = document.versions.first(where: { $0.id == id }),
+              let saved = version.checkpoints.first(where: { $0.id == checkpoint }) else { throw ProjectError.invalid }
+        var package: ProjectSnapshot?
+        var baseline: LensWorksLayerGraph?
+        if saved.content.layerGraph == nil || version.content.layerGraph == nil {
+            guard var snapshot = session.projectSnapshot() else { throw ProjectError.invalid }
+            var assets = lensWorksDocumentAssets, planes = lensWorksDocumentPlanes
+            baseline = try retainedGraph(snapshot, assets: &assets, planes: &planes)
+            snapshot.lensWorksDocumentAssets = assets; snapshot.lensWorksDocumentPlanes = planes
+            package = snapshot
+        }
+        let report = try document.restoreCheckpoint(checkpoint, in: id, agent: origin == .agent, canvasBaseline: baseline)
+        try commit(document, showing: id, package: package, admit: admit)
         record(report)
     }
 

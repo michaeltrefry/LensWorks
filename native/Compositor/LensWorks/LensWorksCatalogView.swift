@@ -169,7 +169,13 @@ struct LensWorksCatalogWorkspace: View {
                         Button("Checkpoint") { updateDocumentHistory { try controller.addLensWorksCheckpoint(named: documentCheckpointName, to: versionID) } }
                         Menu("Restore Checkpoint") {
                             ForEach(version.checkpoints) { checkpoint in
-                                Button(checkpoint.name) { updateDocumentHistory { try controller.restoreLensWorksCheckpoint(checkpoint.id, in: versionID) } }
+                                if let documentID = controller.session.document?.id {
+                                    let target = LensWorksCheckpointTarget(document: documentID, version: versionID, checkpoint: checkpoint.id)
+                                    LensWorksCommandButton(.restoreCheckpoint, argument: target.argument, title: checkpoint.name,
+                                        reason: controller.checkpointRestoreAvailability(target)) {
+                                        updateDocumentHistory { try LensWorksCommandDispatcher.dispatch(target, in: controller) }
+                                    }.accessibilityIdentifier(target.invocation.identifier)
+                                }
                             }
                         }.disabled(version.checkpoints.isEmpty)
                         TextField("Undo limit", text: $documentUndoLimit).frame(width: 68)

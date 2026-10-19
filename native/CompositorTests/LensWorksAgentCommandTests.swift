@@ -1406,6 +1406,186 @@ struct LensWorksAgentCommandTests {
         #expect(throws: LensWorksCommandRefusal.self) { try LensWorksAgentProjectCommands.admitSources(ProjectSnapshot(manifest: manifest, images: snapshot.images), folders: folders) }
     }
 
+    @Test func checkpointRestoreUsesStateIdentitiesSharedHistoryAndAgentOrigin() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try fixture.paint()
+        let controller = fixture.controller, session = fixture.session
+        try controller.initializeLensWorksDocument(photoID: "p", named: "A")
+        let version = try #require(controller.selectedLensWorksVersionID), layer = try #require(session.activeLayerID)
+        try controller.addLensWorksCheckpoint(named: "Original # <name>", to: version)
+        session.renameLayer(layer, to: "Later")
+        try controller.captureLensWorksComposition(in: version)
+        let state = fixture.tools.state()
+        let document = try #require(state["document"] as? [String: Any])
+        let versions = try #require(document["versions"] as? [[String: Any]])
+        let selected = try #require(versions.first { $0["selected"] as? Bool == true })
+        let checkpoints = try #require(selected["checkpoints"] as? [[String: Any]])
+        let checkpoint = try #require(checkpoints.first)
+        let arguments: [String: Any] = ["document": try #require(document["id"] as? String),
+            "version": try #require(selected["id"] as? String), "checkpoint": try #require(checkpoint["id"] as? String)]
+        let listed = try #require(fixture.tools.listCommands(prefix: "document.checkpoint.").first)
+        #expect(listed["agentInvocable"] as? Bool == true && listed["available"] as? Bool == true)
+        #expect(listed["undoable"] as? Bool == true && listed["requiresConfirmation"] as? Bool == false)
+        let restored = await fixture.invoke("document.checkpoint.restore", arguments)
+        #expect(ok(restored), "\(text(restored))")
+        #expect(session.activeLayer?.name == "Blue" && session.history.undoOrigin == .agent)
+        #expect(session.history.undoName.hasSuffix("(Agent)"))
+        #expect(LensWorksCommandDispatcher.lastInvocation?.id == .restoreCheckpoint)
+        #expect(LensWorksCommandDispatcher.lastOrigin == .agent)
+        #expect(ok(await fixture.invoke("edit.undo")))
+        #expect(session.activeLayer?.name == "Later")
+        #expect(ok(await fixture.invoke("edit.redo")))
+        #expect(session.activeLayer?.name == "Blue")
+    }
+
+    @Test func checkpointRestoreRefusesMalformedStaleForeignDirtyAndPendingTargetsAtomically() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try fixture.paint()
+        let controller = fixture.controller, session = fixture.session
+        try controller.initializeLensWorksDocument(photoID: "p", named: "A")
+        let version = try #require(controller.selectedLensWorksVersionID)
+        try controller.addLensWorksCheckpoint(named: "Original", to: version)
+        let checkpoint = try #require(controller.lensWorksDocument?.versions.first?.checkpoints.first?.id)
+        let target = LensWorksCheckpointTarget(document: try #require(session.document?.id), version: version, checkpoint: checkpoint)
+        let valid = ["document": target.document.uuidString, "version": version.uuidString, "checkpoint": checkpoint.uuidString]
+        let before = controller.lensWorksDocument, canvas = session.document, revision = session.history.currentRevision
+        var cases: [[String: Any]] = [[:], valid.merging(["extra": "ignored?"]) { _, new in new }]
+        for field in ["document", "version", "checkpoint"] {
+            cases.append(valid.merging([field: "not-a-UUID"]) { _, new in new })
+            cases.append(valid.merging([field: UUID().uuidString]) { _, new in new })
+        }
+        for arguments in cases {
+            let refused = await fixture.invoke("document.checkpoint.restore", arguments)
+            #expect(!ok(refused), "\(arguments): \(text(refused))")
+            #expect(controller.lensWorksDocument == before && session.document == canvas && session.history.currentRevision == revision)
+        }
+        try controller.duplicateLensWorksVersion(version, named: "B")
+        let wrongVersion = await fixture.invoke("document.checkpoint.restore", valid)
+        #expect(!ok(wrongVersion) && text(wrongVersion).contains("Select that version"))
+        try controller.selectLensWorksVersion(version)
+        session.renameLayer(try #require(session.activeLayerID), to: "Unsaved user edit")
+        let dirty = controller.checkpointRestoreAvailability(target)
+        #expect(dirty?.contains("Save or capture") == true)
+        #expect(fixture.tools.agentAvailability(.restoreCheckpoint) == dirty)
+        let refused = await fixture.invoke("document.checkpoint.restore", valid)
+        #expect(!ok(refused) && text(refused) == dirty)
+        #expect(session.activeLayer?.name == "Unsaved user edit")
+        session.undo()
+        session.beginOpacityEdit()
+        let pending = controller.checkpointRestoreAvailability(target)
+        #expect(pending != nil && fixture.tools.agentAvailability(.restoreCheckpoint) == pending)
+        #expect(!ok(await fixture.invoke("document.checkpoint.restore", valid)))
+        session.cancelOpacityEdit()
+    }
+
+    @Test func checkpointRestoreChecksRetainedRawOriginalAgainstAgentGrantsBeforeMutation() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let raw = FloatRetouchFixture(), session = fixture.session, controller = fixture.controller
+        let image = try ImportedImage(linear: raw.surface(width: 4, height: 4), name: "RAW")
+        session.createDocument(width: 4, height: 4); session.insert(image)
+        session.document?.layers[0].liveSource = try raw.node(width: 4, height: 4)
+        session.history.reset()
+        try controller.initializeLensWorksDocument(photoID: "p", named: "RAW")
+        let version = try #require(controller.selectedLensWorksVersionID)
+        try controller.addLensWorksCheckpoint(named: "Outside-grant RAW", to: version)
+        let checkpoint = try #require(controller.lensWorksDocument?.versions.first?.checkpoints.first?.id)
+        let arguments = ["document": try #require(session.document?.id).uuidString, "version": version.uuidString, "checkpoint": checkpoint.uuidString]
+        let document = controller.lensWorksDocument, canvas = session.document, revision = session.history.currentRevision
+        let refused = await fixture.invoke("document.checkpoint.restore", arguments)
+        #expect(!ok(refused) && text(refused).contains("A RAW layer’s original:") && text(refused).contains("outside every folder granted"), "\(text(refused))")
+        #expect(controller.lensWorksDocument == document && session.document == canvas && session.history.currentRevision == revision)
+        #expect(session.history.undoOrigin != .agent)
+    }
+
+    @Test func checkpointRestoreRefusesPinnedCapWithoutLosingUndoAndRunsAfterLimitIncrease() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try fixture.paint()
+        let controller = fixture.controller, session = fixture.session
+        try controller.initializeLensWorksDocument(photoID: "p", named: "A")
+        let version = try #require(controller.selectedLensWorksVersionID), layer = try #require(session.activeLayerID)
+        session.renameLayer(layer, to: "Pinned")
+        try controller.addLensWorksCheckpoint(named: "Pin", to: version)
+        try controller.setLensWorksMaxUndoSteps(1)
+        session.renameLayer(layer, to: "Later")
+        try controller.captureLensWorksComposition(in: version)
+        let checkpoint = try #require(controller.lensWorksDocument?.versions.first?.checkpoints.first?.id)
+        let target = LensWorksCheckpointTarget(document: try #require(session.document?.id), version: version, checkpoint: checkpoint)
+        let arguments = ["document": target.document.uuidString, "version": version.uuidString, "checkpoint": checkpoint.uuidString]
+        let before = controller.lensWorksDocument, canvas = session.document, revision = session.history.currentRevision
+        let reason = controller.checkpointRestoreAvailability(target)
+        #expect(reason?.contains("Increase the Undo limit") == true)
+        #expect(fixture.tools.agentAvailability(.restoreCheckpoint) == reason)
+        let refused = await fixture.invoke("document.checkpoint.restore", arguments)
+        #expect(!ok(refused) && text(refused) == reason)
+        #expect(controller.lensWorksDocument == before && session.document == canvas && session.history.currentRevision == revision)
+        try controller.setLensWorksMaxUndoSteps(2)
+        #expect(ok(await fixture.invoke("document.checkpoint.restore", arguments)))
+        #expect(session.activeLayer?.name == "Pinned" && session.history.undoOrigin == .agent)
+        #expect(ok(await fixture.invoke("edit.undo")))
+        #expect(session.activeLayer?.name == "Later")
+        #expect(ok(await fixture.invoke("edit.redo")))
+        #expect(session.activeLayer?.name == "Pinned")
+    }
+
+    @Test(arguments: [false, true]) func legacyMetadataCheckpointRestoreUsesReversibleCanvasBaselineAndSurvivesReopen(checkpointHasGraph: Bool) async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try fixture.paint()
+        let controller = fixture.controller, session = fixture.session
+        try controller.initializeLensWorksDocument(photoID: "legacy", named: "Baseline")
+        let nativeGraph = try #require(controller.lensWorksDocument?.versions.first?.content.layerGraph)
+        controller.lensWorksDocumentAssets = [:] // A legacy record has no retained native backing yet.
+        var legacy = LensWorksPhotoDocument(photoID: "legacy")
+        let version = legacy.addVersion(named: "A")
+        try legacy.perform(.setRaw(key: "exposure", value: 1), on: version)
+        let checkpoint = try legacy.addCheckpoint(named: "Legacy", to: version)
+        try legacy.perform(.setRaw(key: "exposure", value: 3), on: version)
+        if checkpointHasGraph { legacy.versions[0].checkpoints[0].content.layerGraph = nativeGraph }
+        legacy.selectedVersionID = version
+        controller.lensWorksDocument = legacy; controller.selectedLensWorksVersionID = version
+        let canvas = session.document
+        let arguments = ["document": try #require(canvas?.id).uuidString, "version": version.uuidString, "checkpoint": checkpoint.uuidString]
+        let restored = await fixture.invoke("document.checkpoint.restore", arguments)
+        #expect(ok(restored), "\(text(restored))")
+        #expect(session.document?.layers.map(\.name) == canvas?.layers.map(\.name))
+        #expect(controller.lensWorksDocument?.versions[0].content.rawSettings["exposure"] == 1)
+        #expect(session.canUndo && session.history.undoOrigin == .agent)
+        #expect((controller.lensWorksDocument?.versions[0].checkpoints[0].content.layerGraph != nil) == checkpointHasGraph) // The saved checkpoint itself is not rewritten.
+        #expect(ok(await fixture.invoke("edit.undo")))
+        #expect(controller.lensWorksDocument?.versions[0].content.rawSettings["exposure"] == 3)
+        let path = fixture.granted.appendingPathComponent("legacy-checkpoint.comp")
+        #expect(ok(await fixture.invoke("file.saveAs", ["path": path.path])))
+        let reopened = ProjectController(session: EditorSession())
+        reopened.recordsRecentProjects = false; reopened.sharesWorkingVersions = false; reopened.agentRequest = ProjectAgentRequest()
+        #expect(await reopened.open(path), "\(reopened.agentRequest?.failure ?? "Open failed")")
+        #expect(reopened.lensWorksDocument?.versions[0].content.rawSettings["exposure"] == 3)
+        reopened.session.redo()
+        #expect(reopened.lensWorksDocument?.versions[0].content.rawSettings["exposure"] == 1)
+        reopened.session.undo()
+        #expect(reopened.lensWorksDocument?.versions[0].content.rawSettings["exposure"] == 3)
+    }
+
+    @Test func checkpointStateIsBoundedAndStillNamesTheSelectedVersion() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        try fixture.paint()
+        var document = LensWorksPhotoDocument(photoID: "p")
+        for index in 0...LensWorksAgentTools.stateRowLimit {
+            let id = document.addVersion(named: "Version \(index)")
+            for number in 0..<2 { _ = try document.addCheckpoint(named: "Checkpoint \(number)", to: id) }
+        }
+        fixture.controller.lensWorksDocument = document
+        fixture.controller.selectedLensWorksVersionID = document.versions.last?.id
+        let state = fixture.tools.state()
+        let shown = try #require(state["document"] as? [String: Any])
+        let versions = try #require(shown["versions"] as? [[String: Any]])
+        #expect(versions.count == LensWorksAgentTools.stateRowLimit && shown["versionsTruncated"] as? Bool == true)
+        #expect(versions.first?["id"] as? String == document.versions.last?.id.uuidString)
+        #expect(versions.first?["selected"] as? Bool == true)
+        #expect((versions.first?["checkpoints"] as? [[String: Any]])?.count == 2)
+        #expect(versions.reduce(0) { $0 + (($1["checkpoints"] as? [[String: Any]])?.count ?? 0) } == LensWorksAgentTools.stateRowLimit)
+        #expect(versions.contains { $0["checkpointsTruncated"] as? Bool == true })
+        #expect(throws: Never.self) { _ = try LensWorksAgentTools.bounded(state) }
+    }
+
     /// Replies are bounded: lists are cut with a marker, and no text reply passes the limit.
     @Test func listAndStateRepliesAreBounded() async throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }

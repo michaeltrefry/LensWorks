@@ -629,6 +629,9 @@ struct LensWorksAgentProjectCommands {
             guard let session, context.workspace != nil else { return "There is no project tab to close." }
             if let reason = menu() { return reason }
             return session.isModified && session.document != nil ? "Save the project first: closing it would discard its unsaved changes." : nil
+        case .restoreCheckpoint:
+            guard let projects = context.projects, let session, projects.session === session else { return "Open a LensWorks version document first." }
+            return projects.checkpointRestoreAvailability()
         case .save:
             guard session?.document != nil else { return "Open a document first." }
             if let reason = menu() { return reason }
@@ -689,9 +692,19 @@ struct LensWorksAgentProjectCommands {
         return (.Native(folder.locator), LensWorksRelinkPaths.label(folder.locator))
     }
 
+    private func checkpointTarget(_ arguments: LensWorksAgentArguments) throws -> LensWorksCheckpointTarget {
+        try LensWorksCheckpointTarget(document: arguments.required("document", arguments.uuid("document")),
+            version: arguments.required("version", arguments.uuid("version")), checkpoint: arguments.required("checkpoint", arguments.uuid("checkpoint")))
+    }
+
     /// Refuses a request whose target cannot be what the command needs, before the person is asked anything and
     /// before the open catalog is let go: a folder that is not a catalog must not close the one that is open.
     func validate(_ admission: LensWorksAgentAdmission) throws {
+        if admission.id == .restoreCheckpoint {
+            guard let projects = context.projects else { throw refuse("Open a LensWorks version document first.") }
+            if let reason = projects.checkpointRestoreAvailability(try checkpointTarget(admission.arguments)) { throw refuse(reason) }
+            return
+        }
         guard admission.id == .openCatalog || admission.id == .newCatalog else { return }
         let url = try admission.arguments.url("path")
         var isDirectory: ObjCBool = false
@@ -725,6 +738,12 @@ struct LensWorksAgentProjectCommands {
             if !succeeded { throw refuse(fallback) }
         }
         switch id {
+        case .restoreCheckpoint:
+            guard let projects = context.projects else { throw refuse("Open a LensWorks version document first.") }
+            let target = try checkpointTarget(arguments)
+            try LensWorksCommandDispatcher.dispatch(target, in: projects, origin: admission.origin,
+                admit: { try Self.admitSources($0, folders: folders) })
+            return "The checkpoint is restored; its restore step is in document history (Agent)."
         case .newCanvas:
             let width = try arguments.required("width", try arguments.integer("width")), height = try arguments.required("height", try arguments.integer("height"))
             guard let session = context.session else { throw refuse("There is no project window.") }

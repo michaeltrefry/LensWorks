@@ -92,7 +92,15 @@ commands remain available through the version history controls. Naming a
 checkpoint first captures the visible selected canvas and its completed edits;
 an unfinished gesture is refused without changing the canvas, version or assets.
 The selected version is saved with the document so reopening the canvas and its
-history controls agree.
+history controls agree. The checkpoint menu and automation share the registered
+`document.checkpoint.restore` command with required current-document, selected-version
+and checkpoint UUIDs. Its availability refuses stale identities, unfinished edits
+and a protected Undo limit that cannot retain the restore's reversal; increasing
+the limit makes that restore available without discarding protected steps. A legacy
+metadata-only checkpoint preserves today's canvas as its baseline while restoring
+its retained metadata through the same document Undo/Redo, including across reopen.
+Automation validates restored RAW originals against its granted folders before
+installing the candidate and attributes the restore step to the agent.
 
 Saving a catalog working version under a different project path creates a new
 working-version UUID while retaining photo/source links; normal Save preserves

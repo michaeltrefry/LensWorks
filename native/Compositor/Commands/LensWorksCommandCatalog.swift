@@ -25,6 +25,7 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case clearRecent = "file.openRecent.clear", importImages = "file.importImages", save = "file.save"
     case saveAs = "file.saveAs", exportPNG = "file.exportPNG", exportJPEG = "file.exportJPEG", closeProject = "file.closeProject"
     // Edit.
+    case restoreCheckpoint = "document.checkpoint.restore"
     case undo = "edit.undo", redo = "edit.redo", cut = "edit.cut", copyPixels = "edit.copy"
     case copyMerged = "edit.copyMerged", paste = "edit.paste", keyboardShortcuts = "edit.keyboardShortcuts", aiModels = "edit.aiModels"
     case fillForeground = "edit.fillForeground", fillBackground = "edit.fillBackground"
@@ -268,6 +269,11 @@ nonisolated enum LensWorksCommandRegistry {
 
     private static let variantParameter = LensWorksCommandParameter(name: "expected", type: .expectedVersion, description: "Optional guard: the catalog version (variantId and revision from get_state) this command was decided against; refused when it changed.")
     private static let layerAndRecipe: [LensWorksCommandDescriptor] = [
+        .init(id: .restoreCheckpoint, label: "Restore Checkpoint", menu: "Document History/Restore Checkpoint", titleMatch: .any,
+            parameters: [.init(name: "document", type: .uuid, description: "The current document id from get_state; refuses a replaced document.", required: true),
+                         .init(name: "version", type: .uuid, description: "The selected named version id from document.versions in get_state.", required: true),
+                         .init(name: "checkpoint", type: .uuid, description: "A checkpoint id in that version's checkpoints from get_state.", required: true)],
+            undoable: true, historyOwner: .document),
         .init(id: .visibility, label: "Hide/Show Layer", menu: "Layer", menus: ["Layer", "Layers Panel"], titles: ["Hide Layer", "Show Layer"], bindings: menuKey("Hide/Show Layer", "h", 9), parameters: [.init(name: "layers", type: .uuidArray, description: "Layer ids from get_state; defaults to the selected layer."), .init(name: "visible", type: .optionalBoolean, description: "Nil toggles each admitted layer; Bool sets explicit visibility.")], undoable: true, historyOwner: .document),
         .init(id: .opacity, label: "Layer Opacity", menu: "Layer/Appearance", parameters: [.init(name: "layers", type: .uuidArray, description: "Layer ids from get_state; defaults to the selected layer."), .init(name: "opacity", type: .unitInterval, description: "Finite value from 0 through 1 applied to the admitted layer identities.", required: true)], undoable: true, historyOwner: .document),
         .init(id: .rename, label: "Rename Layer", menu: "Layer", parameters: [.init(name: "layer", type: .uuid, description: "A layer id from get_state; defaults to the selected layer."), .init(name: "name", type: .layerName, description: "Nonempty trimmed name, at most 16,384 UTF-8 bytes, for one exact layer UUID.", required: true)], undoable: true, historyOwner: .document),

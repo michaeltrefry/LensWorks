@@ -9,6 +9,10 @@ final class DocumentHistory {
         let document: CanvasDocument?
         let activeLayerID: UUID?
         let revision: UUID
+        let versionContent: LensWorksVersionContent?
+        init(document: CanvasDocument?, activeLayerID: UUID?, revision: UUID, versionContent: LensWorksVersionContent? = nil) {
+            self.document = document; self.activeLayerID = activeLayerID; self.revision = revision; self.versionContent = versionContent
+        }
     }
     struct Entry {
         var id = UUID()

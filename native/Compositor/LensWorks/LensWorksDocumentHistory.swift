@@ -186,6 +186,12 @@ nonisolated struct LensWorksPhotoVersion: Codable, Sendable, Equatable, Identifi
         retainedContents.reduce(into: Set<String>()) { $0.formUnion($1.assetIDs) }
     }
 
+    func checkpointRestoreCapacityReason(limit: Int) -> String? {
+        let pinned = Set(checkpoints.compactMap(\.pinnedStepID))
+        guard undo.filter({ pinned.contains($0.id) }).count >= limit else { return nil }
+        return "Increase the Undo limit before restoring: protected checkpoint steps fill the current limit, so the restore's Undo step could not be retained. Your composition and history have been kept."
+    }
+
     /// One authoritative traversal for retention, reader admission and original
     /// destination protection, including both sides of noncontiguous history.
     var retainedContents: [LensWorksVersionContent] {
@@ -298,13 +304,21 @@ nonisolated struct LensWorksPhotoDocument: Codable, Sendable, Equatable {
 
     /// Restoring is itself an undoable step.
     @discardableResult
-    mutating func restoreCheckpoint(_ checkpoint: UUID, in id: UUID) throws -> LensWorksPruneReport {
+    mutating func restoreCheckpoint(_ checkpoint: UUID, in id: UUID, agent: Bool = false, canvasBaseline: LensWorksLayerGraph? = nil) throws -> LensWorksPruneReport {
         let i = try index(id)
         guard let saved = versions[i].checkpoints.first(where: { $0.id == checkpoint }) else { throw LensWorksDocumentError.unknownCheckpoint }
+        if let reason = versions[i].checkpointRestoreCapacityReason(limit: maxUndoSteps) { throw LensWorksCommandRefusal(reason: reason) }
+        var before = versions[i].content, after = saved.content
+        // Legacy checkpoints own scalar/source metadata, not a historical native
+        // canvas. Preserve today's composition while making that metadata restore
+        // fully reversible in the same document history.
+        if before.layerGraph == nil { before.layerGraph = canvasBaseline }
+        if after.layerGraph == nil { after.layerGraph = canvasBaseline }
         let afterRevision = UUID()
-        versions[i].undo.append(LensWorksHistoryStep(name: "Restore “\(saved.name)”", command: nil, content: versions[i].content,
-            oppositeContent: saved.content, canvasBeforeRevision: versions[i].canvasRevision, canvasAfterRevision: afterRevision))
-        versions[i].content = saved.content
+        let label = "Restore “\(saved.name)”" + (agent ? " (Agent)" : "")
+        versions[i].undo.append(LensWorksHistoryStep(name: label, command: nil, content: before,
+            oppositeContent: after, canvasBeforeRevision: versions[i].canvasRevision, canvasAfterRevision: afterRevision, attributedToAgent: agent))
+        versions[i].content = after
         versions[i].canvasRevision = afterRevision
         versions[i].redo = []
         return prune(i)
