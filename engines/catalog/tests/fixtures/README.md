@@ -22,7 +22,7 @@ is preserved for both calibrated and bypassed pixels.
 
 `generated-swatches.png` is a 3×2 RGBA PNG: red/green/blue and gray/white/black,
 including half and zero alpha. `generated-swatches-10bit.avif` was encoded using
-libavif 1.4.2's avifenc, AOM 3.15.0; this records how the committed fixture was made, while the runner's current pin is in DEPENDENCIES.json:
+libavif 1.4.2's avifenc, AOM 3.15.0:
 
 ```
 avifenc -j 1 --lossless --depth 10 --yuv 444 --cicp 1/13/0 \
