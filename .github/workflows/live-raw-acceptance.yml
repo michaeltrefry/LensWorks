@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
-      - name: Select the provisioned Python 3.12.13 interpreter
+      - name: Select the provisioned Python 3.12.15 interpreter
         run: |
           test -x /opt/homebrew/opt/python@3.12/bin/python3.12
           echo /opt/homebrew/opt/python@3.12/libexec/bin >> "$GITHUB_PATH"
