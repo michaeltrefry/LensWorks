@@ -27,6 +27,7 @@ jobs:
       - name: Select the provisioned Python 3.12.15 interpreter
         run: |
           test -x /opt/homebrew/opt/python@3.12/bin/python3.12
+          /opt/homebrew/opt/python@3.12/bin/python3.12 -c 'import sys; assert sys.version_info[:3] == (3, 12, 15), sys.version'
           echo /opt/homebrew/opt/python@3.12/libexec/bin >> "$GITHUB_PATH"
       - name: Use the persistent runner cache for the inference build
         # Outside the workspace (which checkout cleans) so the MLX runtime builds incrementally.
