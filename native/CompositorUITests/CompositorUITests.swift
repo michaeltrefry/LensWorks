@@ -563,9 +563,9 @@ extension CompositorUITests {
         XCTAssertEqual(filename, baseline.layerID + ".mask.png")
         XCTAssertEqual(saved.layer["maskEnabled"] as? Bool, true)
         XCTAssertEqual(saved.layer["maskLinked"] as? Bool, true)
-        var layers = saved.manifest["layers"] as! [[String: Any]]
+        var layers = try XCTUnwrap(saved.manifest["layers"] as? [[String: Any]])
         for key in ["maskFile", "maskEnabled", "maskLinked"] { layers[0].removeValue(forKey: key) }
-        let withoutMask = saved.manifest.mutableCopy() as! NSMutableDictionary
+        let withoutMask = try XCTUnwrap(saved.manifest.mutableCopy() as? NSMutableDictionary)
         withoutMask["layers"] = layers
         XCTAssertEqual(withoutMask, baseline.manifest, "Adding a mask must change no other layer/document field or identity")
         XCTAssertEqual(saved.source, baseline.source, "The original source record and working-version identity are untouched")

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Source before Rust/CMake builds. Never mix a selected Xcode linker with the CLT SDK.
 # Executing with --github also exports the selection to later Actions steps.
+# When sourced, these shell options also apply to the caller.
 set -euo pipefail
 DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 export DEVELOPER_DIR
