@@ -12,13 +12,16 @@ nonisolated struct LensWorksWorkingVersion: Codable, Sendable, Identifiable {
     var name: String
     var originalNativePath: LWCatalogNativePath? = nil
     var originalVariantKey: LWCatalogEditsVariantKey? = nil
+    /// Additional immutable source identities for generated multi-source documents such as panoramas.
+    /// The primary result remains the catalog item's normal original; these preserve its provenance without changing it.
+    var sourceLinks: [LensWorksPanoramaSource]? = nil
     // Schema-1 records predating logical copies describe the retained master.
     var sourceVariantID: String { originalVariantKey?.variant_id ?? "master" }
 
     /// The same version (identity, photo, copy and project) at its original's relinked location.
     func relinked(originalPath: String, native: LWCatalogNativePath?) -> Self {
         LensWorksWorkingVersion(id: id, photoID: photoID, catalogPath: catalogPath, originalPath: originalPath, projectPath: projectPath,
-            name: name, originalNativePath: native, originalVariantKey: originalVariantKey)
+            name: name, originalNativePath: native, originalVariantKey: originalVariantKey, sourceLinks: sourceLinks)
     }
 
     static func sidecar(for project: URL) -> URL {
@@ -130,7 +133,7 @@ actor LensWorksVersionStore {
         // FileWrapper can leave the held URL's directory bit stale after first publication.
         guard existing != target else { return version }
         return LensWorksWorkingVersion(id: UUID(), photoID: version.photoID, catalogPath: version.catalogPath,
-            originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent, originalNativePath: version.originalNativePath, originalVariantKey: version.originalVariantKey)
+            originalPath: version.originalPath, projectPath: destination.path, name: destination.deletingPathExtension().lastPathComponent, originalNativePath: version.originalNativePath, originalVariantKey: version.originalVariantKey, sourceLinks: version.sourceLinks)
     }
     func validate(_ version: LensWorksWorkingVersion?, destination: URL) throws { try version?.validateDestination(destination) }
     func list(paths: [String], directory: String?) -> LensWorksVersionListing {

@@ -141,6 +141,21 @@ struct CompositorApp: App {
                         LensWorksCommandButton(.hideOthers) { NSApp.hideOtherApplications(nil) }
                         LensWorksCommandButton(.showAll) { NSApp.unhideAllApplications(nil) }
                     }
+                    CommandMenu("Photo") {
+                        let catalog = applicationDelegate.catalog
+                        LensWorksCommandButton(.cancelPanorama, reason: catalog.isMergingPanorama ? nil : "No panorama merge is running.") { catalog.cancelPanorama() }
+                        Menu("Merge to Panorama") {
+                            ForEach(LensWorksPanoramaBoundary.allCases, id: \.self) { boundary in
+                                let boundaryTitle = boundary == .autoCrop ? "Auto Crop" : "Fill Edges"
+                                ForEach(LensWorksPanoramaProjection.allCases, id: \.self) { projection in
+                                    LensWorksCommandButton(.mergePanorama, argument: "\(projection.rawValue) \(boundary.rawValue)", title: "\(projection.rawValue.capitalized) – \(boundaryTitle)", reason: catalog.panoramaAvailability(workspace: applicationDelegate.workspace)) {
+                                        Task { await catalog.mergeSelectionToPanorama(workspace: applicationDelegate.workspace, projection: projection, boundary: boundary) }
+                                    }
+                                }
+                                if boundary == .autoCrop { Divider() }
+                            }
+                        }
+                    }
                 }
                 CommandGroup(replacing: .pasteboard) {
                     // Canvas pixels when the canvas has focus; text fields keep their own editing.

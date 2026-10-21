@@ -88,6 +88,8 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case filterAnyKeyword = "catalog.filter.anyKeyword", clearFilters = "catalog.filter.clear"
     /// Choosing photos in the catalog grid: the selection every organize command acts on.
     case selectPhotos = "catalog.photo.select"
+    // Photo.
+    case mergePanorama = "photo.mergePanorama", cancelPanorama = "photo.cancelPanorama"
     // Settings › Automation and the agent confirmation sheet. Never invocable by an agent.
     case automationEnabled = "automation.enabled", automationShowSecret = "automation.secret.show"
     case automationCopySecret = "automation.secret.copy", automationRegenerateSecret = "automation.secret.regenerate"
@@ -262,7 +264,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, photoMenu, automation]
         return groups.flatMap { $0 }
     }()
 
@@ -489,6 +491,14 @@ nonisolated enum LensWorksCommandRegistry {
         .init(id: .filterAnyKeyword, label: "Any Keyword", menu: "Catalog Filter"),
         .init(id: .clearFilters, label: "Clear Filters", menu: "Catalog Filter"),
         .init(id: .selectPhotos, label: "Select Photos", menu: "Catalog Grid", parameters: [.init(name: "photos", type: .referenceArray, description: "Photo ids from get_state (the photos on the current catalog page); an empty list clears the selection.", required: true), Argument.flag("extend", "Adds to the current selection instead of replacing it.")])
+    ]
+
+    private static let photoMenu: [LensWorksCommandDescriptor] = [
+        .init(id: .cancelPanorama, label: "Cancel Panorama Merge", menu: "Photo"),
+        .init(id: .mergePanorama, label: "Merge to Panorama", menu: "Photo/Merge to Panorama", titles: LensWorksPanoramaBoundary.allCases.flatMap { boundary in
+            LensWorksPanoramaProjection.allCases.map { "\($0.rawValue.capitalized) – \(boundary == .autoCrop ? "Auto Crop" : "Fill Edges")" }
+        }, parameters: choice("projection", LensWorksPanoramaProjection.allCases.map(\.rawValue), required: true, "The panorama projection.")
+            + choice("boundary", LensWorksPanoramaBoundary.allCases.map(\.rawValue), required: true, "Crop to covered pixels or fill the projected rectangle."))
     ]
 
     private static let automation: [LensWorksCommandDescriptor] = [

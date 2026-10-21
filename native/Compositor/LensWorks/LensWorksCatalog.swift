@@ -56,6 +56,14 @@ nonisolated struct LensWorksCatalogAsset: Decodable, Sendable, Identifiable {
     } }
 }
 
+nonisolated extension LensWorksCatalogAsset {
+    init(row: LWApplicationDtoGridImage) {
+        self.init(sequence: row.sequence.value, id: row.image_id, originalPath: row.filename, state: row.state,
+            previewPath: nil, key: row.key, displayFilename: row.filename, metadataRevision: row.metadata_revision.value,
+            origin: row.origin, translationState: row.translation_state, rating: row.rating?.value, flag: row.flag, label: row.label)
+    }
+}
+
 nonisolated struct LensWorksCatalogRequest: Encodable, Sendable {
     let version = 1
     let op: String
@@ -85,7 +93,7 @@ nonisolated struct LensWorksImportReport: Decodable, Sendable {
 #if DEBUG
 nonisolated enum LensWorksCatalogCloseFaultPoint: Sendable, Equatable { case beforeSubmit, beforeDecode, beforeRelease }
 nonisolated enum LensWorksPreviewDrainFaultPoint: Sendable, Equatable { case afterSubmit, beforeDecode, beforeRelease }
-nonisolated enum LensWorksCatalogContinuationPoint: Sendable, Equatable { case groupRead, membershipIdentity, organizationApplied, importMonitorTerminal, settingsStatus, catalogRecipeAdmission, catalogRecipeReply, originalResolved }
+nonisolated enum LensWorksCatalogContinuationPoint: Sendable, Equatable { case groupRead, membershipIdentity, organizationApplied, importMonitorTerminal, settingsStatus, catalogRecipeAdmission, catalogRecipeReply, originalResolved, panoramaAdmission, panoramaDocumentReady, panoramaSaved, panoramaPublished }
 @MainActor private final class LensWorksImportMonitorReceipt { var complete = false }
 #endif
 
@@ -824,6 +832,10 @@ final class LensWorksCatalog {
     private(set) var outputDirectory: String?
     private var busyOwner: UUID?
     var isBusy: Bool { busyOwner != nil }
+    private(set) var isMergingPanorama = false
+    @ObservationIgnored private var panoramaTask: Task<LWLinearMediaRecoveryError?, Never>?
+    @ObservationIgnored private var panoramaOwner: UUID?
+    func cancelPanorama() { if isMergingPanorama { panoramaTask?.cancel() } }
     private(set) var closingRequested = false
     private(set) var closeInFlight = false
     private(set) var hasMore = false
@@ -903,6 +915,28 @@ final class LensWorksCatalog {
     var recursive = true
     var selection: Set<String> = []
     var error: String?
+    @ObservationIgnored private(set) var mediaRecoveryRevision: UInt64 = 0
+    private(set) var mediaRecovery: LWLinearMediaRecoveryError?
+    var presentedError: String? {
+        guard let recovery = mediaRecovery?.localizedDescription else { return error }
+        guard let error, !error.contains(recovery) else { return error ?? recovery }
+        return error + "\n" + recovery
+    }
+    /// Recovery concerns preserved filesystem media, not one catalog's lifetime. Only explicit
+    /// acknowledgement dismisses it; opening a catalog or restoring a command's old error cannot.
+    func reportMediaRecovery(_ failure: LWLinearMediaRecoveryError) {
+        let prior = mediaRecovery?.localizedDescription
+        mediaRecoveryRevision &+= 1
+        if let previous = mediaRecovery {
+            var seen = Set<URL>()
+            let paths = (previous.recoveryPaths + failure.recoveryPaths).filter { seen.insert($0).inserted }
+            mediaRecovery = LWLinearMediaRecoveryError(reason: previous.reason == failure.reason ? failure.reason : previous.reason + "\n" + failure.reason, recoveryPaths: paths)
+        } else { mediaRecovery = failure }
+        let message = mediaRecovery!.localizedDescription
+        if error == nil || error == prior { error = message }
+        else { error = error! + "\n" + message }
+    }
+    func dismissPresentedError() { error = nil; mediaRecovery = nil }
     var status = "Open or create a catalog to begin."
     @ObservationIgnored let service: LensWorksCatalogService
     /// Locate Originals review and storage-operation custody for this catalog.
@@ -918,7 +952,7 @@ final class LensWorksCatalog {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let migrateLegacy: Bool
     @ObservationIgnored private let rowLimit: UInt16
-    @ObservationIgnored private var catalogSelectionEpoch: UInt64 = 0
+    @ObservationIgnored private(set) var catalogSelectionEpoch: UInt64 = 0
     @ObservationIgnored private var selectionOwner = UUID().uuidString
     @ObservationIgnored private var queryEpoch: UInt64 = 0
     @ObservationIgnored private var queryOwner = UUID().uuidString
@@ -2529,6 +2563,189 @@ final class LensWorksCatalog {
         return resolved
     }
 
+    /// The disk-backed selection spans visited pages; a merge never silently drops off-page sources.
+    func panoramaSources() async throws -> [LensWorksCatalogAsset] {
+        guard let token = catalogToken else { throw CancellationError() }
+        let scope = captureScope(), epoch = catalogSelectionEpoch, owner = selectionOwner
+        var after = "", sources: [LensWorksCatalogAsset] = []
+        while true {
+            try Task.checkCancellation()
+            let page = try await index.selection(owner: owner, after: after)
+            try checkScope(scope)
+            guard catalogSelectionEpoch == epoch, selectionOwner == owner else { throw CancellationError() }
+            for selected in page {
+                let row = try await service.catalogImage(catalog: token, key: selected.key)
+                try Task.checkCancellation(); try checkScope(scope)
+                guard catalogSelectionEpoch == epoch, selectionOwner == owner else { throw CancellationError() }
+                sources.append(.init(row: row))
+            }
+            guard let last = page.last else { break }
+            after = last.imageID
+        }
+        return sources.sorted { $0.sequence < $1.sequence }
+    }
+
+    func panoramaAvailability(workspace: ProjectWorkspace) -> String? {
+        guard catalogPath != nil else { return "Open a catalog first." }
+        guard selectionCount >= 2 else { return "Select at least two overlapping photos." }
+        guard outputDirectory != nil else { return "Choose a working-version folder first." }
+        guard !isBusy, !isImporting else { return "Finish the current catalog operation first." }
+        guard workspace.canSwitch else { return "Finish the current edit before creating a panorama." }
+        return nil
+    }
+
+    /// Publishes a generated panorama into the same user-chosen filesystem workflow as working versions, imports that
+    /// published original through the ordinary catalog importer, then opens a normal editable project linked to every
+    /// source. The selected originals are only read.
+    @discardableResult func mergeSelectionToPanorama(workspace: ProjectWorkspace, projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary,
+        admitted: (sources: [String], output: String)? = nil) async -> LWLinearMediaRecoveryError? {
+        guard panoramaAvailability(workspace: workspace) == nil, panoramaTask == nil else { return nil }
+        let owner = UUID()
+        let task = Task { await performPanoramaMerge(workspace: workspace, projection: projection, boundary: boundary, admitted: admitted) }
+        panoramaOwner = owner; panoramaTask = task; isMergingPanorama = true
+        let recovery = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        if panoramaOwner == owner { panoramaTask = nil; panoramaOwner = nil; isMergingPanorama = false }
+        return recovery
+    }
+
+    private func performPanoramaMerge(workspace: ProjectWorkspace, projection: LensWorksPanoramaProjection, boundary: LensWorksPanoramaBoundary,
+        admitted: (sources: [String], output: String)?) async -> LWLinearMediaRecoveryError? {
+        guard panoramaAvailability(workspace: workspace) == nil, let catalogPath, let output = outputDirectory else { return nil }
+        let scope = captureScope(), selectionEpoch = catalogSelectionEpoch, visibleSelection = selection
+        let busy = beginBusy(); defer { finishBusy(busy) }
+        var publication: (destination: LWLinearMediaDestination, name: String)?
+        func checkAdmission() throws {
+            try Task.checkCancellation(); try checkScope(scope)
+            guard outputDirectory == output, catalogSelectionEpoch == selectionEpoch,
+                  selection == visibleSelection, workspace.canSwitch else { throw CancellationError() }
+            if let publication { try publication.destination.validatePublication(named: publication.name) }
+        }
+        do {
+            #if DEBUG
+            await continuationFixture?(.panoramaAdmission)
+            #endif
+            try checkAdmission()
+            let sources = try await panoramaSources()
+            try checkAdmission()
+            let checkedOutput = try await LensWorksVersionStore.shared.canonicalPath(output, outside: catalogPath)
+            // Foundation standardization aliases /private/var to /var on macOS; folder grants
+            // and the native source authority use realpath. Compare and pin physical paths.
+            let canonicalOutput = try LensWorksGrantedFolders.realPath(checkedOutput)
+            try checkAdmission()
+            var resolved: [LensWorksCatalogAsset] = []
+            for source in sources { resolved.append(try await service.resolve(source)); try checkAdmission() }
+            let urls = try resolved.map { try $0.originalURL }
+            if let admitted {
+                guard urls.map(\.path) == admitted.sources, canonicalOutput == admitted.output else {
+                    throw LensWorksCommandRefusal(reason: "The panorama’s source originals or output folder changed after folder admission: nothing was merged.")
+                }
+            }
+            let destination = try LWLinearMediaDestination(output: URL(fileURLWithPath: canonicalOutput), subdirectory: "Panoramas")
+            let media = destination.directory
+            let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            let name = "Panorama – " + projection.rawValue.capitalized + " – " + nonce
+            let task = Task.detached(priority: .userInitiated) {
+                let result = try await LensWorksPanoramaLinear.stitch(urls, projection: projection, boundary: boundary)
+                try Task.checkCancellation()
+                let published = media.appendingPathComponent(name).appendingPathExtension("dng")
+                try LWLinearDNGWriter.writeDNG(result, to: published, destination: destination)
+                return published
+            }
+            let published = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            publication = (destination, published.lastPathComponent)
+            #if DEBUG
+            await continuationFixture?(.panoramaPublished)
+            #endif
+            do {
+                guard !task.isCancelled else { throw CancellationError() }
+                try checkAdmission()
+            } catch {
+                let primary = error
+                do { try destination.removeUnimportedPublication(named: published.lastPathComponent) }
+                catch let recovery as LWLinearMediaRecoveryError {
+                    throw LWLinearMediaRecoveryError(reason: "The panorama stopped before catalog import. " + recovery.reason, recoveryPaths: recovery.recoveryPaths)
+                } catch {
+                    throw LWLinearMediaRecoveryError(reason: "The panorama stopped and its publication could not be rolled back: " + error.localizedDescription, recoveryPaths: [published])
+                }
+                throw primary
+            }
+            try destination.validate()
+            _ = try await service.request(LensWorksCatalogRequest(op: "import", catalog_path: catalogPath, source_path: media.path, max_files: 1000), as: LensWorksImportReport.self)
+            try checkAdmission()
+            // Resolve the unique publication independently of the current browse filters/page.
+            // Refreshing the visible page here would invalidate the captured source selection.
+            let lookup = LWApplicationBrowseOptions(text: nonce, keyword: nil, keyword_direct: false,
+                folder: nil, folder_recursive: true, collection: nil, date_from: nil, date_until: nil,
+                camera_make: nil, camera: nil, lens: nil, format: nil, rating: nil, flag: nil, label: nil,
+                only_conflicted: false, sort: .Sequence, direction: .Ascending)
+            var lookupCursor: String?, importedRow: LWApplicationDtoGridImage?
+            repeat {
+                let page = try await service.browse(options: lookup, cursor: lookupCursor)
+                try checkAdmission()
+                importedRow = page.rows.first(where: { $0.filename == published.lastPathComponent })
+                if importedRow != nil || !page.hasMore { break }
+                guard let next = page.next, next != lookupCursor else { throw LensWorksManagedError.protocolViolation("Panorama lookup cursor did not advance.") }
+                lookupCursor = next
+            } while true
+            guard let row = importedRow else { throw LensWorksCatalogError.message("The published panorama was not returned by the catalog importer.") }
+            let imported = LensWorksCatalogAsset(row: row)
+            let resultAsset = try await service.resolve(imported)
+            let resultURL = try resultAsset.originalURL
+            try checkAdmission()
+            // Prepare the document privately: cancelling import/development never changes an open tab.
+            let tab = ProjectTab(name: name)
+            workspace.configureController(tab.controller)
+            await tab.session.importImages([resultURL])
+            #if DEBUG
+            await continuationFixture?(.panoramaDocumentReady)
+            #endif
+            try checkAdmission()
+            guard tab.session.document != nil else { throw LensWorksCatalogError.message(tab.session.importError ?? "The published panorama could not be opened for editing.") }
+            let id = UUID(), project = URL(fileURLWithPath: canonicalOutput).appendingPathComponent("\(name)-\(id.uuidString.prefix(8)).comp")
+            tab.controller.workingVersion = LensWorksWorkingVersion(id: id, photoID: resultAsset.photoID, catalogPath: catalogPath,
+                originalPath: resultAsset.originalPath, projectPath: project.path, name: name, originalNativePath: resultAsset.nativeOriginal,
+                originalVariantKey: resultAsset.key, sourceLinks: resolved.map(LensWorksPanoramaSource.init))
+            tab.session.projectURL = project
+            guard let snapshot = tab.session.projectSnapshot() else { throw ProjectError.invalid }
+            let quickLook = try await ImageExporter.shared.quickLookImages(snapshot)
+            try checkAdmission()
+            // Package storage has no recent-list, shared-index, last-version or watcher side effects.
+            // A completed private package remains valid even if the final UI admission is cancelled.
+            try await ProjectStore.shared.save(snapshot, to: project, quickLook: quickLook, workingVersion: tab.controller.workingVersion)
+            tab.session.history.markSaved(tab.session.history.currentRevision)
+            await tab.controller.rememberProjectDigest(for: project)
+            #if DEBUG
+            await continuationFixture?(.panoramaSaved)
+            #endif
+            try checkAdmission()
+            // Synchronous commit boundary: from here the prepared document is the user's open result.
+            isMergingPanorama = false
+            workspace.adoptPreparedTab(tab)
+            tab.controller.watchProject(at: project)
+            if tab.controller.recordsRecentProjects { RecentProjects.shared.note(project) }
+            selectedPhotoID = resultAsset.id; selection = [resultAsset.id]; noteSaved(project); showingCatalog = false
+            if tab.controller.sharesWorkingVersions {
+                _ = try await LensWorksCatalogIndex.shared.register(project)
+                try Task.checkCancellation(); try checkScope(scope)
+            }
+            if let key = resultAsset.key {
+                try await index.setSelection(owner: selectionOwner, rows: [.init(imageID: resultAsset.id, key: key)], replace: true)
+                try Task.checkCancellation(); try checkScope(scope)
+            }
+            try await refreshAssets()
+            try checkScope(scope)
+            await refreshVersions()
+
+        } catch {
+            if let recovery = error as? LWLinearMediaRecoveryError {
+                reportMediaRecovery(recovery)
+                return recovery
+            }
+            if !(error is CancellationError), scopeIsCurrent(scope) { self.error = error.localizedDescription }
+        }
+        return nil
+    }
+
     /// `admitted` is what an agent's request was checked against (the original it may read and the folder it may
     /// write into): with it, the folder chooser never opens and nothing is read or written anywhere else.
     func createWorkingVersion(workspace: ProjectWorkspace, admitted: (original: String, output: String)? = nil) async {
@@ -2672,6 +2889,8 @@ final class LensWorksCatalog {
         guard !closeInFlight else { throw LensWorksManagedError.native(code: "busy", message: "Catalog retirement is already being observed.") }
         closingRequested = true
         closeInFlight = true; defer { closeInFlight = false }
+        panoramaTask?.cancel()
+        if let panoramaTask { _ = await panoramaTask.value }
         catalogEpoch &+= 1; folderEpoch &+= 1; groupEpoch &+= 1; previewGeneration &+= 1
         await service.beginRetirement()
         // Settings task retirement adds a separate, explicit 30-second observation bound.

@@ -84,9 +84,9 @@ struct LensWorksCatalogWorkspace: View {
             }
         }
         .onChange(of: workspace.current.session.projectURL) { _, _ in Task { await catalog.refreshVersions() } }
-        .alert("LensWorks", isPresented: Binding(get: { catalog.error != nil }, set: { if !$0 { catalog.error = nil } })) {
-            Button("OK") { catalog.error = nil }
-        } message: { Text(catalog.error ?? "") }
+        .alert("LensWorks", isPresented: Binding(get: { catalog.presentedError != nil }, set: { if !$0 { catalog.dismissPresentedError() } })) {
+            Button("OK") { catalog.dismissPresentedError() }
+        } message: { Text(catalog.presentedError ?? "") }
         .alert(editingGroup == nil ? "New Virtual Folder" : "Rename Virtual Folder", isPresented: $groupPrompt) {
             TextField("Name", text: $groupName)
             Button("Cancel", role: .cancel) { }
@@ -366,6 +366,7 @@ struct LensWorksCatalogWorkspace: View {
             Button("Working Version Folder…") { Task { await catalog.chooseOutput(window: workspace.window) } }.disabled(catalog.isBusy)
             if let output = catalog.outputDirectory { Text(output).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(output) }
             if catalog.isBusy { ProgressView().controlSize(.small) }
+            if catalog.isMergingPanorama { LensWorksCommandButton(.cancelPanorama) { catalog.cancelPanorama() } }
             Text(catalog.status).font(.caption).foregroundStyle(.secondary).lineLimit(4)
         }.padding(12).frame(maxHeight: .infinity, alignment: .top)
             .background(Color(nsColor: .windowBackgroundColor)).accessibilityIdentifier("LensWorks.catalogNavigation")

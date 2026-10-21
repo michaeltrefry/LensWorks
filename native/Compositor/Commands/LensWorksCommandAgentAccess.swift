@@ -6,6 +6,7 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case automation = "Automation settings and confirmations are never available to agents."
     case appVisibility = "It hides or shows apps on the person’s screen and changes nothing in a document or the catalog."
     case opensWindow = "It only opens a window for the person (Keyboard Shortcuts or AI Models) and changes nothing."
+    case panoramaMerge = "It cancels the person’s in-progress panorama merge; an agent cannot cancel another caller’s pending operation."
     case recentList = "It clears the person’s Open Recent list, which macOS keeps for them and nothing can restore."
     case canvasZoom = "It changes only the zoom of the person’s canvas view; render_preview renders the document at any size."
     case viewPreference = "It is a display or snapping preference for the person’s pointer on the canvas and changes nothing in the document."
@@ -106,13 +107,14 @@ extension LensWorksCommandID {
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
         case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
-             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder:
+             .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder, .mergePanorama:
             .runnable(.standalone)
         case .automationEnabled, .automationShowSecret, .automationCopySecret, .automationRegenerateSecret, .automationRevokeSecret,
              .automationCopyConfiguration, .automationAllow, .automationDecline, .automationGrantFolder, .automationRevokeFolder:
             .notRunnable(.automation)
         case .hideApp, .hideOthers, .showAll: .notRunnable(.appVisibility)
         case .keyboardShortcuts, .aiModels: .notRunnable(.opensWindow)
+        case .cancelPanorama: .notRunnable(.panoramaMerge)
         case .clearRecent: .notRunnable(.recentList)
         case .fitCanvas, .actualPixels, .zoomIn, .zoomOut: .notRunnable(.canvasZoom)
         case .pixelGrid, .smartSnap, .transformControls, .showGrid, .showGuides, .rulers, .snap, .snapToGuides, .snapToGrid,
@@ -154,7 +156,7 @@ extension LensWorksCommandID {
             // Running it again with the previous value restores what it changed. A located folder goes back with the
             // review's own Undo in Locate Originals; the person is still asked, because it re-points originals.
             (.inverse, [.renameVirtualFolder, .moveVirtualFolder, .rating, .closeProject, .locateFolder]),
-            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor]),
+            (.additive, [.copy, .addPhotos, .newCanvas, .openProject, .openRecent, .openInEditor, .mergePanorama]),
             (.transient, [.firstVariants, .moreVariants, .selectVariant, .showNestedKeywords, .sortBy, .sortDirection, .moveCatalogSelection,
                           .selectPhotos, .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters, .selectProjectTab,
                           .selectLayers, .copyPixels, .copyMerged, .swapColors, .resetColors]),
