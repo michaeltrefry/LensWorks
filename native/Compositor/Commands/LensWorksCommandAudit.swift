@@ -94,7 +94,9 @@ import AppKit
     /// The titles a menu of user files lists right now. An item in a menu whose command accepts any title (the
     /// user's files, tabs) must carry its command identifier or be one of these, so a rogue item there is caught.
     static func currentTitles(_ path: String) -> [String]? {
-        path == "File/Open Recent" ? RecentProjects.shared.urls.map(RecentProjects.menuTitle) : nil
+        if path == "File/Open Recent" { return RecentProjects.shared.urls.map(RecentProjects.menuTitle) }
+        if path.hasPrefix("Filter/Plugins") { return LensWorksPluginLibrary.shared.plugins.map(\.name) }
+        return nil
     }
 
     /// The registered command a rendered item is: its identifier, else the one command whose menu path and titles

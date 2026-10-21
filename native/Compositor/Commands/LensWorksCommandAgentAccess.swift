@@ -21,6 +21,7 @@ nonisolated enum LensWorksAgentExclusion: String, Codable, CaseIterable, Sendabl
     case shortcutEditor = "It is the Save or Cancel button of the Keyboard Shortcuts window the person has open."
     case nameEditor = "It opens the layer’s name editor for the person to type in; layer.rename takes the name directly."
     case opacityKeys = "It types one digit of an opacity percentage and pairs with the person’s next key press; layer.opacity takes the value directly."
+    case pluginMenu = "It installs, runs, reloads or removes a code plugin from the Filter menu, where the person chooses the plugin file and decides what runs on their layer."
 }
 
 /// Whether an agent can run a command.
@@ -133,6 +134,7 @@ extension LensWorksCommandID {
         case .saveShortcuts, .cancelShortcuts: .notRunnable(.shortcutEditor)
         case .beginRename: .notRunnable(.nameEditor)
         case .opacityDigit: .notRunnable(.opacityKeys)
+        case .installPlugin, .runPlugin, .reloadPlugin, .removePlugin: .notRunnable(.pluginMenu)
         }
     }
 

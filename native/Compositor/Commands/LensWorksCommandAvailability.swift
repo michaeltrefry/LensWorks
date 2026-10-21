@@ -44,6 +44,9 @@ extension EditorSession {
             let vignette = argument == FilterKind.vignette.rawValue
             return commandReason(!(vignette ? canVignette : canAdjustColors), "Select an editable pixel layer first.")
                 ?? LensWorksCommandRegistry.unavailable(hueSaturation != nil, "Finish Hue/Saturation first.")
+        case .runPlugin:
+            return commandReason(!canAdjustColors, "Select an editable pixel layer first.")
+                ?? LensWorksCommandRegistry.unavailable(hueSaturation != nil, "Finish Hue/Saturation first.")
         case .editAdjustment: return layerEditReason ?? commandReason(activeLayer?.adjustment == nil, "Select an adjustment layer first.")
         case .transform: return commandReason(!canTransform && !canTransformSelection, "Select a layer that can be transformed first.")
         case .layerViaCopy:
