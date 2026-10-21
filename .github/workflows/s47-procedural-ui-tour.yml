@@ -32,11 +32,13 @@ jobs:
           ./scripts/ci/provision_s47_native_prerequisites.sh
       - name: Generate and validate procedurally licensed fixtures
         run: |
-          python3 -m unittest scripts.tests.test_generate_s47_procedural_photos
-          python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s47-fixtures" --seed 25317 --catalog-directory "$RUNNER_TEMP/s47-fixtures/WorkingVersions-1/Demo.catalog"
+          python3 -m unittest scripts.tests.test_generate_s47_procedural_photos scripts.tests.test_export_s47_tour_capture
+          # Both S47 tours use the one empty private WorkingVersions folder (recreated between them below), so the
+          # sidebar's displayed working-version path is identical in both captures.
+          python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s47-fixtures" --seed 25317 --catalog-directory "$RUNNER_TEMP/s47-fixtures/WorkingVersions/Demo.catalog"
           # The three S38 UI tests and the S05 organization UI test each need their own empty private working folder.
-          python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s38-fixtures" --seed 25316
-          mkdir -m 700 "$RUNNER_TEMP/s38-fixtures/WorkingVersions-3" "$RUNNER_TEMP/s38-fixtures/WorkingVersions-4"
+          python3 scripts/generate_s47_procedural_photos.py --output "$RUNNER_TEMP/s38-fixtures" --seed 25316 \
+            --working-folder WorkingVersions-1 --working-folder WorkingVersions-2 --working-folder WorkingVersions-3 --working-folder WorkingVersions-4
       - name: Audit menu items and shortcuts against the command registry (source)
         # Fails naming any keyboard shortcut, key handler or menu, context-menu or pull-down item that bypasses
         # native/Compositor/Commands. The live-menu half runs after the build.
@@ -112,19 +114,47 @@ jobs:
         run: |
           python3 -m unittest scripts.tests.test_load_s47_screenshot_tolerance
           python3 scripts/ci/load_s47_screenshot_tolerance.py
-      - name: Run two complete unattended native UI tours
+      - name: Run two complete unattended native UI tours and compare their retained captures
         env:
           TEST_RUNNER_LW_S47_FIXTURE_ROOT: ${{ runner.temp }}/s47-fixtures
+          TEST_RUNNER_LW_S47_CAPTURE_ROOT: ${{ runner.temp }}/s47-captures
           TEST_RUNNER_LW_CATALOG_TEST_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/photocatalog
           TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER: ${{ github.workspace }}/.build/rust-catalog/release/lensworks-decode-worker
         run: |
+          set -euo pipefail
           test -n "$TEST_RUNNER_LW_S47_MAX_CHANNEL_DELTA"
           test -n "$TEST_RUNNER_LW_S47_MAX_CHANGED_PIXEL_FRACTION"
-          ./scripts/ci/xcodebuild_test.sh S47UITour.xcresult -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO -only-testing:CompositorUITests/CompositorUITests/testS47DeterministicDemoCatalogTourOpensPhotoEditorAndComparesConsecutiveScreenshots
+          fixtures=$TEST_RUNNER_LW_S47_FIXTURE_ROOT
+          working=$fixtures/WorkingVersions
+          mkdir -m 700 "$TEST_RUNNER_LW_S47_CAPTURE_ROOT"
+          xcode=(-project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode-s47 -parallel-testing-enabled NO)
+          tour=-only-testing:CompositorUITests/CompositorUITests/testS47DeterministicDemoCatalogTourOpensPhotoEditorAndRetainsItsCapture
+          # Each tour is its own invocation on the same WorkingVersions path, so the sidebar shows one identical
+          # working-version folder in both captures. Each keeps its own result bundle; its capture, window-domain
+          # record and tour record are exported from that exact bundle for the comparison.
+          TEST_RUNNER_LW_S47_TOUR_RUN=1 ./scripts/ci/xcodebuild_test.sh S47UITour1.xcresult "${xcode[@]}" "$tour"
+          python3 scripts/ci/export_s47_tour_capture.py S47UITour1.xcresult 1 "$TEST_RUNNER_LW_S47_CAPTURE_ROOT"
+          # The sandboxed UI runner cannot move files: the fixture owner retains tour 1's working folder and gives
+          # tour 2 a new real, empty, private folder at the same path.
+          mv "$working" "$fixtures/WorkingVersions-tour1"
+          mkdir -m 700 "$working"
+          TEST_RUNNER_LW_S47_TOUR_RUN=2 ./scripts/ci/xcodebuild_test.sh S47UITour2.xcresult "${xcode[@]}" "$tour"
+          python3 scripts/ci/export_s47_tour_capture.py S47UITour2.xcresult 2 "$TEST_RUNNER_LW_S47_CAPTURE_ROOT"
+          mv "$working" "$fixtures/WorkingVersions-tour2"
+          ./scripts/ci/xcodebuild_test.sh S47UICompare.xcresult "${xcode[@]}" \
+            -only-testing:CompositorUITests/CompositorUITests/testS47DeterministicDemoCatalogToursCompareConsecutiveRetainedScreenshots
       - name: Upload tour evidence
         if: always()
         uses: actions/upload-artifact@v4
-        with: {name: s47-procedural-ui-tour, path: S47UITour.xcresult, if-no-files-found: ignore, retention-days: 7}
+        with:
+          name: s47-procedural-ui-tour
+          path: |
+            S47UITour1.xcresult
+            S47UITour2.xcresult
+            S47UICompare.xcresult
+            ${{ runner.temp }}/s47-captures
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload native test evidence
         if: always()
         uses: actions/upload-artifact@v4

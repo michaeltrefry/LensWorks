@@ -121,7 +121,11 @@ private enum S47ScreenshotComparator {
     }
 
     static func normalizedRGBA8(_ screenshot: XCUIScreenshot) throws -> RGBA8 {
-        guard let image = NSImage(data: screenshot.pngRepresentation),
+        try normalizedRGBA8(png: screenshot.pngRepresentation)
+    }
+
+    static func normalizedRGBA8(png: Data) throws -> RGBA8 {
+        guard let image = NSImage(data: png),
               let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
               source.width > 0, source.height > 0,
               source.bitsPerComponent == 8,
@@ -196,6 +200,21 @@ extension CompositorUITests {
         let originalHashes: [String: String]
     }
 
+    /// What one tour retains beside its capture for the later two-tour comparison: the working-version folder it
+    /// displayed and the fixture originals it rehashed after its observed public Quit.
+    private struct S47TourRecord: Codable {
+        let schema: String
+        let run: Int
+        let workingFolder: String
+        let originalHashes: [String: String]
+    }
+
+    /// Both tours use this one working-version folder path, so the sidebar, which displays the folder's full path,
+    /// renders the same text in both captures. Each tour still needs it fresh, real, empty and private: the
+    /// fixture owner prepares it before tour 1 and, between the two tours (separate test invocations, since the
+    /// sandboxed runner cannot move files), moves the used folder aside and recreates it empty with mode 0700.
+    private static let s47WorkingFolderName = "WorkingVersions"
+
     private func s47SHA256(_ url: URL) throws -> String {
         let digest = SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe))
         return digest.map { String(format: "%02x", $0) }.joined()
@@ -268,7 +287,7 @@ extension CompositorUITests {
             app.typeKey("q", modifierFlags: .command)
             XCTAssertTrue(app.wait(for: .notRunning, timeout: 15), "tour \(run) failure teardown must observe ordinary public Quit")
         }
-        let output = fixture.appendingPathComponent("WorkingVersions-\(run)")
+        let output = fixture.appendingPathComponent(Self.s47WorkingFolderName)
         let catalog = output.appendingPathComponent("Demo.catalog")
         let outputAttributes = try FileManager.default.attributesOfItem(atPath: output.path)
         guard outputAttributes[.type] as? FileAttributeType == .typeDirectory,
@@ -396,7 +415,8 @@ extension CompositorUITests {
         domainAttachment.name = "S47 editor capture domain run \(run)"
         domainAttachment.lifetime = .keepAlways
         add(domainAttachment)
-        let attachment = XCTAttachment(screenshot: screenshot)
+        // The exact PNG bytes the domain record's pngSHA256 names, so the owner can retain this capture by content.
+        let attachment = XCTAttachment(data: screenshot.pngRepresentation, uniformTypeIdentifier: "public.png")
         attachment.name = "S47 editor run \(run)"
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -405,6 +425,11 @@ extension CompositorUITests {
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 15), "tour \(run) must end through ordinary public Quit")
         let afterQuit = try s47FixtureHashes(fixture)
         XCTAssertEqual(afterQuit, before, "tour \(run) must retain every source original after observed public Quit")
+        let record = S47TourRecord(schema: "lensworks.s47.tour-record.v1", run: run, workingFolder: output.path, originalHashes: afterQuit)
+        let recordAttachment = XCTAttachment(data: try JSONEncoder().encode(record), uniformTypeIdentifier: "public.json")
+        recordAttachment.name = "S47 tour record run \(run)"
+        recordAttachment.lifetime = .keepAlways
+        add(recordAttachment)
         return S47TourCapture(run: run, screenshot: screenshot, originalHashes: afterQuit)
     }
 
@@ -1004,21 +1029,78 @@ extension CompositorUITests {
         try s38Finish(context, expected: final)
     }
 
+    /// One complete tour, `LW_S47_TOUR_RUN` 1 or 2, each in its own test invocation on the same working-version
+    /// folder path, which the fixture owner prepares fresh before each. The tour retains its capture, its window
+    /// domain record and its tour record as attachments; the owner then exports them for the comparison below.
     @MainActor
-    func testS47DeterministicDemoCatalogTourOpensPhotoEditorAndComparesConsecutiveScreenshots() throws {
+    func testS47DeterministicDemoCatalogTourOpensPhotoEditorAndRetainsItsCapture() throws {
         let environment = ProcessInfo.processInfo.environment
         let root = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_FIXTURE_ROOT")
         let worker = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_WORKER")
         let decode = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_DECODE_WORKER")
+        let runValue = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_TOUR_RUN")
         let configuration = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
+        guard let run = Int(runValue), [1, 2].contains(run) else {
+            throw NSError(domain: "LensWorks.S47", code: 19, userInfo: [NSLocalizedDescriptionKey: "CI must transport TEST_RUNNER_LW_S47_TOUR_RUN as 1 or 2."])
+        }
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: worker))
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: decode))
-        let tolerance = try S47ScreenshotComparator.requiredTolerance(environment)
-        let fixture = URL(fileURLWithPath: root)
-        let first = try runS47Tour(run: 1, fixture: fixture, worker: worker, decode: decode, configuration: configuration)
-        let second = try runS47Tour(run: 2, fixture: fixture, worker: worker, decode: decode, configuration: configuration)
-        XCTAssertEqual(first.originalHashes, second.originalHashes, "both complete tours must retain identical fixture originals")
-        let measurement = try S47ScreenshotComparator.measurement(try S47ScreenshotComparator.normalizedRGBA8(first.screenshot), try S47ScreenshotComparator.normalizedRGBA8(second.screenshot))
+        let tour = try runS47Tour(run: run, fixture: URL(fileURLWithPath: root), worker: worker, decode: decode, configuration: configuration)
+        XCTAssertEqual(tour.run, run)
+    }
+
+    private struct S47RetainedTour {
+        let run: Int
+        let image: S47ScreenshotComparator.RGBA8
+        let domain: S47WindowCaptureDomain
+        let record: S47TourRecord
+    }
+
+    /// Reads one tour's capture as the fixture owner retained it from that tour's own result bundle, and checks it is
+    /// that tour's complete loaded-editor window capture before any comparison.
+    private func s47RetainedTour(run: Int, captures: URL, fixture: URL) throws -> S47RetainedTour {
+        let png = try Data(contentsOf: captures.appendingPathComponent("run-\(run).png"))
+        let domain = try JSONDecoder().decode(S47WindowCaptureDomain.self, from: Data(contentsOf: captures.appendingPathComponent("run-\(run)-domain.json")))
+        let record = try JSONDecoder().decode(S47TourRecord.self, from: Data(contentsOf: captures.appendingPathComponent("run-\(run)-tour.json")))
+        XCTAssertEqual(domain.schema, "lensworks.s47.editor-window-capture-domain.v1")
+        XCTAssertEqual(domain.run, run, "retained capture \(run) must be tour \(run)'s")
+        XCTAssertEqual(domain.receiver, "XCUIElement.window")
+        XCTAssertEqual(domain.loadedMarkerIdentifier, "LensWorks.loadedEditorDocument")
+        XCTAssertEqual(domain.loadedMarkerValue, "single-harbor.png|master|160x120", "tour \(run) must have captured the expected loaded editor document")
+        XCTAssertEqual(SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined(), domain.pngSHA256, "retained capture \(run) must be the exact PNG its domain record names")
+        XCTAssertEqual(record.schema, "lensworks.s47.tour-record.v1")
+        XCTAssertEqual(record.run, run, "retained tour record \(run) must be tour \(run)'s")
+        XCTAssertEqual(record.workingFolder, fixture.appendingPathComponent(Self.s47WorkingFolderName).path, "tour \(run) must have used the shared working-version folder path")
+        let image = try S47ScreenshotComparator.normalizedRGBA8(png: png)
+        XCTAssertEqual([image.width, image.height], [domain.pixelWidth, domain.pixelHeight], "retained capture \(run) must keep its recorded pixel size")
+        guard domain.windowFramePoints.count == 4 else {
+            throw NSError(domain: "LensWorks.S47", code: 20, userInfo: [NSLocalizedDescriptionKey: "retained capture \(run) has no complete window frame."])
+        }
+        let frame = CGRect(x: domain.windowFramePoints[0], y: domain.windowFramePoints[1], width: domain.windowFramePoints[2], height: domain.windowFramePoints[3])
+        try S47ScreenshotComparator.requireWindowGeometry(pixelWidth: image.width, pixelHeight: image.height, frame: frame)
+        return S47RetainedTour(run: run, image: image, domain: domain, record: record)
+    }
+
+    /// Both retained tours, checked against each other and the fixture originals, and their measurement.
+    private func s47RetainedPair() throws -> (S47RetainedTour, S47RetainedTour, S47ScreenshotComparator.Measurement) {
+        let environment = ProcessInfo.processInfo.environment
+        let fixture = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_FIXTURE_ROOT"))
+        let captures = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_CAPTURE_ROOT"))
+        let first = try s47RetainedTour(run: 1, captures: captures, fixture: fixture)
+        let second = try s47RetainedTour(run: 2, captures: captures, fixture: fixture)
+        XCTAssertEqual(first.domain.windowFramePoints, second.domain.windowFramePoints, "both tours must capture the editor window at one pinned frame")
+        XCTAssertEqual(first.record.workingFolder, second.record.workingFolder, "both tours must display one working-version folder path")
+        XCTAssertEqual(first.record.originalHashes, second.record.originalHashes, "both complete tours must retain identical fixture originals")
+        XCTAssertEqual(try s47FixtureHashes(fixture), first.record.originalHashes, "the fixture originals must still match both tours' records")
+        let measurement = try S47ScreenshotComparator.measurement(first.image, second.image)
+        return (first, second, measurement)
+    }
+
+    /// Compares the two retained complete-tour captures with the delivered, source-declared tolerance.
+    @MainActor
+    func testS47DeterministicDemoCatalogToursCompareConsecutiveRetainedScreenshots() throws {
+        let tolerance = try S47ScreenshotComparator.requiredTolerance(ProcessInfo.processInfo.environment)
+        let (first, second, measurement) = try s47RetainedPair()
         let evidence = XCTAttachment(string: "S47 two-tour measurement run1=\(first.run) run2=\(second.run) maxChannelDelta=\(measurement.maximumChannelDelta) changedPixelFraction=\(measurement.changedPixelFraction)")
         evidence.name = "S47 two-tour comparison measurement"
         evidence.lifetime = .keepAlways
@@ -1034,21 +1116,11 @@ extension CompositorUITests {
         let measurement: S47ScreenshotComparator.Measurement
     }
 
+    /// Calibration: the same retained pair measured and recorded, with no tolerance acceptance.
     @MainActor
-    func testS47DeterministicDemoCatalogTourMeasuresTwoRunsWithoutToleranceAcceptance() throws {
-        let environment = ProcessInfo.processInfo.environment
-        let root = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_FIXTURE_ROOT")
-        let worker = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_WORKER")
-        let decode = try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_CATALOG_TEST_DECODE_WORKER")
-        let configuration = try XCTUnwrap(environment["XCTestConfigurationFilePath"])
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: worker))
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: decode))
-        let fixture = URL(fileURLWithPath: root)
-        let first = try runS47Tour(run: 1, fixture: fixture, worker: worker, decode: decode, configuration: configuration)
-        let second = try runS47Tour(run: 2, fixture: fixture, worker: worker, decode: decode, configuration: configuration)
-        XCTAssertEqual(first.originalHashes, second.originalHashes, "both complete tours must retain identical fixture originals")
-        let measurement = try S47ScreenshotComparator.measurement(try S47ScreenshotComparator.normalizedRGBA8(first.screenshot), try S47ScreenshotComparator.normalizedRGBA8(second.screenshot))
-        let record = S47CalibrationRecord(schema: "lensworks.s47.same-host-screenshot-calibration.v1", status: "MEASURED_NOT_ACCEPTED", runs: [first.run, second.run], originalHashes: first.originalHashes, measurement: measurement)
+    func testS47DeterministicDemoCatalogToursMeasureRetainedPairWithoutToleranceAcceptance() throws {
+        let (first, second, measurement) = try s47RetainedPair()
+        let record = S47CalibrationRecord(schema: "lensworks.s47.same-host-screenshot-calibration.v1", status: "MEASURED_NOT_ACCEPTED", runs: [first.run, second.run], originalHashes: first.record.originalHashes, measurement: measurement)
         let encoded = try JSONEncoder().encode(record)
         let reportAttachment = XCTAttachment(data: encoded, uniformTypeIdentifier: "public.json")
         reportAttachment.name = "S47-calibration-report.json"

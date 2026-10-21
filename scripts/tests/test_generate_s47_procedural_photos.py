@@ -77,18 +77,37 @@ class ProceduralS47FixtureTests(unittest.TestCase):
             self.assertEqual(sum(entry["kind"] == "exposure-bracket" for entry in parsed["photos"]), 3)
             self.assertEqual(sum(entry["kind"] == "panorama" for entry in parsed["photos"]), 3)
             self.assertEqual(parsed["demo_catalog"]["catalog_directory"], str(catalog.absolute()))
-            for run in (1, 2):
-                working = output / f"WorkingVersions-{run}"
-                self.assertTrue(working.is_dir())
-                self.assertFalse(working.is_symlink())
-                self.assertEqual(working.stat().st_mode & 0o7777, 0o700)
-                self.assertEqual(list(working.iterdir()), [])
+            # Both S47 tours use this one folder path; the fixture owner recreates it empty between them.
+            working = output / "WorkingVersions"
+            self.assertTrue(working.is_dir())
+            self.assertFalse(working.is_symlink())
+            self.assertEqual(working.stat().st_mode & 0o7777, 0o700)
+            self.assertEqual(list(working.iterdir()), [])
+            self.assertEqual(sorted(path.name for path in output.iterdir() if path.name.startswith("WorkingVersions")), ["WorkingVersions"])
             originals = file_hashes(output)
             manifest_bytes = (output / "fixture-manifest.json").read_bytes()
             with self.assertRaisesRegex(ValueError, "output must be a new directory"):
                 s47.generate(output, 8, catalog)
             self.assertEqual(file_hashes(output), originals)
             self.assertEqual((output / "fixture-manifest.json").read_bytes(), manifest_bytes)
+
+    def test_requested_working_folders_are_real_empty_private_and_validated_before_any_write(self):
+        with tempfile.TemporaryDirectory() as parent:
+            output = Path(parent) / "fixtures"
+            names = ("WorkingVersions-1", "WorkingVersions-2", "WorkingVersions-3", "WorkingVersions-4")
+            s47.generate(output, 25316, working_folders=names)
+            self.assertEqual(sorted(path.name for path in output.iterdir() if path.name.startswith("WorkingVersions")), list(names))
+            for name in names:
+                working = output / name
+                self.assertTrue(working.is_dir())
+                self.assertFalse(working.is_symlink())
+                self.assertEqual(working.stat().st_mode & 0o7777, 0o700)
+                self.assertEqual(list(working.iterdir()), [])
+            for invalid in [(), ("a", "a"), ("",), (".",), ("..",), ("a/b",), ("a\\b",), ("a\0",)]:
+                fresh = Path(parent) / "refused"
+                with self.assertRaises(ValueError, msg=repr(invalid)):
+                    s47.generate(fresh, 25316, working_folders=invalid)
+                self.assertFalse(fresh.exists(), repr(invalid))
 
     def test_actual_png_layout_and_panorama_overlap_are_validated_from_generated_bytes(self):
         with tempfile.TemporaryDirectory() as parent:

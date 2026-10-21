@@ -97,14 +97,31 @@ def _write(output: Path, path: str, data: bytes, record: dict) -> None:
     record.update({"path": path, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "width": WIDTH, "height": HEIGHT})
 
 
-def generate(output: Path, seed: int, catalog_directory: Path | None = None) -> dict:
+# The S47 tours both display one working-version folder path, so the default prepares that one folder; the
+# fixture owner moves it aside after the first tour and recreates it empty before the second.
+DEFAULT_WORKING_FOLDERS = ("WorkingVersions",)
+
+
+def _working_folder_names(names: tuple[str, ...]) -> tuple[str, ...]:
+    if not names or len(set(names)) != len(names):
+        raise ValueError("working folders must be distinct and at least one")
+    for name in names:
+        if not name or name in (".", "..") or "/" in name or "\\" in name or "\0" in name:
+            raise ValueError("each working folder must be one plain path component")
+    return names
+
+
+def generate(output: Path, seed: int, catalog_directory: Path | None = None, working_folders: tuple[str, ...] = DEFAULT_WORKING_FOLDERS) -> dict:
     if not 0 <= seed <= 0xFFFFFFFF:
         raise ValueError("seed must be an unsigned 32-bit integer")
+    working_folders = _working_folder_names(tuple(working_folders))
     if output.exists():
         raise ValueError("output must be a new directory")
     output.mkdir(parents=True)
-    for run in (1, 2):
-        (output / f"WorkingVersions-{run}").mkdir(mode=0o700)
+    for name in working_folders:
+        folder = output / name
+        folder.mkdir(mode=0o700)
+        folder.chmod(0o700)  # exact private mode whatever the umask
     records: list[dict] = []
     for index, name in enumerate(("single-harbor.png", "single-garden.png")):
         record = {"kind": "single", "seed": seed, "scene_seed": seed, "index": index, "subject_x": 53 + index * 38}
@@ -151,8 +168,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--catalog-directory", type=Path)
+    parser.add_argument("--working-folder", action="append", dest="working_folders",
+                        help="empty private (0700) working folder to prepare under --output; repeatable (default: WorkingVersions)")
     args = parser.parse_args()
-    manifest = generate(args.output.absolute(), args.seed, args.catalog_directory)
+    manifest = generate(args.output.absolute(), args.seed, args.catalog_directory, tuple(args.working_folders or DEFAULT_WORKING_FOLDERS))
     print(json.dumps({"schema": manifest["schema"], "photo_count": len(manifest["photos"]), "manifest": str(args.output.absolute() / "fixture-manifest.json")}, sort_keys=True))
 
 
