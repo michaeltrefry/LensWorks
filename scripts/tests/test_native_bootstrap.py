@@ -65,8 +65,13 @@ esac''')
         import re
         return re.search(r'^channel = "([0-9.]+)"$', (ROOT / 'rust-toolchain.toml').read_text(), re.M).group(1)
 
+    @staticmethod
+    def rust_target_arch():
+        machine = os.uname().machine
+        return {'arm64': 'aarch64', 'x86_64': 'x86_64'}[machine]
+
     def pinned_toolchain(self, rustc=None, cargo=None):
-        bin = self.home / '.rustup/toolchains' / f'{self.pin()}-aarch64-apple-darwin' / 'bin'
+        bin = self.home / '.rustup/toolchains' / f'{self.pin()}-{self.rust_target_arch()}-apple-darwin' / 'bin'
         bin.mkdir(parents=True)
         for name, version in (('rustc', rustc or self.pin()), ('cargo', cargo or self.pin())):
             path = bin / name
@@ -160,6 +165,45 @@ esac''')
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('unavailable', result.stderr)
+
+    def test_missing_rust_toolchain_toml_fails(self):
+        script = self.toolchain()
+        (self.root / 'rust-toolchain.toml').unlink()
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing repository rust-toolchain.toml', result.stderr)
+
+    def test_non_exact_rust_channel_fails(self):
+        script = self.toolchain()
+        pin = self.root / 'rust-toolchain.toml'
+        pin.write_text('[toolchain]\nchannel = "stable"\n')
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('must pin an exact Rust release', result.stderr)
+        pin.write_text('[toolchain]\nchannel = "1.97"\n')
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('must pin an exact Rust release', result.stderr)
+
+    def test_rustc_patch_version_with_the_pinned_prefix_fails(self):
+        script = self.toolchain()
+        self.stub('rustc', 'echo "rustc 1.97.10 (prefix-only)"')
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('rustc 1.97.10', result.stderr)
+        self.assertIn(f'Rust {self.pin()} is pinned', result.stderr)
+
+    def test_channel_outside_the_toolchain_table_is_ignored(self):
+        script = self.toolchain()
+        pin = self.root / 'rust-toolchain.toml'
+        pin.write_text('[other]\nchannel = "1.99.1"\n\n' + pin.read_text())
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rust_other_than_the_pin_on_path_fails_before_any_build(self):
         # The factory's sandbox PATH resolves Homebrew's rustc, not the rust-toolchain.toml pin.

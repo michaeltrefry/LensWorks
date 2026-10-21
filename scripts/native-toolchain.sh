@@ -16,10 +16,26 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # proxies honour the pin by themselves. Without them first on PATH (the Dark Factory runs a prepare
 # recipe as its sandbox user with a fixed PATH that resolves Homebrew's rustc, and a recipe cannot
 # set PATH) the pinned rustup toolchain is selected by its absolute path. Either way the rustc and
-# cargo that build must report exactly the pinned release, or nothing is built.
-rust_channel=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$root/rust-toolchain.toml")
+# cargo that build must report exactly the pinned release, or nothing is built. Although
+# engines/catalog/rust-toolchain.toml pins 1.98.0, it is part of the digest-pinned catalog source
+# and is not consulted: builds use this repository root's pin.
+[[ -f "$root/rust-toolchain.toml" ]] || { echo 'Missing repository rust-toolchain.toml' >&2; exit 1; }
+rust_channel=$(awk '
+  /^[[:space:]]*\[/ { in_toolchain = ($0 ~ /^[[:space:]]*\[toolchain\][[:space:]]*$/); next }
+  in_toolchain && match($0, /^[[:space:]]*channel[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*$/) {
+    value = $0
+    sub(/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"/, "", value)
+    sub(/"[[:space:]]*$/, "", value)
+    print value
+  }
+' "$root/rust-toolchain.toml")
 [[ "$rust_channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'rust-toolchain.toml must pin an exact Rust release (channel = "X.Y.Z")' >&2; exit 1; }
-rust_pinned_bin="${RUSTUP_HOME:-${HOME:-/nonexistent}/.rustup}/toolchains/$rust_channel-aarch64-apple-darwin/bin"
+case "$(uname -m)" in
+  arm64) rust_target_arch=aarch64 ;;
+  x86_64) rust_target_arch=x86_64 ;;
+  *) printf 'Unsupported macOS architecture for the pinned Rust toolchain: %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+rust_pinned_bin="${RUSTUP_HOME:-${HOME:-/nonexistent}/.rustup}/toolchains/$rust_channel-$rust_target_arch-apple-darwin/bin"
 rust_selected=
 if [[ -x "$rust_pinned_bin/rustc" && -x "$rust_pinned_bin/cargo" ]]; then
   export PATH="$rust_pinned_bin:$PATH"
