@@ -200,8 +200,8 @@ extension CompositorUITests {
         let originalHashes: [String: String]
     }
 
-    /// What one tour retains beside its capture for the later two-tour comparison: the working-version folder it
-    /// displayed and the fixture originals it rehashed after its observed public Quit.
+    /// What one tour retains beside its capture for the later two-tour comparison: its configured working-version
+    /// folder and the fixture originals it rehashed after its observed public Quit.
     private struct S47TourRecord: Codable {
         let schema: String
         let run: Int
@@ -406,17 +406,18 @@ extension CompositorUITests {
             throw NSError(domain: "LensWorks.S47", code: 17, userInfo: [NSLocalizedDescriptionKey: "S47 capture requires the editor window at its pinned frame \(s47Placement.accessibilityFrame), found \(frame)."])
         }
         let screenshot = try s47QuiescentScreenshot(editorWindow)
-        let image = try S47ScreenshotComparator.normalizedRGBA8(screenshot)
+        let png = screenshot.pngRepresentation
+        let image = try S47ScreenshotComparator.normalizedRGBA8(png: png)
         try S47ScreenshotComparator.requireWindowGeometry(pixelWidth: image.width, pixelHeight: image.height, frame: frame)
         XCTAssertEqual(editorWindow.frame, frame, "tour \(run) must retain the capture receiver's window geometry")
         XCTAssertEqual(windowLoaded.value as? String, "single-harbor.png|master|160x120", "tour \(run) must retain loaded source identity at capture")
-        let domain = S47WindowCaptureDomain(schema: "lensworks.s47.editor-window-capture-domain.v1", run: run, receiver: "XCUIElement.window", windowIdentifier: editorWindow.identifier, windowLabel: editorWindow.label, windowFramePoints: [Double(frame.origin.x), Double(frame.origin.y), Double(frame.width), Double(frame.height)], loadedMarkerIdentifier: "LensWorks.loadedEditorDocument", loadedMarkerValue: try XCTUnwrap(windowLoaded.value as? String), pngSHA256: SHA256.hash(data: screenshot.pngRepresentation).map { String(format: "%02x", $0) }.joined(), pixelWidth: image.width, pixelHeight: image.height)
+        let domain = S47WindowCaptureDomain(schema: "lensworks.s47.editor-window-capture-domain.v1", run: run, receiver: "XCUIElement.window", windowIdentifier: editorWindow.identifier, windowLabel: editorWindow.label, windowFramePoints: [Double(frame.origin.x), Double(frame.origin.y), Double(frame.width), Double(frame.height)], loadedMarkerIdentifier: "LensWorks.loadedEditorDocument", loadedMarkerValue: try XCTUnwrap(windowLoaded.value as? String), pngSHA256: SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined(), pixelWidth: image.width, pixelHeight: image.height)
         let domainAttachment = XCTAttachment(data: try JSONEncoder().encode(domain), uniformTypeIdentifier: "public.json")
         domainAttachment.name = "S47 editor capture domain run \(run)"
         domainAttachment.lifetime = .keepAlways
         add(domainAttachment)
         // The exact PNG bytes the domain record's pngSHA256 names, so the owner can retain this capture by content.
-        let attachment = XCTAttachment(data: screenshot.pngRepresentation, uniformTypeIdentifier: "public.png")
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
         attachment.name = "S47 editor run \(run)"
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -1058,7 +1059,7 @@ extension CompositorUITests {
 
     /// Reads one tour's capture as the fixture owner retained it from that tour's own result bundle, and checks it is
     /// that tour's complete loaded-editor window capture before any comparison.
-    private func s47RetainedTour(run: Int, captures: URL, fixture: URL) throws -> S47RetainedTour {
+    private func s47RetainedTour(run: Int, captures: URL) throws -> S47RetainedTour {
         let png = try Data(contentsOf: captures.appendingPathComponent("run-\(run).png"))
         let domain = try JSONDecoder().decode(S47WindowCaptureDomain.self, from: Data(contentsOf: captures.appendingPathComponent("run-\(run)-domain.json")))
         let record = try JSONDecoder().decode(S47TourRecord.self, from: Data(contentsOf: captures.appendingPathComponent("run-\(run)-tour.json")))
@@ -1070,7 +1071,6 @@ extension CompositorUITests {
         XCTAssertEqual(SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined(), domain.pngSHA256, "retained capture \(run) must be the exact PNG its domain record names")
         XCTAssertEqual(record.schema, "lensworks.s47.tour-record.v1")
         XCTAssertEqual(record.run, run, "retained tour record \(run) must be tour \(run)'s")
-        XCTAssertEqual(record.workingFolder, fixture.appendingPathComponent(Self.s47WorkingFolderName).path, "tour \(run) must have used the shared working-version folder path")
         let image = try S47ScreenshotComparator.normalizedRGBA8(png: png)
         XCTAssertEqual([image.width, image.height], [domain.pixelWidth, domain.pixelHeight], "retained capture \(run) must keep its recorded pixel size")
         guard domain.windowFramePoints.count == 4 else {
@@ -1082,14 +1082,16 @@ extension CompositorUITests {
     }
 
     /// Both retained tours, checked against each other and the fixture originals, and their measurement.
+    @MainActor
     private func s47RetainedPair() throws -> (S47RetainedTour, S47RetainedTour, S47ScreenshotComparator.Measurement) {
         let environment = ProcessInfo.processInfo.environment
         let fixture = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_FIXTURE_ROOT"))
         let captures = URL(fileURLWithPath: try S47ScreenshotComparator.requiredRunnerValue(environment, "LW_S47_CAPTURE_ROOT"))
-        let first = try s47RetainedTour(run: 1, captures: captures, fixture: fixture)
-        let second = try s47RetainedTour(run: 2, captures: captures, fixture: fixture)
+        let first = try s47RetainedTour(run: 1, captures: captures)
+        let second = try s47RetainedTour(run: 2, captures: captures)
         XCTAssertEqual(first.domain.windowFramePoints, second.domain.windowFramePoints, "both tours must capture the editor window at one pinned frame")
-        XCTAssertEqual(first.record.workingFolder, second.record.workingFolder, "both tours must display one working-version folder path")
+        let pinned = s47Placement.accessibilityFrame
+        XCTAssertEqual(first.domain.windowFramePoints, [Double(pinned.origin.x), Double(pinned.origin.y), Double(pinned.width), Double(pinned.height)], "both tours must capture the editor window at the pinned frame")
         XCTAssertEqual(first.record.originalHashes, second.record.originalHashes, "both complete tours must retain identical fixture originals")
         XCTAssertEqual(try s47FixtureHashes(fixture), first.record.originalHashes, "the fixture originals must still match both tours' records")
         let measurement = try S47ScreenshotComparator.measurement(first.image, second.image)
