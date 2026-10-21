@@ -255,6 +255,27 @@ final class LensWorksAgentTools {
                 let box = selection.isEmpty ? CGRect.zero : selection.path.boundingBoxOfPath
                 described["selection"] = ["x": box.minX, "y": box.minY, "width": box.width, "height": box.height, "feather": selection.feather] as [String: Any]
             } else { described["selection"] = NSNull() }
+            if let controller = projects(), controller.session === session, let history = controller.lensWorksDocument {
+                // Keep the selected version actionable even when the bounded
+                // state omits older rows; checkpoint rows share one total budget.
+                var shown: [LensWorksPhotoVersion] = []
+                if let selected = history.versions.first(where: { $0.id == controller.selectedLensWorksVersionID }) { shown.append(selected) }
+                for version in history.versions where version.id != controller.selectedLensWorksVersionID {
+                    guard shown.count < Self.stateRowLimit else { break }
+                    shown.append(version)
+                }
+                var remainingCheckpoints = Self.stateRowLimit
+                let versions = Self.rows(shown) { version in
+                    let checkpoints = Self.rows(version.checkpoints.prefix(remainingCheckpoints)) { ["id": $0.id.uuidString, "name": Self.clip($0.name)] }
+                    remainingCheckpoints -= checkpoints.rows.count
+                    var row: [String: Any] = ["id": version.id.uuidString, "name": Self.clip(version.name),
+                        "selected": controller.selectedLensWorksVersionID == version.id, "checkpoints": checkpoints.rows]
+                    if checkpoints.rows.count < version.checkpoints.count { row["checkpointsTruncated"] = true }
+                    return row
+                }
+                described["versions"] = versions.rows
+                if shown.count < history.versions.count { described["versionsTruncated"] = true }
+            }
             result["document"] = described
         }
         if let catalog = catalog(), let path = catalog.catalogPath {

@@ -25,14 +25,25 @@ nonisolated struct ProjectDigest: Equatable, Sendable {
                   let size = values.fileSize, size <= 64 * 1024 else { throw ProjectError.invalid }
             hasher.update(data: try Data(contentsOf: identity))
         }
-        let images = url.appendingPathComponent("images", isDirectory: true)
-        let names = ((try? FileManager.default.contentsOfDirectory(atPath: images.path)) ?? []).sorted()
-        for name in names {
-            let values = try images.appendingPathComponent(name).resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard values.isRegularFile == true else { continue }
-            hasher.update(data: Data(name.utf8))
-            let count = UInt64(values.fileSize ?? 0)
-            withUnsafeBytes(of: count) { hasher.update(bufferPointer: $0) }
+        func addAssetNames(in directory: URL, prefix: String) throws {
+            let names = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).sorted()
+            for name in names {
+                let values = try directory.appendingPathComponent(name).resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values.isRegularFile == true else { continue }
+                hasher.update(data: Data((prefix + name).utf8))
+                let count = UInt64(values.fileSize ?? 0)
+                withUnsafeBytes(of: count) { hasher.update(bufferPointer: $0) }
+            }
+        }
+        try addAssetNames(in: url.appendingPathComponent("images", isDirectory: true), prefix: "images/")
+        let document = url.appendingPathComponent("LensWorksDocument", isDirectory: true)
+        if FileManager.default.fileExists(atPath: document.path) {
+            let history = document.appendingPathComponent("document.json")
+            let values = try history.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true,
+                  let size = values.fileSize, size <= 4 * 1024 * 1024 else { throw ProjectError.invalid }
+            hasher.update(data: try Data(contentsOf: history))
+            try addAssetNames(in: document.appendingPathComponent("assets", isDirectory: true), prefix: "LensWorksDocument/assets/")
         }
         return ProjectDigest(value: Data(hasher.finalize()))
     }

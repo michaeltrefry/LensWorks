@@ -10,8 +10,8 @@ nonisolated final class LWSourceDestinationAuthority: @unchecked Sendable {
     private let leases: [LWFloatWorkingSet.Lease]
     init(_ snapshot: ProjectSnapshot, workingSet: LWFloatWorkingSet = .sourceGraphs) throws {
         var values: [Original] = [], owners: [LWFloatWorkingSet.Lease] = [], seen: Set<String> = []
-        func collect(_ project: ProjectSnapshot) throws {
-            for layer in project.manifest.layers {
+        func collect(_ manifest: ProjectManifest) throws {
+            for layer in manifest.layers {
                 try Task.checkCancellation()
                 guard let source = layer.liveSource else { continue }
                 let original = try source.original.localFileURL().resolvingSymlinksInPath().standardizedFileURL
@@ -28,7 +28,27 @@ nonisolated final class LWSourceDestinationAuthority: @unchecked Sendable {
                 seen.insert(key);values.append(Original(url:original,device:revision.identity.first.value,inode:revision.identity.second.value));owners.append(lease)
             }
         }
-        try collect(snapshot)
+        try collect(snapshot.manifest)
+        // Historical compositions protect every imported original too, not just
+        // the primary catalog original or the source still visible on the canvas.
+        let cache = LWSourcePackageArchive.HydrationCache(workingSet: workingSet)
+        for version in snapshot.lensWorksDocument?.versions ?? [] {
+            let contents = version.retainedContents
+            for content in contents {
+                guard let graph = content.layerGraph else { continue }
+                var manifest = graph.composition ?? snapshot.manifest
+                manifest.layers = graph.layers
+                let hydrated = try LWSourcePackageArchive.hydrate(manifest, read: { name, maximum in
+                    guard let data = snapshot.lensWorksDocumentAssets[name], data.count <= maximum else { throw ProjectError.missingImage }
+                    return data
+                }, readPlane: { name, reference in
+                    guard let plane = snapshot.lensWorksDocumentPlanes[name],
+                          try LWFloatPlaneArchive.reference(plane) == reference else { throw ProjectError.missingImage }
+                    return plane
+                }, cache: cache)
+                try collect(hydrated)
+            }
+        }
         originals = values; leases = owners
     }
     func validate(_ destination: URL) throws {

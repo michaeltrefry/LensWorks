@@ -52,7 +52,10 @@ struct LensWorksAgentArguments {
     }
     func uuid(_ name: String) throws -> UUID? {
         guard let text = try string(name) else { return nil }
-        guard let id = UUID(uuidString: text) else { throw LensWorksCommandRefusal(reason: "\(text.prefix(64)) is not a layer id.") }
+        guard let id = UUID(uuidString: text) else {
+            if name == "layer" || name == "primary" { throw LensWorksCommandRefusal(reason: "\(text.prefix(64)) is not a layer id.") }
+            throw refusal(name, "a UUID")
+        }
         return id
     }
     func uuids(_ name: String) throws -> [UUID]? {

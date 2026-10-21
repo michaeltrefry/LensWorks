@@ -71,6 +71,35 @@ struct CommandAuditTests {
         #expect(LensWorksCommandAudit.audit(menu: menu, path: "Layers Panel").map(\.title) == ["Rogue Layer Action"])
     }
 
+    @Test func checkpointMenuHasRegisteredTypedIdentityAndSharedDispatch() throws {
+        let session = EditorSession(); session.createDocument(width: 8, height: 8, emptyLayer: true); session.history.reset()
+        let controller = ProjectController(session: session)
+        try controller.initializeLensWorksDocument(photoID: "checkpoint-photo", named: "A")
+        let version = try #require(controller.selectedLensWorksVersionID), layer = try #require(session.activeLayerID)
+        try controller.addLensWorksCheckpoint(named: "A # <checkpoint>", to: version)
+        let checkpoint = try #require(controller.lensWorksDocument?.versions.first?.checkpoints.first)
+        session.renameLayer(layer, to: "Later")
+        try controller.captureLensWorksComposition(in: version)
+        let target = LensWorksCheckpointTarget(document: try #require(session.document?.id), version: version, checkpoint: checkpoint.id)
+        let descriptor = LensWorksCommandRegistry.descriptor(.restoreCheckpoint)
+        #expect(descriptor.undoable && descriptor.historyOwner == .document && descriptor.agent.isRunnable)
+        #expect(descriptor.parameters.map(\.name) == ["document", "version", "checkpoint"])
+        #expect(descriptor.parameters.allSatisfy { $0.type == .uuid && $0.required })
+        #expect(LensWorksCommandInvocation(identifier: target.invocation.identifier) == target.invocation)
+        let menu = NSMenu(title: "Restore Checkpoint")
+        let item = LensWorksCommandRegistry.menuItem(.restoreCheckpoint, argument: target.argument, title: checkpoint.name,
+            target: nil, action: Selector(("restoreCheckpoint:")), showsKeyEquivalent: false)
+        menu.addItem(item)
+        #expect(LensWorksCommandAudit.audit(menu: menu, path: descriptor.menu) == [])
+        #expect(controller.checkpointRestoreAvailability(target) == nil)
+        try LensWorksCommandDispatcher.dispatch(target, in: controller)
+        #expect(LensWorksCommandDispatcher.lastInvocation == target.invocation)
+        #expect(LensWorksCommandDispatcher.lastOrigin == .user)
+        #expect(session.activeLayer?.name == "Layer 1" && session.canUndo)
+        session.undo()
+        #expect(session.activeLayer?.name == "Later")
+    }
+
     @Test func keyPressesResolveThroughRegisteredBindingsInEveryScope() {
         func resolve(_ key: String, _ modifiers: Int, _ scopes: Set<LensWorksShortcutScope>) -> String? {
             LensWorksCommandRegistry.resolve(ShortcutChord(key, modifiers), in: scopes, effective: false)?.identifier

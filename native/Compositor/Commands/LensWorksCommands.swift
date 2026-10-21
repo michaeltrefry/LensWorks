@@ -285,6 +285,16 @@ struct LensWorksLayerCommandButton: View {
 }
 
 /// One UI-thread dispatch namespace; native catalog history remains native, and document edits commit the atomic project/history snapshot.
+/// Exact identities supplied by the checkpoint menu and the agent's typed parameters.
+/// Names are display data; they never select a checkpoint or its owning document.
+nonisolated struct LensWorksCheckpointTarget: Equatable, Sendable {
+    let document: UUID
+    let version: UUID
+    let checkpoint: UUID
+    var argument: String { [document, version, checkpoint].map(\.uuidString).joined(separator: "/") }
+    var invocation: LensWorksCommandInvocation { .init(.restoreCheckpoint, argument) }
+}
+
 @MainActor enum LensWorksCommandDispatcher {
     @discardableResult static func dispatch(_ admission: LensWorksLayerAdmission, in session: EditorSession) throws -> Bool {
         lastInvocation = .init(admission.command.id); lastOrigin = admission.origin
@@ -297,6 +307,14 @@ struct LensWorksLayerCommandButton: View {
     static func dispatch(_ admission: LensWorksCatalogDeleteAdmission, in catalog: LensWorksCatalog) async throws {
         lastInvocation = .init(admission.id, admission.folder.id); lastOrigin = admission.origin
         try await catalog.deleteGroup(admission.folder)
+    }
+    /// Both menu and automation use this typed dispatch and the controller's same
+    /// fresh identity/availability check. File authority is supplied by automation.
+    static func dispatch(_ target: LensWorksCheckpointTarget, in controller: ProjectController,
+                         origin: LensWorksCommandOrigin = .user, admit: ((ProjectSnapshot) throws -> Void)? = nil) throws {
+        if let reason = controller.checkpointRestoreAvailability(target) { throw LensWorksCommandRefusal(reason: reason) }
+        lastInvocation = target.invocation; lastOrigin = origin
+        try controller.restoreLensWorksCheckpoint(target.checkpoint, in: target.version, origin: origin, admit: admit)
     }
     /// Edit › Undo or Redo for an agent: the same document history step, refused under a person's open edit.
     /// Returns the name of the history entry it stepped over.

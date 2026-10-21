@@ -105,7 +105,7 @@ extension LensWorksCommandID {
              .filterRating, .filterFlag, .filterLabel, .filterAnyKeyword, .clearFilters:
             .runnable(.catalog)
         // History steps, project files, tabs and the catalog itself.
-        case .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
+        case .restoreCheckpoint, .undo, .redo, .openCatalog, .newCatalog, .addPhotos, .newCanvas, .openProject, .openRecent, .save, .saveAs,
              .exportPNG, .exportJPEG, .closeProject, .selectProjectTab, .openInEditor, .locateFolder:
             .runnable(.standalone)
         case .automationEnabled, .automationShowSecret, .automationCopySecret, .automationRegenerateSecret, .automationRevokeSecret,
@@ -168,7 +168,7 @@ extension LensWorksCommandID {
                         .moveLayerUp, .moveLayerDown, .mergeLayers, .flipLayerHorizontal, .flipLayerVertical, .deleteLayer, .addMask, .toggleMask,
                         .deleteMask, .linkMask, .addEffect, .blendMode, .canvasDelete, .nudge, .movePixels,
                         .exposure, .undoRecipe, .redoRecipe, .addToVirtualFolder, .removeFromVirtualFolder, .addKeyword, .removeKeyword,
-                        .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .undo, .redo])
+                        .renameKeyword, .moveKeyword, .addSynonym, .deleteKeyword, .ratePhotos, .flagPhotos, .labelPhotos, .restoreCheckpoint, .undo, .redo])
         ]
         var table: [LensWorksCommandID: LensWorksCommandReversal] = [:]
         for (reversal, ids) in groups { for id in ids { table[id] = reversal } }

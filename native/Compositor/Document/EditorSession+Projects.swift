@@ -2,6 +2,10 @@ import Foundation
 
 extension EditorSession {
     func projectSnapshot() -> ProjectSnapshot? {
+        projectSnapshot(document: document, selection: activeLayerID)
+    }
+
+    func projectSnapshot(document: CanvasDocument?, selection: UUID?) -> ProjectSnapshot? {
         guard let document else { return nil }
         let owner: LWSourceMetadataStorage
         do {
@@ -20,7 +24,7 @@ extension EditorSession {
         let floating=images.values.contains(where:{$0.linear != nil || $0.linearPlane != nil})
         return ProjectSnapshot(manifest: ProjectManifest(workingSpace:floating ? "extended-linear-sRGB" : nil,
             workingSample:floating ? "float32-straight-RGBA" : nil,resolution: document.resolution, documentID: document.id, width: document.width,
-            height: document.height, activeLayerID: activeLayerID, layers: layers,
+            height: document.height, activeLayerID: selection, layers: layers,
             guides:document.guides.isEmpty ? nil:document.guides,metadataStorage:owner),images:images,masks:masks)
     }
 
@@ -34,7 +38,18 @@ extension EditorSession {
         guideDrag = nil
         let manifest = snapshot.manifest
         transformEdit = nil
-        document = CanvasDocument(id: manifest.documentID, width: manifest.width, height: manifest.height,
+        document = Self.canvasDocument(snapshot)
+        activeLayerID = manifest.activeLayerID
+        projectURL = url
+        renamingLayerID = nil
+        history.reset()
+        commandInteraction = nil; opacityEditLayerID = nil
+        viewport.fit(documentSize: document!.size)
+    }
+
+    static func canvasDocument(_ snapshot: ProjectSnapshot) -> CanvasDocument {
+        let manifest = snapshot.manifest
+        var document = CanvasDocument(id: manifest.documentID, width: manifest.width, height: manifest.height,
             layers: manifest.layers.map {
                 ImageLayer(id: $0.id, asset: snapshot.images[$0.id], name: $0.name,
                            isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: snapshot.mask(for: $0), maskSourceID: $0.maskSourceID, adjustment: $0.adjustment,
@@ -42,13 +57,8 @@ extension EditorSession {
                            effects: $0.effects,
                            text: LayerText.loaded($0.text, image: snapshot.images[$0.id]?.image), liveSource:$0.liveSource)
             }, resolution: manifest.resolution ?? 72, guides: manifest.guides ?? [])
-        document?.metadataStorage=manifest.metadataStorage
-        activeLayerID = manifest.activeLayerID
-        projectURL = url
-        renamingLayerID = nil
-        history.reset()
-        commandInteraction = nil; opacityEditLayerID = nil
-        viewport.fit(documentSize: document!.size)
+        document.metadataStorage=manifest.metadataStorage
+        return document
     }
 
     /// Replaces the document with what its package holds now, after something else wrote it. Unlike `installProject`

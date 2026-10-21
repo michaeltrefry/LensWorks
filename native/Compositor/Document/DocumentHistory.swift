@@ -9,14 +9,20 @@ final class DocumentHistory {
         let document: CanvasDocument?
         let activeLayerID: UUID?
         let revision: UUID
+        let versionContent: LensWorksVersionContent?
+        init(document: CanvasDocument?, activeLayerID: UUID?, revision: UUID, versionContent: LensWorksVersionContent? = nil) {
+            self.document = document; self.activeLayerID = activeLayerID; self.revision = revision; self.versionContent = versionContent
+        }
     }
-    private struct Entry {
+    struct Entry {
+        var id = UUID()
         let name: String
         /// Who made the edit: an agent may step only over its own entries.
         let origin: LensWorksCommandOrigin
         let before: Snapshot
         let after: Snapshot
     }
+    var protectedEntryIDs: Set<UUID> = []
     private var past: [Entry] = []
     private var future: [Entry] = []
     private var revision = UUID()
@@ -50,13 +56,45 @@ final class DocumentHistory {
         guard interactionToken == token, depth == 1, let starting = pending else { return nil }
         interactionToken = nil; pending = nil;pendingAfterMetadataStorage=nil; depth = 0; return starting
     }
-    let entryLimit: Int
+    var entryLimit: Int
+    private let defaultEntryLimit: Int
     let retainedByteLimit: Int
 
     init(entryLimit: Int = 100, retainedByteLimit: Int = 256 * 1024 * 1024) {
         self.entryLimit = max(0, entryLimit)
+        self.defaultEntryLimit = max(0, entryLimit)
         self.retainedByteLimit = max(0, retainedByteLimit)
         savedRevision = revision
+    }
+
+    /// The same transaction records serve every editor tool; saving never coalesces them.
+    /// An unfinished gesture cannot be captured as a completed edit.
+    func entries() throws -> (past: [Entry], future: [Entry]) {
+        guard depth == 0 else { throw LensWorksCommandRefusal(reason: "Finish the current canvas edit before saving or naming a checkpoint. Your edits and Undo history have been kept.") }
+        return (past, future)
+    }
+
+    func install(past: [Entry], future: [Entry], currentRevision: UUID, limit: Int, protected: Set<UUID>) {
+        reset()
+        self.past = past; self.future = future
+        revision = currentRevision; savedRevision = currentRevision
+        entryLimit = max(1, limit); protectedEntryIDs = protected
+    }
+
+    /// A whole-composition replacement made through the version controls uses
+    /// the same timeline as ordinary editor transactions.
+    func appendCaptured(id: UUID, name: String, before: CanvasDocument, selection: UUID?, after: CanvasDocument?, afterSelection: UUID?, beforeRevision: UUID, afterRevision: UUID) {
+        let starting = Snapshot(document: before, activeLayerID: selection, revision: beforeRevision)
+        revision = afterRevision
+        past.append(Entry(id: id, name: name, origin: .user, before: starting,
+            after: Snapshot(document: after, activeLayerID: afterSelection, revision: revision)))
+        future.removeAll()
+        trim(current: after)
+    }
+
+    func applyLimits(entryLimit: Int, protected: Set<UUID>, current: CanvasDocument?) {
+        self.entryLimit = max(1, entryLimit); protectedEntryIDs = protected
+        trim(current: current)
     }
 
     var canUndo: Bool { depth == 0 && !past.isEmpty }
@@ -74,6 +112,8 @@ final class DocumentHistory {
     /// A save of `saved` finished. Edits made while it was writing leave the document modified; undoing back to it doesn't.
     func markSaved(_ saved: UUID) { savedRevision = saved }
     func reset() {
+        protectedEntryIDs = []
+        entryLimit = defaultEntryLimit
         past.removeAll()
         future.removeAll()
         pending = nil;pendingAfterMetadataStorage=nil
@@ -273,8 +313,8 @@ final class DocumentHistory {
 
     private func trim(current: CanvasDocument?) {
         while past.count + future.count > entryLimit || retainedBytes(current: current) > retainedByteLimit {
-            if !past.isEmpty { past.removeFirst() }
-            else if !future.isEmpty { future.removeFirst() }
+            if let index = past.firstIndex(where: { !protectedEntryIDs.contains($0.id) }) { past.remove(at: index) }
+            else if let index = future.firstIndex(where: { !protectedEntryIDs.contains($0.id) }) { future.remove(at: index) }
             else { break }
         }
     }

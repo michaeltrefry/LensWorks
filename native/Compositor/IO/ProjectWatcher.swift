@@ -32,7 +32,9 @@ final class ProjectWatcher {
     }
 
     private var watchedPaths: [String] {
-        [url.path, url.appendingPathComponent("manifest.json").path, url.appendingPathComponent("LensWorks.json").path, url.appendingPathComponent("images", isDirectory: true).path]
+        [url.path, url.appendingPathComponent("manifest.json").path, url.appendingPathComponent("LensWorks.json").path,
+         url.appendingPathComponent("images", isDirectory: true).path,
+         url.appendingPathComponent("LensWorksDocument", isDirectory: true).path]
     }
 
     /// Watches every path that exists, keeping a source whose path still names the same file: cancelling a source

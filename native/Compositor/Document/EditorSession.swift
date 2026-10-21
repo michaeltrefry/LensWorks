@@ -749,6 +749,7 @@ final class EditorSession {
     }
     var renamingLayerID: UUID? { didSet { if renamingLayerID == nil { commandRenameAdmission = nil }; resumeFileRequests() } }
     let history = DocumentHistory()
+    @ObservationIgnored var restoredVersionContent: ((LensWorksVersionContent) -> Void)?
     var isModified: Bool { history.isModified }
     var canUseHistory: Bool {
         _ = showsBusy
@@ -777,6 +778,7 @@ final class EditorSession {
         let keepMaskTarget = isMaskSelected && activeLayerID == snapshot.activeLayerID
         document = snapshot.document
         activeLayerID = snapshot.activeLayerID
+        if let content = snapshot.versionContent { restoredVersionContent?(content) }
         isMaskSelected = keepMaskTarget && activeLayer?.mask != nil
         if changedCanvas, let document { viewport.fit(documentSize: document.size) }
     }
