@@ -8,6 +8,19 @@
 set -uo pipefail
 bundle=$1
 shift
+# Every native CI invocation names its actual DerivedData, not build-native.sh's app.
+derived=
+configuration=Debug
+previous=
+for argument in "$@"; do
+  if [[ "$previous" == -derivedDataPath ]]; then derived=$argument; fi
+  if [[ "$previous" == -configuration ]]; then configuration=$argument; fi
+  previous=$argument
+done
+[[ -n "$derived" && "$previous" != -derivedDataPath && "$previous" != -configuration ]] || {
+  echo 'Native tests require an explicit -derivedDataPath and a value for -configuration when supplied' >&2; exit 64;
+}
+bash "$(dirname "$0")/../verify-native-helpers.sh" "$derived/Build/Products/$configuration/LensWorks.app" || exit 1
 log=$(mktemp)
 xcodebuild test-without-building "$@" -resultBundlePath "$bundle" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}

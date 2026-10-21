@@ -33,6 +33,11 @@ jobs:
           ls -d /Applications/Xcode*.app
           sudo xcode-select -s /Applications/Xcode_26.5.app
           xcodebuild -version
+      - name: Pin the selected Xcode SDK and native compiler toolchain
+        id: native-toolchain
+        run: bash scripts/native-toolchain.sh --github
+      - name: Verify native bootstrap contracts without compiling
+        run: python3 -m unittest discover -s scripts/tests -p test_native_bootstrap.py
       - name: Install the native libraries the app links
         run: |
           brew install libraw libavif webp jpeg-xl jpeg-turbo little-cms2 libomp pkg-config
@@ -46,15 +51,12 @@ jobs:
             ~/.cargo/git
             .build/deps
             .build/rust-catalog
-          key: unit-tests-rust-${{ hashFiles('rust-toolchain.toml', 'adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock', 'adapters/mcp/Cargo.lock') }}
-          restore-keys: unit-tests-rust-
+          key: unit-tests-native-v2-${{ steps.native-toolchain.outputs.identity }}-${{ hashFiles('scripts/native-toolchain.sh', 'rust-toolchain.toml', 'adapters/catalog/Cargo.lock', 'engines/catalog/Cargo.lock', 'adapters/mcp/Cargo.lock') }}
       - name: Build the Rust catalog library and test helpers
         run: |
           python3 engines/catalog/scripts/fetch_dng_sdk.py --destination .build/deps
           cargo --version
-          cargo build --manifest-path adapters/catalog/Cargo.toml --locked --release
-          cargo build --manifest-path engines/catalog/Cargo.toml --locked --release --bin photocatalog --bin organization_probe
-          cargo build --manifest-path adapters/mcp/Cargo.toml --locked --release
+          ./scripts/build-catalog-helpers.sh
       - name: Save the DNG SDK and the Rust build
         # Saved as soon as the Rust build succeeds, so a later failing step does not cost the next run that build.
         if: steps.rust-cache.outputs.cache-hit != 'true'
@@ -70,19 +72,6 @@ jobs:
         run: |
           xcodebuild build-for-testing -project native/Compositor.xcodeproj -scheme Compositor -destination 'platform=macOS,arch=arm64' \
             -configuration Debug -derivedDataPath .build/xcode-unit -onlyUsePackageVersionsFromResolvedFile CODE_SIGN_IDENTITY=-
-      - name: Install the decode and catalog helpers into the test host
-        # As scripts/build-native.sh does for the development app: the live RAW suites develop through
-        # Contents/Helpers/LensWorksDecodeWorker of the app that hosts the tests.
-        run: |
-          app=.build/xcode-unit/Build/Products/Debug/LensWorks.app
-          helpers="$app/Contents/Helpers"
-          mkdir -p "$helpers"
-          cp "$CARGO_TARGET_DIR/release/photocatalog" "$helpers/PhotoCatalogWorker"
-          cp "$CARGO_TARGET_DIR/release/lensworks-decode-worker" "$helpers/LensWorksDecodeWorker"
-          cp "$CARGO_TARGET_DIR/release/lensworks-mcp" "$helpers/LensWorksMCP"
-          for helper in PhotoCatalogWorker LensWorksDecodeWorker LensWorksMCP; do codesign --force --sign - --timestamp=none "$helpers/$helper"; done
-          codesign --force --sign - --timestamp=none --preserve-metadata=entitlements,flags,runtime "$app"
-          codesign --verify --strict --deep "$app"
       - name: Run the CompositorTests unit tests
         timeout-minutes: 60
         env:

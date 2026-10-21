@@ -1,6 +1,7 @@
 # Dark Factory prepare recipe (docs/prepare-recipes.md in michaeltrefry/dark-factory).
 # The factory downloads the DNG SDK (the URL and SHA-256 engines/catalog/scripts/fetch_dng_sdk.py pins)
-# and builds the Rust catalog library the Xcode build links, as scripts/build-native.sh does.
+# and builds the catalog library plus all three native helpers. Xcode embeds/signs the
+# helpers into its actual app/test host before sealing it, including the gate's host.
 version: 1
 artifacts:
   - name: dng-sdk
@@ -10,7 +11,7 @@ artifacts:
     unpack: zip
 steps:
   - name: rust-catalog
-    argv: [/opt/homebrew/bin/cargo, build, --manifest-path, adapters/catalog/Cargo.toml, --locked, --release]
+    argv: [/bin/bash, scripts/build-catalog-helpers.sh]
     env:
       CARGO_TARGET_DIR: ${worktree}/.build/rust-catalog
       PHOTOCATALOG_DNG_SDK: ${artifact:dng-sdk}/dng_sdk_1_7_1
