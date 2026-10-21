@@ -373,8 +373,21 @@ struct LensWorksCatalogWorkspace: View {
     private var grid: some View {
         VStack(spacing: 0) {
             HStack {
-                TextField("Search filenames", text: Binding(get: { catalog.searchText }, set: { catalog.searchText = $0 }))
-                    .onSubmit { Task { await action { try await catalog.browse(folder: catalog.activeFolder, collection: catalog.browseOptions.collection, recursive: catalog.recursive, text: catalog.searchText) } } }
+                TextField(catalog.semanticMode ? "Describe the photos you want" : "Search filenames", text: Binding(get: { catalog.searchText }, set: { catalog.searchText = $0 }))
+                    .onSubmit {
+                        Task {
+                            await action {
+                                if catalog.semanticMode { try await catalog.semanticBrowse(catalog.searchText) }
+                                else { try await catalog.browse(folder: catalog.activeFolder, collection: catalog.browseOptions.collection, recursive: catalog.recursive, text: catalog.searchText) }
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("LensWorks.catalog.search")
+                Toggle("By meaning", isOn: Binding(get: { catalog.semanticMode }, set: { catalog.semanticMode = $0 }))
+                    .toggleStyle(.checkbox)
+                    .help(catalog.semanticStatus.isEmpty ? "Search by what the photos show, within the current folder and filters." : catalog.semanticStatus)
+                    .disabled(catalog.semantic == nil)
+                    .accessibilityIdentifier("LensWorks.catalog.semanticMode")
                 Text("\(catalog.selectionCount) selected").font(.caption).foregroundStyle(.secondary)
                 Menu("Sort") {
                     LensWorksCommandButton(.sortBy, argument: "sequence", title: "Sequence") { Task { await catalog.setBrowseOrder(sort: .Sequence, direction: catalog.browseOptions.direction) } }
