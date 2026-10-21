@@ -18,8 +18,10 @@ class NativeBootstrapTests(unittest.TestCase):
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         self.log = self.root / 'calls'
-        self.env = dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin', CALLS=str(self.log))
-        for key in ('DEVELOPER_DIR', 'SDKROOT', 'CC', 'CXX', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS',
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        self.env = dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin', CALLS=str(self.log), HOME=str(self.home))
+        for key in ('DEVELOPER_DIR', 'SDKROOT', 'CC', 'CXX', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTUP_HOME', 'RUSTUP_TOOLCHAIN',
                     'LW_NATIVE_FLAGS_SET', 'LW_NATIVE_TOOLCHAIN_ID', 'CFLAGS', 'CXXFLAGS'):
             self.env.pop(key, None)
 
@@ -39,6 +41,7 @@ class NativeBootstrapTests(unittest.TestCase):
         scripts.mkdir()
         script = scripts / 'native-toolchain.sh'
         shutil.copyfile(ROOT / 'scripts/native-toolchain.sh', script)
+        shutil.copyfile(ROOT / 'rust-toolchain.toml', self.root / 'rust-toolchain.toml')
         self.sdk = self.root / 'Xcode 26.5.app' / 'SDKs' / 'MacOSX26.5.sdk'
         self.sdk.mkdir(parents=True)
         self.stub('xcode-select', 'echo /selected/Xcode/Contents/Developer')
@@ -49,11 +52,27 @@ class NativeBootstrapTests(unittest.TestCase):
   '--sdk macosx --find clang++') command -v selected-clang++;;
   *) exit 99;;
 esac''')
-        for name in ('selected-clang', 'selected-clang++', 'cmake', 'rustc'):
+        for name in ('selected-clang', 'selected-clang++', 'cmake'):
             self.stub(name, 'echo stub-version')
+        self.stub('rustc', f'echo "rustc {self.pin()} (stub)"')
+        self.stub('cargo', f'echo "cargo {self.pin()} (stub)"')
         self.stub('xcodebuild', 'echo "Xcode ${TEST_XCODE_VERSION:-26.5}"')
         self.env['TEST_SDK'] = str(self.sdk)
         return script
+
+    @staticmethod
+    def pin():
+        import re
+        return re.search(r'^channel = "([0-9.]+)"$', (ROOT / 'rust-toolchain.toml').read_text(), re.M).group(1)
+
+    def pinned_toolchain(self, rustc=None, cargo=None):
+        bin = self.home / '.rustup/toolchains' / f'{self.pin()}-aarch64-apple-darwin' / 'bin'
+        bin.mkdir(parents=True)
+        for name, version in (('rustc', rustc or self.pin()), ('cargo', cargo or self.pin())):
+            path = bin / name
+            path.write_text(f'#!/bin/bash\nset -eu\necho "pinned-{name} $*" >> "$CALLS"\necho "{name} {version} (pinned)"\n')
+            path.chmod(0o755)
+        return bin
 
     def github_selection(self, script):
         envfile = self.root / 'github-env'
@@ -141,6 +160,66 @@ esac''')
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('unavailable', result.stderr)
+
+    def test_rust_other_than_the_pin_on_path_fails_before_any_build(self):
+        # The factory's sandbox PATH resolves Homebrew's rustc, not the rust-toolchain.toml pin.
+        script = self.toolchain()
+        self.stub('rustc', 'echo "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)"')
+        self.stub('cargo', 'echo "cargo 1.99.1 (Homebrew)"')
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f'Rust {self.pin()} is pinned', result.stderr)
+        self.assertIn('rustc 1.99.1', result.stderr)
+        self.assertIn(f'rustup toolchain install {self.pin()}', result.stderr)
+        self.assertFalse((self.root / '.build/toolchains').exists())
+
+    def test_cargo_of_another_release_than_the_pinned_rustc_fails(self):
+        script = self.toolchain()
+        self.stub('cargo', 'echo "cargo 1.99.1 (Homebrew)"')
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cargo 1.99.1', result.stderr)
+
+    def test_pinned_rustup_toolchain_is_selected_by_path_over_another_rust(self):
+        script = self.toolchain()
+        self.stub('rustc', 'echo "rustc 1.99.1 (Homebrew)"')
+        self.stub('cargo', 'echo "cargo 1.99.1 (Homebrew)"')
+        pinned = self.pinned_toolchain()
+        envfile, output, github_path = (self.root / name for name in ('github-env', 'github-output', 'github-path'))
+        for path in (envfile, output, github_path):
+            path.write_text('')
+        env = dict(self.env, GITHUB_ENV=str(envfile), GITHUB_OUTPUT=str(output), GITHUB_PATH=str(github_path))
+        result = subprocess.run(['/bin/bash', str(script), '--github'], env=env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(github_path.read_text().splitlines(), [str(pinned)])
+        calls = self.log.read_text()
+        self.assertIn('pinned-rustc -Vv', calls)
+        self.assertIn('pinned-cargo -V', calls)
+
+    def test_factory_helper_build_runs_the_pinned_cargo(self):
+        self.toolchain()
+        self.stub('rustc', 'echo "rustc 1.99.1 (Homebrew)"')
+        self.stub('cargo', 'echo homebrew-cargo-ran >> "$CALLS"; echo "cargo 1.99.1 (Homebrew)"')
+        pinned = self.pinned_toolchain()
+        (pinned / 'cargo').write_text(f'''#!/bin/bash
+set -eu
+if [[ "$1" == -V ]]; then echo "cargo {self.pin()} (pinned)"; exit 0; fi
+echo "pinned-cargo $*" >> "$CALLS"
+mkdir -p "$CARGO_TARGET_DIR/release"
+for name in photocatalog lensworks-decode-worker lensworks-mcp; do printf x > "$CARGO_TARGET_DIR/release/$name"; done
+''')
+        script = self.root / 'scripts/build-catalog-helpers.sh'
+        shutil.copyfile(ROOT / 'scripts/build-catalog-helpers.sh', script)
+        self.env['PHOTOCATALOG_DNG_SDK'] = str(self.root / 'pinned-adobe-sdk')
+        result = subprocess.run(['/bin/bash', str(script)], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.log.read_text()
+        self.assertNotIn('homebrew-cargo-ran', calls)
+        self.assertEqual(sum(line.startswith('pinned-cargo build') for line in calls.splitlines()), 3)
 
     def helpers(self, configuration='Debug'):
         app = self.root / f'xcode-s47/Build/Products/{configuration}/LensWorks.app'
@@ -239,7 +318,8 @@ if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 7; fi''')
         self.toolchain()
         script = self.root / 'scripts/build-catalog-helpers.sh'
         shutil.copyfile(ROOT / 'scripts/build-catalog-helpers.sh', script)
-        self.stub('cargo', '''printf '%s | %s | %s | %s\\n' "$*" "$SDKROOT" "$CMAKE_TOOLCHAIN_FILE" "$CARGO_TARGET_DIR" >> "$CALLS"
+        version = f'if [[ "${{1:-}}" == -V ]]; then echo "cargo {self.pin()} (stub)"; exit 0; fi\n'
+        self.stub('cargo', version + '''printf '%s | %s | %s | %s\\n' "$*" "$SDKROOT" "$CMAKE_TOOLCHAIN_FILE" "$CARGO_TARGET_DIR" >> "$CALLS"
 mkdir -p "$CARGO_TARGET_DIR/release"
 for name in photocatalog lensworks-decode-worker lensworks-mcp; do
   printf 'source-bound-%s' "$name" > "$CARGO_TARGET_DIR/release/$name"
