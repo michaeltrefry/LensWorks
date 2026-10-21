@@ -604,6 +604,9 @@ struct LensWorksAgentProjectCommands {
         case .openCatalog, .newCatalog:
             guard let catalog = context.catalog else { return "The catalog is not available." }
             return catalog.isBusy || catalog.isImporting || catalog.closingRequested ? "Finish the current catalog operation first." : nil
+        case .mergeToHDR:
+            guard let catalog = context.catalog else { return "Open a catalog first." }
+            return catalog.hdrMergeUnavailableReason
         case .addPhotos:
             guard let catalog = context.catalog, catalog.catalogPath != nil else { return "Open a catalog first." }
             return catalog.isBusy || catalog.isImporting ? "Finish the current catalog operation first." : nil
@@ -826,6 +829,27 @@ struct LensWorksAgentProjectCommands {
                 }
             } catch let refusal as LensWorksCommandRefusal { throw refusal }
             catch { throw refuse(error is CancellationError ? "The catalog changed while the folder was being located: nothing was relinked." : error.localizedDescription) }
+        case .mergeToHDR:
+            guard let catalog = context.catalog else { throw refuse("Open a catalog first.") }
+            let output = try arguments.url("output")
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: output.path, isDirectory: &isDirectory), isDirectory.boolValue,
+                  !Self.isCatalog(output) else { throw refuse("HDR output must be an existing media folder, not a catalog.") }
+            let selected = try await catalog.admitHDRMerge(output: output)
+            // Selection names implicit files: admit every physical original before
+            // native decoding, and hold/recheck the same runtime grants throughout.
+            let urls = selected.originals + [output]
+            let authorize: @MainActor @Sendable () throws -> Void = {
+                for url in urls { _ = try folders.admit(url.path) }
+            }
+            try authorize()
+            var options = HDRMergeOptions()
+            options.align = try arguments.bool("align") ?? true
+            options.deghost = try arguments.bool("deghost") ?? false
+            let made = try await folders.withAccess(to: urls) {
+                try await catalog.performHDRMerge(selected, options: options, origin: .agent, authorize: authorize)
+            }
+            return "The HDR photo is registered at “\(made.dng.path)” and linked to all \(made.record.sources.count) originals."
         case .addPhotos:
             guard let catalog = context.catalog else { throw refuse("Open a catalog first.") }
             let url = try arguments.url("folder")

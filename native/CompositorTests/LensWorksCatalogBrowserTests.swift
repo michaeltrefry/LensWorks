@@ -6,7 +6,38 @@ import ImageIO
 import UniformTypeIdentifiers
 import Testing
 import CryptoKit
+import ObjectiveC
 @testable import Compositor
+
+/// Opt-in evidence for the two retained code-0 test-host exits. It observes and
+/// forwards termination unchanged; it never suppresses exit or relaxes assertions.
+@MainActor
+private enum LensWorksCatalogExitTrace {
+    private static var installed = false
+    static func install() {
+        guard ProcessInfo.processInfo.environment["LW_CATALOG_EXIT_TRACE"] == "1", !installed else { return }
+        installed = true
+        if let original = class_getInstanceMethod(NSApplication.self, #selector(NSApplication.terminate(_:))),
+           let traced = class_getInstanceMethod(NSApplication.self, #selector(NSApplication.lw_catalogTraceTerminate(_:))) {
+            method_exchangeImplementations(original, traced)
+        }
+        atexit { LensWorksCatalogExitTrace.emit("atexit") }
+    }
+    nonisolated static func stage(_ name: String) {
+        guard ProcessInfo.processInfo.environment["LW_CATALOG_EXIT_TRACE"] == "1" else { return }
+        FileHandle.standardError.write(Data(("CATALOG-EXIT-STAGE " + name + "\n").utf8))
+    }
+    nonisolated static func emit(_ event: String) {
+        FileHandle.standardError.write(Data(("CATALOG-EXIT-TRACE " + event + "\n" + Thread.callStackSymbols.prefix(50).joined(separator: "\n") + "\n").utf8))
+    }
+}
+
+extension NSApplication {
+    @objc fileprivate dynamic func lw_catalogTraceTerminate(_ sender: Any?) {
+        LensWorksCatalogExitTrace.emit("NSApplication.terminate")
+        lw_catalogTraceTerminate(sender) // Swizzled to the original; normal behavior is preserved.
+    }
+}
 
 @Suite(.serialized)
 @MainActor
@@ -1593,6 +1624,7 @@ struct LensWorksCatalogBrowserTests {
     @Test func largeSyntheticCatalogNavigationSelectionAndEditorTransitionStayWindowed() async throws {
         let photos = 100_000, pageRows = 100
         let fixture = try Fixture(images: 1)
+        fixture.diagnosticStage = "large: prepare 100k catalog"
         try fixture.prepareSyntheticCatalog(count: photos)
         try await fixture.run(create: false) { model in
             @MainActor func checkWindow() {
@@ -1617,6 +1649,7 @@ struct LensWorksCatalogBrowserTests {
             var firstIDs: [Int64: String] = [0: try #require(model.assets.first?.id)]
             var lastSequence = try #require(model.assets.last?.sequence)
             let started = ContinuousClock.now
+            fixture.diagnosticStage = "large: scroll 150 bounded pages"
             for page in 1...150 {
                 #expect(await singleFetch { await model.nextPage() })
                 checkWindow()
@@ -1659,6 +1692,7 @@ struct LensWorksCatalogBrowserTests {
 
             // Catalog -> editor transition on the one real photo (newest sequence) keeps the
             // grid/filmstrip window unchanged and never re-fetches or widens it.
+            fixture.diagnosticStage = "large: import real 1x1 original"
             try await fixture.importPhotos(model)
             await model.setBrowseOrder(sort: .Sequence, direction: .Descending)
             let real = try #require(model.assets.first)
@@ -1671,11 +1705,14 @@ struct LensWorksCatalogBrowserTests {
             let page = model.pageAuthority, rows = model.assets.map(\.id)
             let fetchesBeforeEditor = await model.service.browseCalls
             let workspace = Self.isolatedWorkspace()
+            fixture.diagnosticStage = "large: create working version from real 1x1 original"
             await model.createWorkingVersion(workspace: workspace)
+            fixture.diagnosticStage = "large: returned from create working version"
             #expect(model.error == nil && !model.showingCatalog)
             #expect(workspace.current.session.document != nil)
             #expect(model.pageAuthority == page && model.assets.map(\.id) == rows)
             // Filmstrip selection inside the editor moves within the same window.
+            fixture.diagnosticStage = "large: filmstrip selection after editor transition"
             await model.moveSelection(1, range: false)
             #expect(model.selectedPhotoID == rows[1] && model.pageAuthority == page)
             model.showingCatalog = true
@@ -2232,7 +2269,7 @@ struct LensWorksCatalogBrowserTests {
         let config: LWManagedSessionConfig
         let defaults: UserDefaults
         let sources: [URL: Data]
-        var diagnosticStage = "fixture admission"
+        var diagnosticStage = "fixture admission" { didSet { LensWorksCatalogExitTrace.stage(diagnosticStage) } }
         private var previewCheckpoints: [[String: Any]] = []
         var preserveSuccessEvidence = false
         var comparisonSourceHashes: [URL: String]?
@@ -2240,6 +2277,7 @@ struct LensWorksCatalogBrowserTests {
         private var comparisonPreviewReplies: [Result<PreviewExperimentOutcome, any Error>?] = []
         private var comparisonAdmissionObservation: [String: Int] = [:]
         init(images: Int, scanRows: UInt = 512, previewRequests: UInt? = nil) throws {
+            LensWorksCatalogExitTrace.install()
             let physical = try #require(realpath(FileManager.default.temporaryDirectory.path, nil)); defer { free(physical) }
             root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("LWBrowser-\(UUID())")
             photos = root.appendingPathComponent("Photos"); catalog = root.appendingPathComponent("Catalog")

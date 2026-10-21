@@ -17,6 +17,8 @@ nonisolated enum LensWorksCommandID: String, Codable, CaseIterable, Sendable {
     case undoRecipe = "catalog.recipe.undo"
     case redoRecipe = "catalog.recipe.redo"
     case rating = "catalog.rating"
+    // Photo.
+    case mergeToHDR = "photo.mergeToHDR"
     // App menu.
     case hideApp = "app.hide", hideOthers = "app.hideOthers", showAll = "app.showAll"
     // File.
@@ -262,7 +264,7 @@ nonisolated enum LensWorksCommandRegistry {
     static let directions: [(name: String, key: String)] = [("Left", "\u{f702}"), ("Right", "\u{f703}"), ("Up", "\u{f700}"), ("Down", "\u{f701}")]
 
     static let descriptors: [LensWorksCommandDescriptor] = {
-        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
+        let groups: [[LensWorksCommandDescriptor]] = [layerAndRecipe, appMenu, fileMenu, photoMenu, editMenu, viewMenu, selectMenu, imageMenu, layerMenu, canvas, panels, catalogBrowser, automation]
         return groups.flatMap { $0 }
     }()
 
@@ -286,6 +288,12 @@ nonisolated enum LensWorksCommandRegistry {
         // The binding keeps its historical title so saved custom shortcuts still apply.
         .init(id: .hideOthers, label: "Hide Others", menu: "App", bindings: menuKey("Hide Compositor", "h", 3)),
         .init(id: .showAll, label: "Show All", menu: "App")
+    ]
+    private static let photoMenu: [LensWorksCommandDescriptor] = [
+        .init(id: .mergeToHDR, label: "Merge to HDR…", menu: "Photo", parameters: [
+            .init(name: "output", type: .path, description: "An existing granted media folder; a new HDR child holds the floating-point DNG and source provenance.", required: true),
+            .init(name: "align", type: .boolean, description: "Align bracketed originals before merging (default true)."),
+            .init(name: "deghost", type: .boolean, description: "Suppress moving-subject disagreement against the middle exposure (default false).")])
     ]
     private static let fileMenu: [LensWorksCommandDescriptor] = [
         .init(id: .openCatalog, label: "Open Catalog…", menu: "File", parameters: [Argument.path("path", "The catalog folder to open. When the open catalog has organize changes Undo can still revert, the person is asked first.")], agentConfirmation: .whenDiscardingCatalogHistory),

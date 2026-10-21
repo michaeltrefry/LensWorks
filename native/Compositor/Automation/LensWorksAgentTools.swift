@@ -91,6 +91,12 @@ final class LensWorksAgentTools {
             default: return try await preview(arguments)
             }
         } catch {
+            if let recovery = error as? LWLinearMediaRecoveryError,
+               let reply = try? Self.bounded(["error": String(recovery.reason.prefix(4096)),
+                                              "recoveryPaths": recovery.recoveryPaths.map(\.path),
+                                              "recoveryAccess": LWLinearMediaRecoveryError.accessNotice], isError: true) {
+                return reply // Preserve complete actionable paths within the normal reply envelope.
+            }
             return ["content": [["type": "text", "text": String(error.localizedDescription.prefix(4096))]], "isError": true]
         }
     }
@@ -218,6 +224,13 @@ final class LensWorksAgentTools {
     func state() -> [String: Any] {
         var result: [String: Any] = ["document": NSNull(), "catalog": NSNull()]
         result["grantedFolders"] = folders.grants.prefix(Self.stateRowLimit).map(\.path)
+        if let recovery = catalog()?.mediaRecovery {
+            result["mediaRecovery"] = ["reason": Self.clip(recovery.reason),
+                "recoveryPaths": recovery.recoveryPaths.prefix(32).map(\.path),
+                "recoveryPathsTotal": recovery.recoveryPaths.count,
+                "recoveryPathsTruncated": recovery.recoveryPaths.count > 32,
+                "recoveryAccess": LWLinearMediaRecoveryError.accessNotice] as [String: Any]
+        }
         if let workspace = workspace() {
             let tabs = Self.rows(workspace.tabs) { ["id": $0.id.uuidString, "title": Self.clip($0.title), "selected": $0.id == workspace.selectedID, "modified": $0.session.isModified] }
             result["projectTabs"] = tabs.rows
