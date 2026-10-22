@@ -227,6 +227,16 @@ struct LensWorksAutomationTests {
         let offset = ((decoded.height / 2) * decoded.width + decoded.width / 2) * 4
         return (decoded.width, decoded.height, Array(pixels[offset..<offset + 4]))
     }
+    private func exportedPixels(_ url: URL) throws -> (width: Int, height: Int, rgba: [UInt8]) {
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try #require(CGContext(data: &pixels, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return (image.width, image.height, pixels)
+    }
+
     /// Presses Escape in `sheet` as the person would: the key event goes to the sheet, whose Don’t Allow button owns
     /// the registered cancel shortcut. (SwiftUI builds no accessibility tree in a unit-test host, and ignores
     /// synthesized mouse events, so the key press is the one real input a hosted test can deliver.)
@@ -267,7 +277,8 @@ struct LensWorksAutomationTests {
 
         let listed = try #require((try await bridge.request("tools/list"))["result"] as? [String: Any])
         let tools = try #require(listed["tools"] as? [[String: Any]])
-        #expect(Set(tools.compactMap { $0["name"] as? String }) == ["list_commands", "get_state", "invoke_command", "batch", "render_preview"])
+        let names = Set(tools.compactMap { $0["name"] as? String })
+        #expect(names.isSuperset(of: ["list_commands", "get_state", "invoke_command", "batch", "render_preview", "headless_open", "develop_set", "jobs_list", "jobs_cancel"]))
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
 
         let commands = try #require((try await bridge.call("list_commands"))["structuredContent"] as? [String: Any])["commands"] as? [[String: Any]]
@@ -962,5 +973,203 @@ struct LensWorksAutomationTests {
                     && !model.groups.contains { final.contains($0.id) } && harness.automation.pendingConfirmation == nil, "\(result)")
             harness.catalog = nil
         }
+    }
+
+    /// S41: a windowless catalog has the same recipe dispatch and folder boundary as attached automation. It never
+    /// borrows the attached catalog lock and permanent registry commands are refused before any confirmation UI.
+    @Test func headlessSessionUsesTheRegistryAndRefusesAttachedAndIrreversibleWork() async throws {
+        let harness = try Harness(); defer { harness.cleanUp() }
+        let fixture = try LensWorksCatalogBrowserTests.Fixture(images: 1)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let raw = fixture.photos.appendingPathComponent("source.dng")
+        try FileManager.default.copyItem(at: repository.appendingPathComponent("engines/catalog/tests/fixtures/generated-linear-mask.dng"), to: raw)
+        let originalRAW = try Data(contentsOf: raw)
+        let seed = LensWorksCatalog(configuration: fixture.config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("HeadlessIndex.sqlite3")), defaults: fixture.defaults)
+        await seed.connect(fixture.catalog.path, create: true)
+        try await fixture.importPhotos(seed)
+        try await seed.close()
+        try harness.automation.folders.grant(fixture.root)
+
+        let attached = LensWorksCatalog(configuration: fixture.config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("AttachedIndex.sqlite3")), defaults: fixture.defaults)
+        await attached.connect(fixture.catalog.path)
+        harness.catalog = attached
+        let locked = await harness.automation.headless.call("headless_open", arguments: ["catalog": fixture.catalog.path])
+        #expect(locked["isError"] as? Bool == true && text(locked).contains("attached mode"))
+        try await attached.close()
+        harness.catalog = nil
+
+        let opened = await harness.automation.headless.call("headless_open", arguments: ["catalog": fixture.catalog.path])
+        let open = try #require(opened["structuredContent"] as? [String: Any], "\(opened)")
+        let id = try #require(open["session"] as? String)
+        #expect(open["catalog"] as? String == (try LensWorksGrantedFolders.realPath(fixture.catalog.path)))
+        // A second spelling of the same physical catalog is still the same session authority.
+        let alias = fixture.root.appendingPathComponent("Catalog alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: fixture.catalog)
+        let duplicate = await harness.automation.headless.call("headless_open", arguments: ["catalog": alias.path])
+        #expect(duplicate["isError"] as? Bool == true && text(duplicate).contains("another headless session"), "\(duplicate)")
+        let queried = await harness.automation.headless.call("catalog_query", arguments: ["session": id])
+        let photos = try #require((queried["structuredContent"] as? [String: Any])?["photos"] as? [[String: Any]])
+        let photo = try #require(photos.first { ($0["filename"] as? String)?.hasSuffix(".dng") == true }?["id"] as? String)
+        let selected = await harness.automation.headless.call("catalog_select", arguments: ["session": id, "photo": photo])
+        #expect(selected["isError"] as? Bool == false, "\(selected)")
+        let controls = await harness.automation.headless.call("develop_controls", arguments: ["session": id])
+        let control = try #require(((controls["structuredContent"] as? [String: Any])?["controls"] as? [[String: Any]])?.first)
+        #expect(control["id"] as? String == "develop.exposure" && control["minimum"] as? Int == -5 && control["maximum"] as? Int == 5)
+        let baselineOutput = fixture.root.appendingPathComponent("baseline.png")
+        let baseline = await harness.automation.headless.call("headless_export", arguments: ["session": id, "path": baselineOutput.path, "wait": true])
+        #expect(((baseline["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["state"] as? String == "completed", "\(baseline)")
+        let before = try exportedPixels(baselineOutput)
+        let changed = await harness.automation.headless.call("develop_set", arguments: ["session": id, "control": "develop.exposure", "value": 1.25])
+        let value = try #require((changed["structuredContent"] as? [String: Any])?["value"] as? Double, "\(changed)")
+        #expect(changed["isError"] as? Bool == false && value == 1.25 && LensWorksCommandDispatcher.lastInvocation?.id == .exposure)
+        let read = await harness.automation.headless.call("develop_get", arguments: ["session": id, "control": "develop.exposure"])
+        #expect((read["structuredContent"] as? [String: Any])?["value"] as? Double == 1.25)
+
+        let completedOutput = fixture.root.appendingPathComponent("headless-export.png")
+        let completed = await harness.automation.headless.call("headless_export", arguments: ["session": id, "path": completedOutput.path, "wait": true])
+        let completedJob = try #require(((completed["structuredContent"] as? [String: Any])?["job"] as? [String: Any]))
+        #expect(completed["isError"] as? Bool == false && completedJob["state"] as? String == "completed" && completedJob["progress"] as? Double == 1 && FileManager.default.fileExists(atPath: completedOutput.path), "\(completed)")
+        let developed = try exportedPixels(completedOutput)
+        #expect(before.width == 36 && before.height == 16 && developed.width == 36 && developed.height == 16)
+        let beforeRGB = before.rgba.enumerated().filter { $0.offset % 4 != 3 }.reduce(0) { $0 + Int($1.element) }
+        let afterRGB = developed.rgba.enumerated().filter { $0.offset % 4 != 3 }.reduce(0) { $0 + Int($1.element) }
+        #expect(afterRGB > beforeRGB, "the actual decoded RAW export brightens after the registered exposure edit")
+
+        let output = fixture.root.appendingPathComponent("headless-cancelled-export.png")
+        let started = await harness.automation.headless.call("headless_export", arguments: ["session": id, "path": output.path])
+        let job = try #require(((started["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["id"] as? String)
+        let listed = await harness.automation.headless.call("jobs_list", arguments: [:])
+        let jobs = try #require((listed["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]])
+        let listedJob = try #require(jobs.first { $0["id"] as? String == job })
+        let cancelled = await harness.automation.headless.call("jobs_cancel", arguments: ["job": job])
+        try await Task.sleep(for: .milliseconds(50))
+        let afterCancel = await harness.automation.headless.call("jobs_list", arguments: [:])
+        let cancelledJob = try #require(((afterCancel["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]])?.first { $0["id"] as? String == job })
+        let temporary = output.deletingLastPathComponent().appendingPathComponent(".lensworks-export-\(job).png")
+        #expect(["queued", "running"].contains(listedJob["state"] as? String) && (listedJob["progress"] as? Double).map { (0...1).contains($0) } == true && cancelled["isError"] as? Bool == false && cancelledJob["state"] as? String == "cancelled" && !FileManager.default.fileExists(atPath: output.path) && !FileManager.default.fileExists(atPath: temporary.path), "\(afterCancel)")
+
+        let outside = fixture.root.deletingLastPathComponent().appendingPathComponent("headless-outside.png")
+        let rejected = await harness.automation.headless.call("headless_export", arguments: ["session": id, "path": outside.path])
+        #expect(rejected["isError"] as? Bool == true && text(rejected).contains("outside every folder granted"))
+        let permanent = await harness.automation.headless.call("headless_run", arguments: ["session": id, "command": "catalog.virtualFolder.delete"])
+        #expect(permanent["isError"] as? Bool == true && text(permanent).contains("refused in headless mode"))
+
+        let closed = await harness.automation.headless.call("headless_close", arguments: ["session": id])
+        #expect((closed["structuredContent"] as? [String: Any])?["closed"] as? Bool == true, "\(closed)")
+        let reopened = await harness.automation.headless.call("headless_open", arguments: ["catalog": alias.path])
+        let reopenedID = try #require((reopened["structuredContent"] as? [String: Any])?["session"] as? String, "\(reopened)")
+        _ = await harness.automation.headless.call("headless_close", arguments: ["session": reopenedID])
+        #expect(try Data(contentsOf: raw) == originalRAW, "RAW development/export never changes the original")
+    }
+
+    @Test func headlessExportsOwnTheirDocumentsAndRecheckPublicationAuthority() async throws {
+        let harness = try Harness(); defer { harness.cleanUp() }
+        let fixture = try LensWorksCatalogBrowserTests.Fixture(images: 1)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        try FileManager.default.copyItem(at: repository.appendingPathComponent("engines/catalog/tests/fixtures/generated-linear-mask.dng"),
+            to: fixture.photos.appendingPathComponent("source.dng"))
+        let seed = LensWorksCatalog(configuration: fixture.config, index: LensWorksCatalogIndex(url: fixture.root.appendingPathComponent("Seed.sqlite3")), defaults: fixture.defaults)
+        await seed.connect(fixture.catalog.path, create: true)
+        try await fixture.importPhotos(seed); try await seed.close()
+        let grant = try harness.automation.folders.grant(fixture.root)
+        let headless = harness.automation.headless
+        let opened = await headless.call("headless_open", arguments: ["catalog": fixture.catalog.path])
+        let id = try #require((opened["structuredContent"] as? [String: Any])?["session"] as? String, "\(opened)")
+        let queried = await headless.call("catalog_query", arguments: ["session": id])
+        let photos = try #require((queried["structuredContent"] as? [String: Any])?["photos"] as? [[String: Any]])
+        let raw = try #require(photos.first { ($0["filename"] as? String)?.hasSuffix(".dng") == true }?["id"] as? String)
+        let png = try #require(photos.first { ($0["filename"] as? String)?.hasSuffix(".png") == true }?["id"] as? String)
+        var heldJob: String?, heldTemporary: URL?
+        var cancelID: String?
+        func finish() async {
+            if let cancelID { _ = await headless.call("jobs_cancel", arguments: ["job": cancelID]) }
+            headless.beforeExportPublication = nil
+            _ = await headless.call("headless_close", arguments: ["session": id])
+        }
+        do {
+            // Sequential exports must not retain the prior source's canvas or pixels either.
+            _ = await headless.call("catalog_select", arguments: ["session": id, "photo": raw])
+            let sequentialRAW = fixture.root.appendingPathComponent("sequential-raw.png")
+            let first = await headless.call("headless_export", arguments: ["session": id, "path": sequentialRAW.path, "wait": true])
+            #expect(((first["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["state"] as? String == "completed", "\(first)")
+            #expect(try exportedPixels(sequentialRAW).width == 36)
+            _ = await headless.call("catalog_select", arguments: ["session": id, "photo": png])
+            let sequentialPNG = fixture.root.appendingPathComponent("sequential-png.png")
+            let second = await headless.call("headless_export", arguments: ["session": id, "path": sequentialPNG.path, "wait": true])
+            #expect(((second["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["state"] as? String == "completed", "\(second)")
+            let sequential = try exportedPixels(sequentialPNG)
+            let sourcePNG = try exportedPixels(fixture.photos.appendingPathComponent("Photo-0000.png"))
+            #expect(sequential.width == sourcePNG.width && sequential.height == sourcePNG.height && sequential.rgba == sourcePNG.rgba)
+
+            // Hold A only after the real RAW decoder, registry filter and PNG exporter have run.
+            headless.beforeExportPublication = { job, temporary in
+                if heldJob == nil {
+                    heldJob = job; heldTemporary = temporary
+                    try await Task.sleep(for: .seconds(30))
+                }
+            }
+            _ = await headless.call("catalog_select", arguments: ["session": id, "photo": raw])
+            let rawOutput = fixture.root.appendingPathComponent("cancelled-raw.png")
+            let started = await headless.call("headless_export", arguments: ["session": id, "path": rawOutput.path])
+            let rawJob = try #require(((started["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["id"] as? String)
+            cancelID = rawJob
+            #expect(try await eventually(.seconds(10)) { heldJob == rawJob })
+            let temporary = try #require(heldTemporary)
+            #expect(FileManager.default.fileExists(atPath: temporary.path))
+            #expect(try exportedPixels(temporary).width == 36)
+            let listed = await headless.call("jobs_list", arguments: [:])
+            let listedJob = try #require(((listed["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]])?.first { $0["id"] as? String == rawJob })
+            #expect(listedJob["state"] as? String == "running" && listedJob["progress"] as? Double == 0.6)
+
+            // While A owns its rendered document, B must export only its own 1×1 PNG pixels.
+            _ = await headless.call("catalog_select", arguments: ["session": id, "photo": png])
+            let pngOutput = fixture.root.appendingPathComponent("independent-png.png")
+            let completed = await headless.call("headless_export", arguments: ["session": id, "path": pngOutput.path, "wait": true])
+            #expect(((completed["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["state"] as? String == "completed", "\(completed)")
+            let actual = try exportedPixels(pngOutput)
+            let expected = try exportedPixels(fixture.photos.appendingPathComponent("Photo-0000.png"))
+            #expect(actual.width == expected.width && actual.height == expected.height && actual.rgba == expected.rgba)
+            let siblingBytes = try Data(contentsOf: pngOutput)
+            _ = await headless.call("jobs_cancel", arguments: ["job": rawJob])
+            #expect(try await eventually(.seconds(5)) { !FileManager.default.fileExists(atPath: temporary.path) })
+            #expect(!FileManager.default.fileExists(atPath: rawOutput.path))
+            let afterCancellation = await headless.call("jobs_list", arguments: [:])
+            let cancelledState = (((afterCancellation["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]])?.first { $0["id"] as? String == rawJob })?["state"] as? String
+            #expect(cancelledState == "cancelled", "\(afterCancellation)")
+            #expect(try Data(contentsOf: pngOutput) == siblingBytes, "cancellation never deletes a sibling's published output")
+
+            // A later real export loses publication authority if the owner revokes the grant.
+            var ready = false, release = false
+            headless.beforeExportPublication = { _, _ in
+                ready = true
+                let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+                while !release, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            }
+            let refusedOutput = fixture.root.appendingPathComponent("revoked.png")
+            let pending = await headless.call("headless_export", arguments: ["session": id, "path": refusedOutput.path])
+            let revokedJob = try #require(((pending["structuredContent"] as? [String: Any])?["job"] as? [String: Any])?["id"] as? String)
+            cancelID = revokedJob
+            #expect(try await eventually(.seconds(10)) { ready })
+            harness.automation.folders.revoke(grant.id)
+            release = true
+            let publicationDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < publicationDeadline {
+                let response = await headless.call("jobs_list", arguments: [:])
+                let listed = (response["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]]
+                let state = listed?.first { $0["id"] as? String == revokedJob }?["state"] as? String
+                if state == "failed" || state == "completed" || state == "cancelled" { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            _ = await headless.call("headless_close", arguments: ["session": id])
+            let final = await headless.call("jobs_list", arguments: [:])
+            let refused = try #require(((final["structuredContent"] as? [String: Any])?["jobs"] as? [[String: Any]])?.first { $0["id"] as? String == revokedJob })
+            #expect(refused["state"] as? String == "failed" && (refused["message"] as? String)?.contains("No folders are granted") == true, "\(refused)")
+            #expect(!FileManager.default.fileExists(atPath: refusedOutput.path))
+            #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".lensworks-export-\(revokedJob).png").path))
+            #expect(try Data(contentsOf: pngOutput) == siblingBytes)
+            headless.beforeExportPublication = nil
+        } catch { await finish(); throw error }
     }
 }
