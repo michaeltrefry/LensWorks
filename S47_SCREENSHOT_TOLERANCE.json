@@ -2,6 +2,8 @@
   "acceptance": "These source-declared bounds authorize no acceptance by themselves. The unchanged thresholded method must run TWO NEW complete tours on fresh catalogs/working directories with exact declared host TEST_RUNNER thresholds, preserve all originals, produce independently verified loaded-editor window captures within BOTH bounds and observe public Quit. CI must deliver these checked-in values and actually pass its smoke. Original R7 calibration remains MEASURED_NOT_ACCEPTED.",
   "host_transport_environment": [
     "TEST_RUNNER_LW_S47_FIXTURE_ROOT",
+    "TEST_RUNNER_LW_S47_TOUR_RUN",
+    "TEST_RUNNER_LW_S47_CAPTURE_ROOT",
     "TEST_RUNNER_LW_CATALOG_TEST_WORKER",
     "TEST_RUNNER_LW_CATALOG_TEST_DECODE_WORKER",
     "TEST_RUNNER_LW_S47_MAX_CHANNEL_DELTA",
@@ -61,6 +63,8 @@
   },
   "runner_environment": [
     "LW_S47_FIXTURE_ROOT",
+    "LW_S47_TOUR_RUN",
+    "LW_S47_CAPTURE_ROOT",
     "LW_CATALOG_TEST_WORKER",
     "LW_CATALOG_TEST_DECODE_WORKER",
     "LW_S47_MAX_CHANNEL_DELTA",

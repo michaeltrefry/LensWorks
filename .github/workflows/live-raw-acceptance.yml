@@ -18,9 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: recursive}
-      - name: Select the provisioned Python 3.12.13 interpreter
+      - name: Pin the selected Xcode SDK and native compiler toolchain
+        id: native-toolchain
+        run: bash scripts/native-toolchain.sh --github
+      - name: Select the provisioned Python 3.12.15 interpreter
         run: |
           test -x /opt/homebrew/opt/python@3.12/bin/python3.12
+          /opt/homebrew/opt/python@3.12/bin/python3.12 -c 'import sys; assert sys.version_info[:3] == (3, 12, 15), sys.version'
           echo /opt/homebrew/opt/python@3.12/libexec/bin >> "$GITHUB_PATH"
       - name: Verify the provisioned source-pinned Apple-silicon native route
         run: ./scripts/ci/provision_s47_native_prerequisites.sh

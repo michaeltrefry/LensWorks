@@ -23,6 +23,9 @@ jobs:
         # The engine and adapter build only from in-tree sources; the
         # vendor/Compositor submodule is not part of either cargo build.
         with: {submodules: false}
+      - name: Pin the selected Xcode SDK and native compiler toolchain
+        id: native-toolchain
+        run: bash scripts/native-toolchain.sh --github
       - name: Use persistent runner caches for the SDK and cargo target
         # Outside the workspace (which checkout cleans) so the self-hosted
         # runner reuses the download and builds incrementally.

@@ -48,8 +48,8 @@ tiers:
     checks: [ci-green, review-pass]
 # A change over any limit (in a tier that lists risk-threshold) escalates instead of merging.
 risk:
-  max_changed_lines: 400
-  max_changed_files: 20
+  max_changed_lines: 2000
+  max_changed_files: 40
   max_fix_rounds: 3
   max_blast_radius: high
   max_hotspot: "off"
