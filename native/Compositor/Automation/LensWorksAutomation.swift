@@ -375,6 +375,8 @@ final class LensWorksHeadlessSessions {
 
     private final class Session {
         let id = UUID().uuidString
+        /// Set before close drains jobs so no new work is admitted while the session shuts down.
+        var closing = false
         let catalog: LensWorksCatalog
         let editor: EditorSession
         let controller: ProjectController
@@ -445,7 +447,7 @@ final class LensWorksHeadlessSessions {
     }
     private func session(_ values: [String: Any], _ allowed: [String], _ name: String) throws -> Session {
         try LensWorksAgentTools.rejectUnknown(values, allowed: allowed, in: name)
-        guard let found = sessions[try text("session", values)] else { throw LensWorksCommandRefusal(reason: "That headless session is no longer open.") }
+        guard let found = sessions[try text("session", values)], !found.closing else { throw LensWorksCommandRefusal(reason: "That headless session is no longer open.") }
         return found
     }
 
@@ -477,11 +479,20 @@ final class LensWorksHeadlessSessions {
 
     private func close(_ values: [String: Any]) async throws -> [String: Any] {
         let opened = try session(values, ["session"], "headless_close")
-        let sessionJobs = jobs.values.filter { $0.session == opened.id }
-        sessionJobs.filter { [.queued, .running].contains($0.state) }.forEach { $0.task?.cancel() }
+        opened.closing = true
         // A cancellation request updates the visible state immediately, but its task can still be cleaning up.
-        // Join every task for this session before releasing the catalog it uses.
-        for job in sessionJobs { await job.task?.value }
+        // Join every task for this session before releasing the catalog it uses; re-snapshot in case a
+        // request admitted before closing registered a job while we were suspended.
+        var joined = Set<ObjectIdentifier>()
+        while true {
+            let pending = jobs.values.filter { $0.session == opened.id && !joined.contains(ObjectIdentifier($0)) }
+            if pending.isEmpty { break }
+            pending.filter { [.queued, .running].contains($0.state) }.forEach { $0.task?.cancel() }
+            for job in pending {
+                joined.insert(ObjectIdentifier(job))
+                await job.task?.value
+            }
+        }
         try await opened.catalog.close()
         sessions.removeValue(forKey: opened.id)
         return ["session": opened.id, "closed": true]
